@@ -13,7 +13,7 @@ Playability targets (from prior conversation):
 **Why:** `render.js` currently uses `n_intervals * interval_ms` as its clock for the SSVEP flicker. That ties stimulus phase to Dash callback fire count, not wallclock. If the browser throttles or a callback skips, the effective flicker frequency drifts off 10/15 Hz — and the Python-side CCA references are built against true wallclock, so they desync. This bug poisons everything downstream, including any data we record.
 
 **What we did (scope grew during execution):**
-- Built `tools/refresh-rate.html`, a standalone browser probe for measuring rAF rate + jitter.
+- Built `refresh-rate.html`, a standalone browser probe for measuring rAF rate + jitter.
 - Empirically determined: Chrome on macOS ProMotion delivers stable 120 Hz (median 8.30 ms, p99 9.40 ms, 0 drops/1202 frames). Safari quantizes `performance.now()` to 1 ms and lands at 60 Hz. **Project targets Chrome.**
 - Rewrote `assets/render.js` as a self-bootstrapping rAF loop with **frame-counted** flicker — period in frames, not milliseconds, so phase is exact relative to display refresh. (Stronger than the originally-planned `performance.now()` swap.)
 - Added runtime refresh-rate measurement at startup (picks nearest of {60, 90, 120}, fails loud if outside tolerance).
