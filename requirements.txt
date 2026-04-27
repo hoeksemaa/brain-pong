@@ -1,0 +1,5 @@
+brainflow
+dash
+plotly
+numpy
+scikit-learn
