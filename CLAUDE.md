@@ -7,6 +7,7 @@ Single-binary Dash app: SSVEP-driven Pong using a Cerelog X8 EEG board over Brai
 - `pong_game_brainflow.py` — everything server-side: BrainFlow I/O, DSP, sklearn CCA, Dash layout, all callbacks, state machine, feedback plots. ~475 LoC.
 - `assets/render.js` — clientside canvas renderer + SSVEP flicker stimulus. Auto-loaded by Dash from the `assets/` folder.
 - `requirements.txt` — pinned-by-name (not version) deps: `brainflow dash plotly numpy scikit-learn`.
+- `tools/refresh-rate.html` — standalone browser probe for measuring display rAF rate + jitter. Run when in doubt about flicker precision.
 - `ROADMAP.md` — future improvements organized as fun/UX, signal+ML, hardware, user testing.
 - `plans/today.md` — the active day's plan.
 - `plans/automated-benchmark-test-suite.md` — longer-arc plan: build a latency+accuracy benchmark.
@@ -23,6 +24,26 @@ python pong_game_brainflow.py --no-board # keyboard-only dev mode
 ```
 
 If deps drift, `pip install -r requirements.txt` from inside the activated venv. The venv is gitignored.
+
+## Display / browser setup (matters a LOT for SSVEP precision)
+
+The flicker stimulus must hit precise frequencies. The owner runs a 14"/16" 2021 MBP (M1 Pro, Liquid Retina XDR, ProMotion adaptive 24–120 Hz). Empirical findings from `tools/refresh-rate.html`:
+
+- **Use Chrome, not Safari.** Chrome on Apple Silicon delivers stable 120 Hz rAF (measured: 120.5 Hz median, 8.30 ms median Δ, p99 = 9.40 ms, 0 drops over 10 s / 1202 frames). Safari quantizes `performance.now()` to 1 ms (privacy hardening) AND tends to settle ProMotion at 60 Hz instead of 120 for canvas content.
+- **Display setting must be "ProMotion"** (System Settings → Displays → Refresh Rate). The fixed-rate options (60 / 59.94 / 50 / 48 / 47.95) are below 120, and macOS does NOT expose a fixed "120 Hz" option for built-in ProMotion displays — that's an Apple API gap, not something we control.
+- **Run fullscreen** during recording sessions. ProMotion is more likely to honor 120 Hz when the page is fullscreen and other apps aren't competing for the compositor.
+- **No external monitor** assumed. If that changes, re-run the probe — most external displays are 60 Hz only.
+
+### Target stimulus parameters (assumes 120 Hz refresh)
+
+| direction | freq | period (frames) | duty | edge resolution |
+|---|---|---|---|---|
+| LEFT  | 10 Hz | 12 | 6 on / 6 off | 8.33 ms |
+| RIGHT | 15 Hz | 8  | 4 on / 4 off | 8.33 ms |
+
+Flicker is **black ↔ white** (max luminance contrast for strongest SSVEP evoked response), not the cyan/magenta of the original cosmetic palette.
+
+If anything about the display, browser, or refresh rate changes, **re-run `tools/refresh-rate.html` first** before debugging downstream signal issues.
 
 ## Pipeline at a glance
 
@@ -62,8 +83,8 @@ Don't treat these as features:
 - **`CHANNELS_TO_USE = [1,2,3,4]` is used as a length only.** `main()` does `all_eeg_channels[:len(CHANNELS_TO_USE)]` — the actual indices are ignored. If we ever want non-contiguous channels (e.g. `[3,5,7,9]`), the indexing logic must change.
 - **`scores_rest` is collected during calibration and never read.** `manage_app_flow` only uses left/right scores when computing thresholds. Free 3-class training data sitting on the floor — relevant when we add a learned classifier.
 - **Pause-from-calibration is broken.** `manage_app_flow` toggles `'PAUSED' if status != 'PAUSED' else 'PLAYING'`. Unpausing during a calibration phase yeets the user into PLAYING with `cal_data['thresholds'] = None`, so `update_bci_command` early-returns forever.
-- **`render.js` flicker time source uses `n_intervals * interval_ms`, not `performance.now()`.** Stimulus phase is tied to Dash callback fire count; if the browser throttles, the effective SSVEP frequency drifts off 10/15 Hz, while the Python-side CCA references are built against true wallclock time — they'll desync.
-- **Monitor refresh assumption is implicit and undocumented.** 10/15 Hz are clean divisors of 60 Hz; on 75/120/144 Hz monitors the rendered flicker aliases and the SNR craters.
+- **`render.js` flicker time source uses `n_intervals * interval_ms`, not `performance.now()`.** Stimulus phase is tied to Dash callback fire count; if the browser throttles, the effective SSVEP frequency drifts off 10/15 Hz, while the Python-side CCA references are built against true wallclock time — they'll desync. **Slated for replacement** with a frame-counted, rAF-driven flicker loop (see "Display / browser setup" above).
+- **Monitor refresh assumption was implicit.** Now explicit: target is 120 Hz on Chrome + ProMotion. 10/15 Hz are clean integer divisors at both 60 and 120; the rewrite assumes 120 and falls loud if rAF measurement says otherwise.
 - **`threading` imported but unused** — vestigial.
 - **PSD plot only shows ch0**, even though CCA uses all four channels.
 - **Hardcoded serial port** `/dev/cu.usbserial-1120` — not CLI-configurable.

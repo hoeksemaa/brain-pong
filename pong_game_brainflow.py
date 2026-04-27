@@ -203,18 +203,22 @@ clientside_callback(
 
 clientside_callback(
     f"""
-    function(n_intervals, gameState, appStatus, settings) {{
+    function(gameState, appStatus, settings) {{
         if (window.dash_clientside && window.dash_clientside.renderPong) {{
-            const freqLeft = {SSVEP_FREQ_LEFT};
-            const freqRight = {SSVEP_FREQ_RIGHT};
-            const noBoard = {str(NO_BOARD_MODE).lower()};
-            window.dash_clientside.renderPong('pong-game-canvas', gameState, appStatus, n_intervals, {GAME_INTERVAL_MS}, freqLeft, freqRight, settings, noBoard);
+            window.dash_clientside.renderPong(
+                'pong-game-canvas',
+                gameState,
+                appStatus,
+                settings,
+                {str(NO_BOARD_MODE).lower()},
+                {SSVEP_FREQ_LEFT},
+                {SSVEP_FREQ_RIGHT}
+            );
         }}
         return null;
     }}
     """,
     Output('pong-game-canvas', 'className'),
-    Input('game-interval', 'n_intervals'),
     Input('game-state-store', 'data'),
     Input('app-status-store', 'data'),
     Input('settings-store', 'data')
