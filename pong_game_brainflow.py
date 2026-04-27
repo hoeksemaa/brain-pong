@@ -77,7 +77,7 @@ BALL_RADIUS = 10
 
 # --- Recording mode (per plans/recording-protocol.md v1) ---
 RECORDINGS_DIR = 'recordings'
-RECORD_TRIAL_DURATION_S = 15.0
+RECORD_TRIAL_DURATION_S = 10.0
 RECORD_REST_DURATION_S = 3.0
 PROTOCOL_VERSION = 'v1'
 

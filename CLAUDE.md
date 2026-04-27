@@ -8,6 +8,7 @@ Single-binary Dash app: SSVEP-driven Pong using a Cerelog X8 EEG board over Brai
 - `assets/render.js` — clientside canvas renderer + SSVEP flicker stimulus. Auto-loaded by Dash from the `assets/` folder.
 - `requirements.txt` — pinned-by-name (not version) deps: `brainflow dash plotly numpy scikit-learn`.
 - `tools/refresh-rate.html` — standalone browser probe for measuring display rAF rate + jitter. Run when in doubt about flicker precision.
+- `tools/filtered_plot.py` — owner's **gold-standard** real-time EEG plotter (8 channels, 5-stage filter chain). Use as the pre-flight signal-quality check before any recording session. Verbatim copy from `cerelog/Shared_brainflow-cerelog/python_package/cerelog_tests/filtered_plot.py`; do not edit unless syncing with upstream.
 - `ROADMAP.md` — future improvements organized as fun/UX, signal+ML, hardware, user testing.
 - `plans/today.md` — the active day's plan.
 - `plans/automated-benchmark-test-suite.md` — longer-arc plan: build a latency+accuracy benchmark.
