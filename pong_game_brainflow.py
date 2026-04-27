@@ -1,19 +1,33 @@
 import argparse
-import threading
+import os
+import sys
 import time
-from collections import deque
+from datetime import datetime, timezone
 import numpy as np
 import plotly.graph_objs as go
 from dash import Dash, dcc, html, Output, Input, State, no_update, clientside_callback, ctx
 from dash.exceptions import PreventUpdate
 import logging
 
-# --- Dev mode: play without hardware board ---
+# --- CLI ---
 _cli_parser = argparse.ArgumentParser(add_help=False)
 _cli_parser.add_argument('--no-board', action='store_true',
                          help='Run the game without BrainFlow hardware (keyboard-only, skips calibration).')
+_cli_parser.add_argument('--record', action='store_true',
+                         help='Run in recording mode: capture labeled SSVEP-EEG trials to recordings/<id>.npz. Requires hardware (incompatible with --no-board).')
+_cli_parser.add_argument('--trials', type=int, default=40,
+                         help='Total number of trials per recording session (default 40 = 20 LEFT + 20 RIGHT alternating). Must be even.')
 _cli_args, _ = _cli_parser.parse_known_args()
 NO_BOARD_MODE = _cli_args.no_board
+RECORDING_MODE = _cli_args.record
+TOTAL_TRIALS = _cli_args.trials
+
+if RECORDING_MODE and NO_BOARD_MODE:
+    print("ERROR: --record requires hardware; cannot combine with --no-board.", file=sys.stderr)
+    sys.exit(2)
+if RECORDING_MODE and TOTAL_TRIALS % 2 != 0:
+    print(f"ERROR: --trials must be even (got {TOTAL_TRIALS}); strict L/R alternation requires equal counts.", file=sys.stderr)
+    sys.exit(2)
 
 # --- BrainFlow Integration ---
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds, BrainFlowError
@@ -61,6 +75,24 @@ PADDLE_WIDTH = 150
 PADDLE_HEIGHT = 20
 BALL_RADIUS = 10
 
+# --- Recording mode (per plans/recording-protocol.md v1) ---
+RECORDINGS_DIR = 'recordings'
+RECORD_TRIAL_DURATION_S = 15.0
+RECORD_REST_DURATION_S = 3.0
+PROTOCOL_VERSION = 'v1'
+
+# Marker codes injected into the BrainFlow marker channel via insert_marker.
+# These show up as float values in the marker channel of the saved EEG, giving
+# us cue/press/release events with native board-clock timestamps and zero
+# cross-clock sync error.
+MARKER_SESSION_START = 1.0
+MARKER_CUE_LEFT      = 2.0
+MARKER_CUE_RIGHT     = 3.0
+MARKER_CUE_OFFSET    = 4.0
+MARKER_PRESS         = 5.0
+MARKER_RELEASE       = 6.0
+MARKER_SESSION_END   = 7.0
+
 # ==============================================================================
 # === 2. CORE SETUP ============================================================
 # ==============================================================================
@@ -72,6 +104,18 @@ cca_ref_signals = {}
 cca_model = SklearnCCA(n_components=1)
 
 BCI_UPDATE_INTERVAL_MS = int((FFT_WINDOW_SECONDS * (1 - FFT_OVERLAP_PERCENT)) * 1000)
+
+# --- Recording mode: server-side mirrors so finally-block can save partial sessions ---
+recording_session = {
+    'session_id':     None,
+    'subject_id':     None,
+    'headset_notes':  None,
+    'started_at_iso': None,
+    'started':        False,   # True after user pressed space in RECORD_READY
+    'finalized':      False,   # True after save_session_npz has been called
+    'events':         [],      # list of {kind, side, t_browser_ms, trial_idx}
+    'last_event_seq': -1,      # de-dup guard for the events store
+}
 
 def preprocess_eeg_window(eeg_data):
     """
@@ -111,6 +155,127 @@ def get_cca_correlation(eeg_data_multi_channel, ref_signals):
         U, V = cca_model.transform(eeg_data_multi_channel, ref_signals)
         return np.corrcoef(U.T, V.T)[0, 1]
     except Exception: return 0.0
+
+# ==============================================================================
+# === Recording mode helpers ===================================================
+# ==============================================================================
+def safe_insert_marker(value):
+    """Inject a marker into the BrainFlow stream; never raise (best-effort)."""
+    try:
+        if board is not None and board.is_prepared():
+            board.insert_marker(float(value))
+    except Exception as e:
+        print(f"[record] insert_marker({value}) failed: {e}")
+
+def collect_session_metadata_from_cli():
+    print("=" * 60)
+    print(f"RECORDING MODE — protocol {PROTOCOL_VERSION}, {TOTAL_TRIALS} trials")
+    print("=" * 60)
+    subject_id = input("Subject ID (e.g. 'jh'): ").strip() or 'unknown'
+    headset_notes = input("Headset notes (impedance, fit, anything weird): ").strip()
+    session_id = datetime.now().strftime('%Y%m%d-%H%M%S')
+    os.makedirs(RECORDINGS_DIR, exist_ok=True)
+    print(f"Session ID: {session_id}")
+    print(f"Output dir: {os.path.abspath(RECORDINGS_DIR)}")
+    print("=" * 60)
+    return session_id, subject_id, headset_notes
+
+def save_session_npz(final_payload, incomplete=False):
+    """Persist the current session to recordings/<session_id>.npz.
+    final_payload comes from the JS final-state flush and contains:
+      {'edge_log': [...], 'measurement': {...}, 'browser_ua': '...'}
+    """
+    if recording_session['finalized']:
+        return None
+    session_id = recording_session['session_id']
+    if not session_id:
+        return None
+
+    out_path = os.path.join(RECORDINGS_DIR, f'{session_id}.npz')
+
+    eeg_full = None
+    eeg = None
+    eeg_t = None
+    markers = None
+    try:
+        if board is not None and board.is_prepared():
+            eeg_full = board.get_board_data()
+    except Exception as e:
+        print(f"[record] get_board_data failed: {e}")
+
+    if eeg_full is not None and eeg_full.size > 0:
+        try:
+            ts_channel = BoardShim.get_timestamp_channel(BOARD_ID)
+            marker_channel = BoardShim.get_marker_channel(BOARD_ID)
+            eeg_channels = bci_eeg_channels if bci_eeg_channels else BoardShim.get_eeg_channels(BOARD_ID)
+            eeg = eeg_full[eeg_channels].astype(np.float32)
+            eeg_t = eeg_full[ts_channel].astype(np.float64)
+            markers = eeg_full[marker_channel].astype(np.float32)
+        except Exception as e:
+            print(f"[record] failed to slice BrainFlow channels: {e}")
+            eeg = eeg_full.astype(np.float32)  # fallback: raw matrix
+
+    events_arr = np.array(
+        [(e.get('t_browser_ms', 0.0), e.get('kind', ''), e.get('side', ''), e.get('trial_idx', -1))
+         for e in recording_session['events']],
+        dtype=np.dtype([('t_browser_ms', 'f8'), ('kind', 'U16'), ('side', 'U2'), ('trial_idx', 'i4')]),
+    )
+
+    edge_log = (final_payload or {}).get('edge_log') or []
+    edge_log_arr = np.array(
+        [(e.get('ms', 0.0), int(e.get('frame', 0)), e.get('side', ''), bool(e.get('isOn', False)))
+         for e in edge_log],
+        dtype=np.dtype([('ms', 'f8'), ('frame', 'i8'), ('side', 'U1'), ('is_on', '?')]),
+    )
+
+    measurement = (final_payload or {}).get('measurement') or {}
+    metadata = {
+        'protocol_version': PROTOCOL_VERSION,
+        'session_id':       session_id,
+        'subject_id':       recording_session['subject_id'],
+        'headset_notes':    recording_session['headset_notes'],
+        'started_at_iso':   recording_session['started_at_iso'],
+        'ended_at_iso':     datetime.now(timezone.utc).isoformat(),
+        'incomplete':       bool(incomplete),
+        'total_trials':     TOTAL_TRIALS,
+        'board_id':         int(BOARD_ID),
+        'sampling_rate':    int(sampling_rate) if sampling_rate else None,
+        'eeg_channel_indices': list(bci_eeg_channels),
+        'serial_port':      "/dev/cu.usbserial-1120",
+        'stimulus_left_hz':  measurement.get('actualLeftHz'),
+        'stimulus_right_hz': measurement.get('actualRightHz'),
+        'display_refresh_hz': measurement.get('measuredHz'),
+        'chosen_refresh_hz':  measurement.get('chosenRefreshHz'),
+        'left_period_frames':  measurement.get('leftPeriodFrames'),
+        'right_period_frames': measurement.get('rightPeriodFrames'),
+        'browser_user_agent': (final_payload or {}).get('browser_ua'),
+        'filter_low_cut_hz':  FILTER_LOW_CUT_HZ,
+        'filter_high_cut_hz': FILTER_HIGH_CUT_HZ,
+        'filter_order':       FILTER_ORDER,
+        'marker_codes': {
+            'session_start':  MARKER_SESSION_START,
+            'cue_left':       MARKER_CUE_LEFT,
+            'cue_right':      MARKER_CUE_RIGHT,
+            'cue_offset':     MARKER_CUE_OFFSET,
+            'press':          MARKER_PRESS,
+            'release':        MARKER_RELEASE,
+            'session_end':    MARKER_SESSION_END,
+        },
+    }
+
+    save_kwargs = {
+        'events':   events_arr,
+        'edge_log': edge_log_arr,
+        'metadata': np.array(metadata, dtype=object),
+    }
+    if eeg is not None:       save_kwargs['eeg'] = eeg
+    if eeg_t is not None:     save_kwargs['eeg_t'] = eeg_t
+    if markers is not None:   save_kwargs['markers'] = markers
+
+    np.savez(out_path, **save_kwargs)
+    recording_session['finalized'] = True
+    print(f"[record] saved {out_path}  (incomplete={incomplete}, events={len(recording_session['events'])}, edges={len(edge_log)})")
+    return out_path
 
 # ==============================================================================
 # === 3. DASH APP LAYOUT =======================================================
@@ -174,6 +339,10 @@ app.layout = html.Div(id='main-container', style={'backgroundColor': '#111', 'co
     dcc.Store(id='calibration-store', data={'scores_left': [], 'scores_right': [], 'scores_rest': [], 'thresholds': None}),
     dcc.Store(id='bci-command-store', data={'command': 'NEUTRAL', 'raw_score': 0.0, 'smoothed_score': 0.0}),
     dcc.Store(id='key-press-store', data={'key': 'None'}),
+    dcc.Store(id='recording-events-store', data={'events': [], 'seq': 0}),
+    dcc.Store(id='recording-state-store', data={'trial_idx': 0, 'side': None, 'phase_start_t': None}),
+    dcc.Store(id='recording-final-store', data=None),
+    dcc.Store(id='recording-save-status-store', data={'saved_path': None, 'error': None}),
     dcc.Interval(id='game-interval', interval=GAME_INTERVAL_MS, n_intervals=0, disabled=False),
     dcc.Interval(id='bci-interval', interval=BCI_UPDATE_INTERVAL_MS, n_intervals=0, disabled=True),
     dcc.Interval(id='status-interval', interval=500, n_intervals=0)
@@ -201,9 +370,88 @@ clientside_callback(
     Input('game-interval', 'n_intervals')
 )
 
+if RECORDING_MODE:
+    # Capture sub-ms keypress timestamps via performance.now() and flush to a
+    # Dash store on every game-interval tick. Sets up the keydown/keyup
+    # listeners on first call (idempotent). The pending-events buffer in JS
+    # is the authoritative source of timing precision; the Dash poll just
+    # ferries them server-side at ~16 ms granularity.
+    clientside_callback(
+        """
+        function(n_intervals, appStatus, currentStore) {
+            if (!window.dash_clientside) { window.dash_clientside = {}; }
+            if (!window.dash_clientside.brainpong_record_listeners_added) {
+                window.dash_clientside.brainpong_record_listeners_added = true;
+                window.dash_clientside.brainpong_pending_input = [];
+                window.dash_clientside.brainpong_seq = 0;
+                window.dash_clientside.brainpong_space_held = false;
+                document.addEventListener('keydown', function(ev) {
+                    if (ev.code !== 'Space' && ev.key !== ' ') return;
+                    if (ev.repeat) return;  // ignore auto-repeat from key being held
+                    if (window.dash_clientside.brainpong_space_held) return;
+                    window.dash_clientside.brainpong_space_held = true;
+                    ev.preventDefault();
+                    window.dash_clientside.brainpong_pending_input.push({
+                        kind: 'press',
+                        side: '',
+                        t_browser_ms: performance.now(),
+                    });
+                }, {passive: false});
+                document.addEventListener('keyup', function(ev) {
+                    if (ev.code !== 'Space' && ev.key !== ' ') return;
+                    if (!window.dash_clientside.brainpong_space_held) return;
+                    window.dash_clientside.brainpong_space_held = false;
+                    window.dash_clientside.brainpong_pending_input.push({
+                        kind: 'release',
+                        side: '',
+                        t_browser_ms: performance.now(),
+                    });
+                });
+            }
+            var pending = window.dash_clientside.brainpong_pending_input;
+            if (!pending.length) {
+                return window.dash_clientside.no_update;
+            }
+            var existing = (currentStore && currentStore.events) || [];
+            var nextEvents = existing.concat(pending);
+            window.dash_clientside.brainpong_pending_input = [];
+            window.dash_clientside.brainpong_seq = (window.dash_clientside.brainpong_seq || 0) + 1;
+            return { events: nextEvents, seq: window.dash_clientside.brainpong_seq };
+        }
+        """,
+        Output('recording-events-store', 'data'),
+        Input('game-interval', 'n_intervals'),
+        State('app-status-store', 'data'),
+        State('recording-events-store', 'data'),
+    )
+
+    # On RECORD_DONE entry, dump the JS edge log + measurement + UA into the
+    # final-store so the server can persist them as part of the .npz. Guarded
+    # so it only fires once per session.
+    clientside_callback(
+        """
+        function(appStatus) {
+            if (!appStatus || appStatus.status !== 'RECORD_DONE') {
+                return window.dash_clientside.no_update;
+            }
+            if (window.dash_clientside.brainpong_final_flushed) {
+                return window.dash_clientside.no_update;
+            }
+            window.dash_clientside.brainpong_final_flushed = true;
+            return {
+                edge_log: (window.dash_clientside.brainpong_edge_log || []).slice(),
+                measurement: window.dash_clientside.brainpong_measurement || null,
+                browser_ua: navigator.userAgent,
+            };
+        }
+        """,
+        Output('recording-final-store', 'data'),
+        Input('app-status-store', 'data'),
+    )
+
 clientside_callback(
     f"""
-    function(gameState, appStatus, settings) {{
+    function(gameState, appStatus, settings, recState, saveStatus) {{
         if (window.dash_clientside && window.dash_clientside.renderPong) {{
             window.dash_clientside.renderPong(
                 'pong-game-canvas',
@@ -212,7 +460,15 @@ clientside_callback(
                 settings,
                 {str(NO_BOARD_MODE).lower()},
                 {SSVEP_FREQ_LEFT},
-                {SSVEP_FREQ_RIGHT}
+                {SSVEP_FREQ_RIGHT},
+                {{
+                    recordingMode: {str(RECORDING_MODE).lower()},
+                    totalTrials: {TOTAL_TRIALS},
+                    trialDurationS: {RECORD_TRIAL_DURATION_S},
+                    restDurationS: {RECORD_REST_DURATION_S},
+                    recState: recState,
+                    saveStatus: saveStatus
+                }}
             );
         }}
         return null;
@@ -221,7 +477,9 @@ clientside_callback(
     Output('pong-game-canvas', 'className'),
     Input('game-state-store', 'data'),
     Input('app-status-store', 'data'),
-    Input('settings-store', 'data')
+    Input('settings-store', 'data'),
+    Input('recording-state-store', 'data'),
+    Input('recording-save-status-store', 'data')
 )
 
 # ==============================================================================
@@ -333,6 +591,79 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     return state
 
 # ==============================================================================
+# === 5b. RECORDING-MODE SERVER CALLBACKS ======================================
+# ==============================================================================
+if RECORDING_MODE:
+    @app.callback(
+        Output('recording-events-store', 'data', allow_duplicate=True),
+        Input('recording-events-store', 'data'),
+        State('recording-state-store', 'data'),
+        State('app-status-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def consume_recording_events(events_payload, rec_state, app_status):
+        """For each new press/release event in the store, insert a BrainFlow
+        marker and append to the Python-side mirror used by the finally-block
+        save. Idempotent via the seq counter so re-firing doesn't double-log.
+        """
+        events_payload = events_payload or {}
+        events = events_payload.get('events') or []
+        seq = events_payload.get('seq', 0)
+        if seq <= recording_session['last_event_seq']:
+            return no_update
+
+        # Walk all events; only record those we haven't seen yet.
+        # We use len(recording_session['events']) as the high-water mark since
+        # the JS store accumulates monotonically.
+        already = len(recording_session['events'])
+        new = events[already:]
+        if not new:
+            recording_session['last_event_seq'] = seq
+            return no_update
+
+        status = (app_status or {}).get('status', '')
+        trial_idx = (rec_state or {}).get('trial_idx', -1)
+        side      = (rec_state or {}).get('side') or ''
+
+        for ev in new:
+            kind = ev.get('kind')
+            if kind == 'press':
+                safe_insert_marker(MARKER_PRESS)
+            elif kind == 'release':
+                safe_insert_marker(MARKER_RELEASE)
+            ev_full = {
+                'kind':         kind or '',
+                'side':         side if status == 'RECORD_TRIAL' else '',
+                't_browser_ms': float(ev.get('t_browser_ms', 0.0)),
+                'trial_idx':    int(trial_idx if status == 'RECORD_TRIAL' else -1),
+            }
+            recording_session['events'].append(ev_full)
+
+        recording_session['last_event_seq'] = seq
+        return no_update
+
+    @app.callback(
+        Output('recording-save-status-store', 'data'),
+        Output('app-status-store', 'data', allow_duplicate=True),
+        Input('recording-final-store', 'data'),
+        State('app-status-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def save_recording(final_payload, app_status):
+        if not final_payload:
+            return no_update, no_update
+        if (app_status or {}).get('status') != 'RECORD_DONE':
+            return no_update, no_update
+        try:
+            path = save_session_npz(final_payload, incomplete=False)
+            new_status = {**(app_status or {}), 'status': 'RECORD_SAVED'}
+            return {'saved_path': path, 'error': None}, new_status
+        except Exception as e:
+            print(f"[record] save_recording failed: {e}")
+            new_status = {**(app_status or {}), 'status': 'RECORD_SAVED'}
+            return {'saved_path': None, 'error': str(e)}, new_status
+
+# ==============================================================================
 # === 6. STATE MACHINE AND FEEDBACK PLOTS ======================================
 # ==============================================================================
 @app.callback(
@@ -342,29 +673,78 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     Output('game-state-store', 'data', allow_duplicate=True),
     Output('bci-interval', 'disabled'),
     Output('game-interval', 'disabled'),
+    Output('recording-state-store', 'data', allow_duplicate=True),
     Input('status-interval', 'n_intervals'),
     Input('pause-button', 'n_clicks'),
     Input('restart-button', 'n_clicks'),
     State('app-status-store', 'data'),
     State('calibration-store', 'data'),
+    State('recording-state-store', 'data'),
     prevent_initial_call=True
 )
-def manage_app_flow(status_n, pause_clicks, restart_clicks, app_status, cal_data):
+def manage_app_flow(status_n, pause_clicks, restart_clicks, app_status, cal_data, rec_state):
     triggered_id = ctx.triggered_id if ctx.triggered_id else 'status-interval'
     status = app_status.get('status', 'STARTING'); countdown = app_status.get('countdown', 0)
     new_status, new_cal_data, new_game_state = status, no_update, no_update
+    new_rec_state = no_update
     if triggered_id == 'restart-button' and restart_clicks > 0:
         new_status = 'STARTING'
         new_cal_data = {'scores_left': [], 'scores_right': [], 'scores_rest': [], 'thresholds': None}
         new_game_state = get_initial_game_state()
-    elif triggered_id == 'pause-button' and pause_clicks > 0:
+    elif triggered_id == 'pause-button' and pause_clicks > 0 and not RECORDING_MODE:
+        # Pause/resume is meaningless in recording mode; ignore.
         new_status = 'PAUSED' if status != 'PAUSED' else 'PLAYING'
     elif triggered_id == 'status-interval':
         if status == 'STARTING':
-            if NO_BOARD_MODE:
+            if RECORDING_MODE:
+                new_status = 'RECORD_INIT'
+                countdown = 0
+            elif NO_BOARD_MODE:
                 new_status = 'PLAYING'
             else:
                 new_status, countdown = 'CALIBRATING_LEFT', CALIBRATION_DURATION_S
+        elif status == 'RECORD_INIT':
+            # Brief pause to let the JS refresh-rate probe (~1s) finish, then prompt.
+            new_status = 'RECORD_READY'
+            countdown = 0
+            recording_session['ready_press_baseline'] = len(recording_session['events'])
+        elif status == 'RECORD_READY':
+            baseline = recording_session.get('ready_press_baseline', 0)
+            new_events = recording_session['events'][baseline:]
+            if any(e.get('kind') == 'press' for e in new_events):
+                # First press in READY = session start. Trial 0 is LEFT by convention.
+                safe_insert_marker(MARKER_SESSION_START)
+                safe_insert_marker(MARKER_CUE_LEFT)
+                recording_session['started'] = True
+                recording_session['started_at_iso'] = datetime.now(timezone.utc).isoformat()
+                new_rec_state = {'trial_idx': 0, 'side': 'L', 'phase_start_t': time.time()}
+                new_status = 'RECORD_TRIAL'
+                countdown = RECORD_TRIAL_DURATION_S
+        elif status == 'RECORD_TRIAL':
+            countdown -= 0.5
+            if countdown <= 0:
+                safe_insert_marker(MARKER_CUE_OFFSET)
+                new_status = 'RECORD_REST'
+                countdown = RECORD_REST_DURATION_S
+        elif status == 'RECORD_REST':
+            countdown -= 0.5
+            if countdown <= 0:
+                next_idx = (rec_state or {}).get('trial_idx', 0) + 1
+                if next_idx >= TOTAL_TRIALS:
+                    safe_insert_marker(MARKER_SESSION_END)
+                    new_status = 'RECORD_DONE'
+                    countdown = 0
+                else:
+                    next_side = 'L' if next_idx % 2 == 0 else 'R'
+                    new_rec_state = {'trial_idx': next_idx, 'side': next_side, 'phase_start_t': time.time()}
+                    safe_insert_marker(MARKER_CUE_LEFT if next_side == 'L' else MARKER_CUE_RIGHT)
+                    new_status = 'RECORD_TRIAL'
+                    countdown = RECORD_TRIAL_DURATION_S
+        elif status == 'RECORD_DONE':
+            # Save is owned by save_recording (fires on recording-final-store push).
+            pass
+        elif status == 'RECORD_SAVED':
+            pass
         elif status.startswith('CALIBRATING'):
             countdown -= 0.5
             if countdown <= 0:
@@ -392,13 +772,22 @@ def manage_app_flow(status_n, pause_clicks, restart_clicks, app_status, cal_data
     elif new_status == 'PLAYING':
         msg = "NO BOARD — keyboard only (A/D)" if NO_BOARD_MODE else "PLAYING! Use 'A' and 'D' to override."
     elif new_status == 'PAUSED': msg = "PAUSED"
+    elif new_status == 'RECORD_INIT': msg = "Recording — initializing display probe..."
+    elif new_status == 'RECORD_READY': msg = "Recording — press SPACE to begin"
+    elif new_status == 'RECORD_TRIAL':
+        side_label = 'LEFT' if (rec_state or {}).get('side') == 'L' else 'RIGHT'
+        idx = (rec_state or {}).get('trial_idx', 0) + 1
+        msg = f"Trial {idx}/{TOTAL_TRIALS} — look {side_label} ({int(max(0, countdown))}s)"
+    elif new_status == 'RECORD_REST': msg = f"Rest ({int(max(0, countdown))}s)"
+    elif new_status == 'RECORD_DONE': msg = "Saving session..."
+    elif new_status == 'RECORD_SAVED': msg = "DONE — session saved"
     if NO_BOARD_MODE:
         bci_interval_disabled = True
     else:
         bci_interval_disabled = not (new_status.startswith('CALIBRATING') or new_status == 'PLAYING')
     game_interval_disabled = (new_status == 'PAUSED')
     app_status_out = {'status': new_status, 'countdown': countdown}
-    return msg, app_status_out, new_cal_data, new_game_state, bci_interval_disabled, game_interval_disabled
+    return msg, app_status_out, new_cal_data, new_game_state, bci_interval_disabled, game_interval_disabled, new_rec_state
 
 @app.callback(
     Output('psd-plot', 'figure'), Output('control-plot', 'figure'),
@@ -447,6 +836,12 @@ def main():
         app.run(debug=False, use_reloader=False)
         return
 
+    if RECORDING_MODE:
+        sid, subj, notes = collect_session_metadata_from_cli()
+        recording_session['session_id']    = sid
+        recording_session['subject_id']    = subj
+        recording_session['headset_notes'] = notes
+
     params = BrainFlowInputParams(); params.timeout = 15; params.serial_port = "/dev/cu.usbserial-1120"
     board = BoardShim(BOARD_ID, params)
     try:
@@ -456,7 +851,7 @@ def main():
         bci_eeg_channels = all_eeg_channels[:len(CHANNELS_TO_USE)]
         fft_samples = int(sampling_rate * FFT_WINDOW_SECONDS)
         print(f"Board connected. Sampling Rate: {sampling_rate} Hz"); print(f"Using EEG Channels: {bci_eeg_channels} for BCI")
-        
+
         # --- PREPARE REFERENCE SIGNALS FOR CCA ---
         time_points = np.arange(0, FFT_WINDOW_SECONDS, 1.0 / sampling_rate)[:fft_samples]
         for freq in [SSVEP_FREQ_LEFT, SSVEP_FREQ_RIGHT]:
@@ -464,15 +859,26 @@ def main():
             for h in range(1, CCA_NUM_HARMONICS + 1):
                 refs.append(np.sin(2 * np.pi * h * freq * time_points)); refs.append(np.cos(2 * np.pi * h * freq * time_points))
             cca_ref_signals[freq] = np.array(refs).T
-            
+
         print("Starting data stream..."); board.start_stream(450000); time.sleep(FFT_WINDOW_SECONDS)
         log = logging.getLogger('werkzeug'); log.setLevel(logging.ERROR)
         print("\nDash server is running. Open http://127.0.0.1:8050/ in your browser.")
-        print("The calibration routine will begin automatically.")
+        if RECORDING_MODE:
+            print(f"Recording will write to {os.path.join(RECORDINGS_DIR, recording_session['session_id'])}.npz")
+            print("Press SPACE in the browser to begin recording trials.")
+        else:
+            print("The calibration routine will begin automatically.")
         app.run(debug=False, use_reloader=False)
     except Exception as e:
         print(f"An error occurred: {e}")
     finally:
+        # If a recording session was in flight and the save callback never ran,
+        # do a best-effort save here so the data isn't lost on Ctrl-C.
+        if RECORDING_MODE and recording_session['started'] and not recording_session['finalized']:
+            try:
+                save_session_npz({}, incomplete=True)
+            except Exception as e:
+                print(f"[record] finally-block save failed: {e}")
         if board and board.is_prepared():
             print("Stopping stream and releasing session."); board.stop_stream(); board.release_session()
 

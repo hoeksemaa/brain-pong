@@ -25,6 +25,26 @@ python pong_game_brainflow.py --no-board # keyboard-only dev mode
 
 If deps drift, `pip install -r requirements.txt` from inside the activated venv. The venv is gitignored.
 
+### Cerelog brainflow (real-hardware mode)
+
+Hardware modes (default play, `--record`) reference `BoardIds.CERELOG_X8_BOARD`, which only exists in Cerelog's brainflow fork — **not** upstream PyPI brainflow. To run with the real board, install the fork over the public package:
+
+```bash
+source .venv/bin/activate
+pip install -e /Users/john/Dev/cerelog/Shared_brainflow-cerelog/python_package
+```
+
+The fork imports `pkg_resources`, which is why `requirements.txt` pins `setuptools<81`. Without that pin, you'll hit `ModuleNotFoundError: No module named 'pkg_resources'` at import time. `--no-board` mode also reads the constant at module-load and so requires the fork (or stub) to be installed even though it doesn't use the board.
+
+### Recording mode (`--record`)
+
+```bash
+python pong_game_brainflow.py --record                 # 40 trials (20 L + 20 R)
+python pong_game_brainflow.py --record --trials 4      # smoke-test session, 4 trials
+```
+
+Requires hardware. Errors loud if combined with `--no-board` or with an odd `--trials` count. Prompts for `subject_id` and `headset_notes` at startup, then writes `recordings/<YYYYMMDD-HHMMSS>.npz` on RECORD_DONE. Ctrl-C does a finally-block save with `incomplete=True`.
+
 ## Display / browser setup (matters a LOT for SSVEP precision)
 
 The flicker stimulus must hit precise frequencies. The owner runs a 14"/16" 2021 MBP (M1 Pro, Liquid Retina XDR, ProMotion adaptive 24–120 Hz). Empirical findings from `tools/refresh-rate.html`:

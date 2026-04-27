@@ -45,7 +45,23 @@ Playability targets (from prior conversation):
 
 ---
 
-## Step 3 — Add `--record` flag and recording schema
+## Step 3 — Add `--record` flag and recording schema ✅ DONE (2026-04-27)
+
+**Implemented:**
+- `--record` CLI flag w/ `--trials N` override; fails loud on `--no-board` or odd N.
+- CLI prompts for `subject_id` and `headset_notes`, auto-creates `recordings/<YYYYMMDD-HHMMSS>.npz`.
+- New RECORD_INIT → RECORD_READY → RECORD_TRIAL ⇄ RECORD_REST → RECORD_DONE → RECORD_SAVED state machine inside `manage_app_flow`.
+- Sub-ms keypress capture clientside via `performance.now()`, batched to `recording-events-store` on every game-interval tick (~16 ms granularity for delivery, but timestamps are sub-ms).
+- BrainFlow `insert_marker` injection on every cue/press/release/session boundary — events land natively on the EEG marker channel, no cross-clock sync needed.
+- `save_session_npz` writes EEG (per-channel + timestamp + marker channels), events array, edge log array, and a fat metadata dict (protocol version, subject id, sampling rate, actual stimulus freqs from the JS measurement, browser UA, filter chain, marker code map).
+- `render.js` extended w/ a record-cue layer: arrow `←` / `→` (~160 px) + trial counter + 15 s countdown bar + `● HOLDING` indicator while space is down + `+` fixation during rest + final saved-path display.
+- Edge-log ring buffer bumped 4096 → 65536 (covers ~22 min of two-band flicker).
+- Ctrl-C / exception triggers a finally-block partial save w/ `incomplete=True`.
+- Hardware path verified: CLI prompts work, recordings dir auto-creates, board-connect attempt reaches the right code path. **Real-hardware end-to-end run is the user's job; I have no headset.**
+
+**Side effects (documented in CLAUDE.md):**
+- Cerelog's brainflow fork must be installed (`pip install -e /Users/john/Dev/cerelog/Shared_brainflow-cerelog/python_package`) — upstream brainflow is missing `BoardIds.CERELOG_X8_BOARD`.
+- `setuptools<81` pinned in `requirements.txt` because the fork imports `pkg_resources`, which setuptools 81 removed.
 
 **Why:** we currently log nothing. Need raw EEG + ground-truth event timestamps on disk.
 

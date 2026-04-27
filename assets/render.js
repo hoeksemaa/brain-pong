@@ -47,7 +47,14 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         freqLeft: 10,
         freqRight: 15,
         canvasId: null,
+        record: null,   // {recordingMode, totalTrials, trialDurationS, restDurationS, recState, saveStatus}
     };
+
+    // Track when status enters RECORD_TRIAL so we can render a countdown bar
+    // anchored to that moment (independent of the server-side 500ms tick).
+    let trialPhaseStartMs = null;
+    let restPhaseStartMs  = null;
+    let lastObservedStatus = null;
 
     // ---------------- Loop bookkeeping ----------------
     let started = false;
@@ -68,8 +75,10 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     let leftPeriodFrames = 12;
     let rightPeriodFrames = 8;
 
-    // Edge log (ring buffer; for future recording mode to consume)
-    const EDGE_LOG_MAX = 4096;
+    // Edge log (ring buffer). Sized to cover ~22 min of two-band flicker
+    // (~50 transitions/sec). Recording mode consumes the whole array on
+    // RECORD_DONE; in play mode this is a debug aid only.
+    const EDGE_LOG_MAX = 65536;
     const edgeLog = [];
 
     // Visibility tracking
@@ -154,12 +163,125 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         if (status.indexOf('CALIBRATING_REST')  !== -1) return true;
         if (side === 'L' && status.indexOf('CALIBRATING_LEFT')  !== -1) return true;
         if (side === 'R' && status.indexOf('CALIBRATING_RIGHT') !== -1) return true;
+        // Recording mode: flicker bands run continuously through the whole
+        // session (READY / TRIAL / REST) so the SSVEP stimulus is uninterrupted.
+        if (status === 'RECORD_READY' || status === 'RECORD_TRIAL' ||
+            status === 'RECORD_REST'  || status === 'RECORD_DONE'  ||
+            status === 'RECORD_SAVED') return true;
         return false;
     }
 
-    function draw(ctx, W, H, isLeftOn, isRightOn) {
+    function isRecordingStatus(status) {
+        return status && status.indexOf('RECORD_') === 0;
+    }
+
+    function drawRecordCueLayer(ctx, W, H, status, nowMs) {
+        const bandW = W * BAND_FRACTION;
+        const centerX = W / 2;
+        const centerY = H / 2;
+        const rec = dashState.record || {};
+        const recState = rec.recState || {};
+        const trialDur = rec.trialDurationS || 15;
+        const restDur  = rec.restDurationS  || 3;
+        const totalTrials = rec.totalTrials || 40;
+
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = COL_SCORE;
+
+        if (status === 'RECORD_INIT') {
+            ctx.font = '24px ui-monospace, Menlo, monospace';
+            ctx.fillText('initializing — measuring display refresh…', centerX, centerY);
+            return;
+        }
+        if (status === 'RECORD_READY') {
+            ctx.font = 'bold 28px ui-monospace, Menlo, monospace';
+            ctx.fillText('press SPACE to begin', centerX, centerY - 16);
+            ctx.font = '14px ui-monospace, Menlo, monospace';
+            ctx.fillStyle = '#888';
+            const m = window.dash_clientside && window.dash_clientside.brainpong_measurement;
+            if (m && m.ok) {
+                ctx.fillText(
+                    'refresh ' + (m.measuredHz || 0).toFixed(1) + ' Hz · stimulus '
+                    + (m.actualLeftHz || 0).toFixed(2) + ' / ' + (m.actualRightHz || 0).toFixed(2) + ' Hz',
+                    centerX, centerY + 16);
+            } else if (m) {
+                ctx.fillStyle = COL_WARN;
+                ctx.fillText('refresh measurement not OK — flicker may be wrong', centerX, centerY + 16);
+            }
+            return;
+        }
+        if (status === 'RECORD_TRIAL') {
+            const side = recState.side || 'L';
+            const arrow = side === 'L' ? '←' : '→';
+            const trialIdx = (recState.trial_idx != null ? recState.trial_idx : 0) + 1;
+
+            // Trial counter
+            ctx.font = '14px ui-monospace, Menlo, monospace';
+            ctx.fillStyle = '#888';
+            ctx.textBaseline = 'top';
+            ctx.fillText('Trial ' + trialIdx + ' / ' + totalTrials, centerX, 24);
+
+            // Big arrow
+            ctx.font = 'bold 160px ui-monospace, Menlo, monospace';
+            ctx.fillStyle = COL_SCORE;
+            ctx.textBaseline = 'middle';
+            ctx.fillText(arrow, centerX, centerY);
+
+            // Countdown bar (anchored to the moment we observed RECORD_TRIAL)
+            if (trialPhaseStartMs !== null) {
+                const elapsed = (nowMs - trialPhaseStartMs) / 1000;
+                const remaining = Math.max(0, trialDur - elapsed);
+                const fracLeft = remaining / trialDur;
+                const barW = (W - 2 * bandW) * 0.7;
+                const barH = 8;
+                const barX = centerX - barW / 2;
+                const barY = H - 70;
+                ctx.fillStyle = '#333';
+                ctx.fillRect(barX, barY, barW, barH);
+                ctx.fillStyle = '#33ff66';
+                ctx.fillRect(barX, barY, barW * fracLeft, barH);
+            }
+
+            // Hold indicator (if space is currently down)
+            if (window.dash_clientside && window.dash_clientside.brainpong_space_held) {
+                ctx.font = '16px ui-monospace, Menlo, monospace';
+                ctx.fillStyle = '#33ff66';
+                ctx.textBaseline = 'top';
+                ctx.fillText('● HOLDING', centerX, 50);
+            }
+            return;
+        }
+        if (status === 'RECORD_REST') {
+            ctx.font = 'bold 64px ui-monospace, Menlo, monospace';
+            ctx.fillStyle = '#888';
+            ctx.fillText('+', centerX, centerY);
+            return;
+        }
+        if (status === 'RECORD_DONE') {
+            ctx.font = 'bold 28px ui-monospace, Menlo, monospace';
+            ctx.fillText('saving…', centerX, centerY);
+            return;
+        }
+        if (status === 'RECORD_SAVED') {
+            ctx.font = 'bold 28px ui-monospace, Menlo, monospace';
+            ctx.fillText('DONE', centerX, centerY - 18);
+            const ss = rec.saveStatus || {};
+            ctx.font = '14px ui-monospace, Menlo, monospace';
+            ctx.fillStyle = ss.error ? COL_WARN : '#888';
+            const line = ss.error
+                ? ('error: ' + ss.error)
+                : ('saved: ' + (ss.saved_path || '(unknown path)'));
+            ctx.fillText(line, centerX, centerY + 12);
+            return;
+        }
+    }
+
+    function draw(ctx, W, H, isLeftOn, isRightOn, nowMs) {
         const bandW = W * BAND_FRACTION;
         const rightBandX = W * (1 - BAND_FRACTION);
+        const status = (dashState.appStatus && dashState.appStatus.status) || 'STARTING';
+        const recordingStatus = isRecordingStatus(status);
 
         ctx.fillStyle = COL_BG_CENTER;
         ctx.fillRect(0, 0, W, H);
@@ -169,26 +291,30 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         ctx.fillStyle = isRightOn ? COL_FLICKER_ON : COL_FLICKER_OFF;
         ctx.fillRect(rightBandX, 0, bandW, H);
 
-        const gs = dashState.gameState;
-        if (gs) {
-            const paddleW = (dashState.settings && dashState.settings.paddle_width) || 150;
-            ctx.fillStyle = COL_PADDLE_AI;
-            ctx.fillRect(gs.ai_x - paddleW / 2, 0, paddleW, PADDLE_HEIGHT);
-            ctx.fillStyle = COL_PADDLE_PLAYER;
-            ctx.fillRect(gs.player_x - paddleW / 2, H - PADDLE_HEIGHT, paddleW, PADDLE_HEIGHT);
+        if (recordingStatus) {
+            drawRecordCueLayer(ctx, W, H, status, nowMs);
+        } else {
+            const gs = dashState.gameState;
+            if (gs) {
+                const paddleW = (dashState.settings && dashState.settings.paddle_width) || 150;
+                ctx.fillStyle = COL_PADDLE_AI;
+                ctx.fillRect(gs.ai_x - paddleW / 2, 0, paddleW, PADDLE_HEIGHT);
+                ctx.fillStyle = COL_PADDLE_PLAYER;
+                ctx.fillRect(gs.player_x - paddleW / 2, H - PADDLE_HEIGHT, paddleW, PADDLE_HEIGHT);
 
-            ctx.fillStyle = COL_BALL;
-            ctx.beginPath();
-            ctx.arc(gs.ball_x, gs.ball_y, BALL_RADIUS, 0, 2 * Math.PI);
-            ctx.fill();
+                ctx.fillStyle = COL_BALL;
+                ctx.beginPath();
+                ctx.arc(gs.ball_x, gs.ball_y, BALL_RADIUS, 0, 2 * Math.PI);
+                ctx.fill();
 
-            ctx.font = 'bold 40px ui-monospace, Menlo, monospace';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-            ctx.fillStyle = COL_SCORE;
-            ctx.fillText(String(gs.ai_score), W / 2, 12);
-            ctx.textBaseline = 'bottom';
-            ctx.fillText(String(gs.player_score), W / 2, H - PADDLE_HEIGHT - 8);
+                ctx.font = 'bold 40px ui-monospace, Menlo, monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillStyle = COL_SCORE;
+                ctx.fillText(String(gs.ai_score), W / 2, 12);
+                ctx.textBaseline = 'bottom';
+                ctx.fillText(String(gs.player_score), W / 2, H - PADDLE_HEIGHT - 8);
+            }
         }
 
         if (measurementWarning) {
@@ -226,6 +352,15 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
             const H = canvas.height;
 
             const status = (dashState.appStatus && dashState.appStatus.status) || 'STARTING';
+
+            // Anchor countdown bars to the moment a phase began (independent of
+            // server-side 500 ms tick granularity).
+            if (status !== lastObservedStatus) {
+                if (status === 'RECORD_TRIAL') trialPhaseStartMs = nowMs;
+                else if (status === 'RECORD_REST') restPhaseStartMs = nowMs;
+                lastObservedStatus = status;
+            }
+
             const allowL = flickerAllowed(status, 'L');
             const allowR = flickerAllowed(status, 'R');
 
@@ -254,7 +389,7 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
                 lastEdgeStateRight = null;
             }
 
-            draw(ctx, W, H, isLeftOn, isRightOn);
+            draw(ctx, W, H, isLeftOn, isRightOn, nowMs);
         }
 
         frameIdx++;
@@ -265,7 +400,7 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     // Dash clientside_callback calls this whenever any of the input stores
     // change. First call boots the rAF loop; subsequent calls just refresh
     // the state mirror.
-    function renderPong(canvasId, gameState, appStatus, settings, noBoard, freqLeft, freqRight) {
+    function renderPong(canvasId, gameState, appStatus, settings, noBoard, freqLeft, freqRight, record) {
         dashState.canvasId  = canvasId;
         dashState.gameState = gameState;
         dashState.appStatus = appStatus;
@@ -273,6 +408,7 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         dashState.noBoard   = !!noBoard;
         dashState.freqLeft  = freqLeft;
         dashState.freqRight = freqRight;
+        dashState.record    = record || null;
 
         if (!started) {
             started = true;
