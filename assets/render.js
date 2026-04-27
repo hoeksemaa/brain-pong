@@ -175,6 +175,29 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         return status && status.indexOf('RECORD_') === 0;
     }
 
+    function drawEegBadge(ctx, W, H, live) {
+        // Compact "is the headset streaming?" indicator. Drawn in top-right of
+        // the center play area during TRIAL/REST states so the user can see at
+        // a glance that data is still flowing without having to read the full
+        // readout.
+        const bandW = W * BAND_FRACTION;
+        const x = W - bandW - 12;
+        const y = 16;
+        ctx.font = '12px ui-monospace, Menlo, monospace';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        if (!live) {
+            ctx.fillStyle = '#666';
+            ctx.fillText('● EEG ?', x, y);
+        } else if (!live.streaming) {
+            ctx.fillStyle = COL_WARN;
+            ctx.fillText('● EEG ✗', x, y);
+        } else {
+            ctx.fillStyle = '#33ff66';
+            ctx.fillText('● EEG · ' + (live.n_samples || 0), x, y);
+        }
+    }
+
     function drawRecordCueLayer(ctx, W, H, status, nowMs) {
         const bandW = W * BAND_FRACTION;
         const centerX = W / 2;
@@ -196,7 +219,7 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         }
         if (status === 'RECORD_READY') {
             ctx.font = 'bold 28px ui-monospace, Menlo, monospace';
-            ctx.fillText('press SPACE to begin', centerX, centerY - 16);
+            ctx.fillText('press SPACE to begin', centerX, centerY - 28);
             ctx.font = '14px ui-monospace, Menlo, monospace';
             ctx.fillStyle = '#888';
             const m = window.dash_clientside && window.dash_clientside.brainpong_measurement;
@@ -204,10 +227,34 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
                 ctx.fillText(
                     'refresh ' + (m.measuredHz || 0).toFixed(1) + ' Hz · stimulus '
                     + (m.actualLeftHz || 0).toFixed(2) + ' / ' + (m.actualRightHz || 0).toFixed(2) + ' Hz',
-                    centerX, centerY + 16);
+                    centerX, centerY + 4);
             } else if (m) {
                 ctx.fillStyle = COL_WARN;
-                ctx.fillText('refresh measurement not OK — flicker may be wrong', centerX, centerY + 16);
+                ctx.fillText('refresh measurement not OK — flicker may be wrong', centerX, centerY + 4);
+            }
+            // EEG live readout
+            const live = rec.eegLive;
+            ctx.font = '13px ui-monospace, Menlo, monospace';
+            if (!live) {
+                ctx.fillStyle = '#888';
+                ctx.fillText('EEG: waiting for first sample…', centerX, centerY + 28);
+            } else if (!live.streaming) {
+                ctx.fillStyle = COL_WARN;
+                ctx.fillText('✗ EEG NOT streaming — ' + (live.reason || 'unknown'), centerX, centerY + 28);
+            } else {
+                ctx.fillStyle = '#33ff66';
+                const meanStd = (live.channels || []).map(function (c, i) {
+                    return 'ch' + i + '=' + c.mean.toFixed(0) + '±' + c.std.toFixed(0) + 'μV';
+                }).join('  ');
+                ctx.fillText('✓ EEG · ' + (live.srate || '?') + ' Hz · ' + (live.n_samples || 0)
+                    + ' samples · ' + meanStd, centerX, centerY + 28);
+                if ((live.channels || []).length) {
+                    const latestRow = (live.channels || []).map(function (c, i) {
+                        return 'ch' + i + '=' + c.latest.toFixed(0) + 'μV';
+                    }).join('  ');
+                    ctx.fillStyle = '#666';
+                    ctx.fillText('latest: ' + latestRow, centerX, centerY + 48);
+                }
             }
             return;
         }
@@ -250,12 +297,15 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
                 ctx.textBaseline = 'top';
                 ctx.fillText('● HOLDING', centerX, 50);
             }
+            // Small live-EEG indicator (top-right of center area)
+            drawEegBadge(ctx, W, H, rec.eegLive);
             return;
         }
         if (status === 'RECORD_REST') {
             ctx.font = 'bold 64px ui-monospace, Menlo, monospace';
             ctx.fillStyle = '#888';
             ctx.fillText('+', centerX, centerY);
+            drawEegBadge(ctx, W, H, rec.eegLive);
             return;
         }
         if (status === 'RECORD_DONE') {

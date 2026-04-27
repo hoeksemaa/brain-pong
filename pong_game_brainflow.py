@@ -343,6 +343,7 @@ app.layout = html.Div(id='main-container', style={'backgroundColor': '#111', 'co
     dcc.Store(id='recording-state-store', data={'trial_idx': 0, 'side': None, 'phase_start_t': None}),
     dcc.Store(id='recording-final-store', data=None),
     dcc.Store(id='recording-save-status-store', data={'saved_path': None, 'error': None}),
+    dcc.Store(id='eeg-live-store', data=None),
     dcc.Interval(id='game-interval', interval=GAME_INTERVAL_MS, n_intervals=0, disabled=False),
     dcc.Interval(id='bci-interval', interval=BCI_UPDATE_INTERVAL_MS, n_intervals=0, disabled=True),
     dcc.Interval(id='status-interval', interval=500, n_intervals=0)
@@ -387,10 +388,12 @@ if RECORDING_MODE:
                 window.dash_clientside.brainpong_space_held = false;
                 document.addEventListener('keydown', function(ev) {
                     if (ev.code !== 'Space' && ev.key !== ' ') return;
-                    if (ev.repeat) return;  // ignore auto-repeat from key being held
+                    // Suppress browser's native page-scroll on EVERY space
+                    // keydown (including auto-repeat) before any guards.
+                    ev.preventDefault();
+                    if (ev.repeat) return;
                     if (window.dash_clientside.brainpong_space_held) return;
                     window.dash_clientside.brainpong_space_held = true;
-                    ev.preventDefault();
                     window.dash_clientside.brainpong_pending_input.push({
                         kind: 'press',
                         side: '',
@@ -399,6 +402,7 @@ if RECORDING_MODE:
                 }, {passive: false});
                 document.addEventListener('keyup', function(ev) {
                     if (ev.code !== 'Space' && ev.key !== ' ') return;
+                    ev.preventDefault();
                     if (!window.dash_clientside.brainpong_space_held) return;
                     window.dash_clientside.brainpong_space_held = false;
                     window.dash_clientside.brainpong_pending_input.push({
@@ -406,7 +410,7 @@ if RECORDING_MODE:
                         side: '',
                         t_browser_ms: performance.now(),
                     });
-                });
+                }, {passive: false});
             }
             var pending = window.dash_clientside.brainpong_pending_input;
             if (!pending.length) {
@@ -451,7 +455,7 @@ if RECORDING_MODE:
 
 clientside_callback(
     f"""
-    function(gameState, appStatus, settings, recState, saveStatus) {{
+    function(gameState, appStatus, settings, recState, saveStatus, eegLive) {{
         if (window.dash_clientside && window.dash_clientside.renderPong) {{
             window.dash_clientside.renderPong(
                 'pong-game-canvas',
@@ -467,7 +471,8 @@ clientside_callback(
                     trialDurationS: {RECORD_TRIAL_DURATION_S},
                     restDurationS: {RECORD_REST_DURATION_S},
                     recState: recState,
-                    saveStatus: saveStatus
+                    saveStatus: saveStatus,
+                    eegLive: eegLive
                 }}
             );
         }}
@@ -479,7 +484,8 @@ clientside_callback(
     Input('app-status-store', 'data'),
     Input('settings-store', 'data'),
     Input('recording-state-store', 'data'),
-    Input('recording-save-status-store', 'data')
+    Input('recording-save-status-store', 'data'),
+    Input('eeg-live-store', 'data')
 )
 
 # ==============================================================================
@@ -643,6 +649,46 @@ if RECORDING_MODE:
         return no_update
 
     @app.callback(
+        Output('eeg-live-store', 'data'),
+        Input('status-interval', 'n_intervals'),
+        State('app-status-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def update_eeg_live_status(_, app_status):
+        """Best-effort 'is the headset actually streaming?' readout. Fires
+        every 500 ms; reads the last ~0.5 s of board data and computes per-
+        channel mean/std for the live indicator.
+        """
+        status = (app_status or {}).get('status', '')
+        if not status.startswith('RECORD_'):
+            return no_update
+        if board is None:
+            return {'streaming': False, 'reason': 'no board object'}
+        try:
+            if not board.is_prepared():
+                return {'streaming': False, 'reason': 'session not prepared'}
+            n = int(sampling_rate * 0.5) if sampling_rate else 125
+            data = board.get_current_board_data(n)
+        except Exception as e:
+            return {'streaming': False, 'reason': str(e)}
+        if data is None or data.size == 0 or data.shape[1] == 0:
+            return {'streaming': False, 'reason': 'no samples'}
+        chans = []
+        for ch_idx in (bci_eeg_channels or [])[:4]:
+            ch = data[ch_idx]
+            chans.append({
+                'mean':   float(np.mean(ch)),
+                'std':    float(np.std(ch)),
+                'latest': float(ch[-1]),
+            })
+        return {
+            'streaming':  True,
+            'n_samples':  int(data.shape[1]),
+            'channels':   chans,
+            'srate':      int(sampling_rate) if sampling_rate else None,
+        }
+
+    @app.callback(
         Output('recording-save-status-store', 'data'),
         Output('app-status-store', 'data', allow_duplicate=True),
         Input('recording-final-store', 'data'),
@@ -712,7 +758,14 @@ def manage_app_flow(status_n, pause_clicks, restart_clicks, app_status, cal_data
             baseline = recording_session.get('ready_press_baseline', 0)
             new_events = recording_session['events'][baseline:]
             if any(e.get('kind') == 'press' for e in new_events):
-                # First press in READY = session start. Trial 0 is LEFT by convention.
+                # First press in READY = session start. Flush BrainFlow's pre-
+                # session ring buffer so the saved EEG starts at t=0 of the
+                # actual session, not stream-start. Trial 0 is LEFT by convention.
+                try:
+                    if board is not None and board.is_prepared():
+                        board.get_board_data()  # discards everything buffered
+                except Exception as e:
+                    print(f"[record] pre-session buffer flush failed: {e}")
                 safe_insert_marker(MARKER_SESSION_START)
                 safe_insert_marker(MARKER_CUE_LEFT)
                 recording_session['started'] = True
