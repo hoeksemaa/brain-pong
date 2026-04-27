@@ -124,6 +124,14 @@ Don't treat these as features:
 - FBCCA / TRCA over plain CCA — both well-known SSVEP wins.
 - Replace FFT-based filter chain with Goertzel at the two target freqs for cheaper narrow-band detection.
 
+## Shipping policy
+
+**NEVER open a PR or merge to main without an explicit user request.** Default flow per change:
+1. Branch + commit + push to remote.
+2. **STOP.** Wait for the user to say "PR + merge" (or equivalent) before running `gh pr create` / `gh pr merge`.
+
+This applies even when the change feels obviously complete. The user is the only reviewer; PRs and merges are user-initiated actions.
+
 ## Working agreements
 
 - Don't add features beyond what the active task asks for; this is a small repo and accidental scope creep shows.
