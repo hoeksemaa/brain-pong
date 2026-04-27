@@ -8,31 +8,40 @@ Playability targets (from prior conversation):
 
 ---
 
-## Step 1 — Fix `render.js` flicker time source
+## Step 1 — Fix `render.js` flicker time source ✅ DONE (PR #2, 2026-04-27)
 
 **Why:** `render.js` currently uses `n_intervals * interval_ms` as its clock for the SSVEP flicker. That ties stimulus phase to Dash callback fire count, not wallclock. If the browser throttles or a callback skips, the effective flicker frequency drifts off 10/15 Hz — and the Python-side CCA references are built against true wallclock, so they desync. This bug poisons everything downstream, including any data we record.
 
-**Do:**
-- Replace `n_intervals * interval_ms / 1000.0` with a `performance.now() / 1000.0` clock.
-- Sanity check: open the page, eyeball the flicker, confirm it looks the same speed as before (it should — just less jittery).
+**What we did (scope grew during execution):**
+- Built `tools/refresh-rate.html`, a standalone browser probe for measuring rAF rate + jitter.
+- Empirically determined: Chrome on macOS ProMotion delivers stable 120 Hz (median 8.30 ms, p99 9.40 ms, 0 drops/1202 frames). Safari quantizes `performance.now()` to 1 ms and lands at 60 Hz. **Project targets Chrome.**
+- Rewrote `assets/render.js` as a self-bootstrapping rAF loop with **frame-counted** flicker — period in frames, not milliseconds, so phase is exact relative to display refresh. (Stronger than the originally-planned `performance.now()` swap.)
+- Added runtime refresh-rate measurement at startup (picks nearest of {60, 90, 120}, fails loud if outside tolerance).
+- Switched to **black ↔ white** flicker for max-luminance SSVEP response. Repainted paddles + ball + scores so they don't fight the new flicker.
+- Added an edge-time ring buffer (`window.dash_clientside.brainpong_edge_log`) so step 3 can log exact stimulus transitions alongside EEG.
+- Added `visibilitychange` listener to flag warnings when the tab is hidden.
+- Dropped `game-interval` from the render callback's inputs; rAF owns its own clock.
+- Documented the Chrome/ProMotion/120 Hz setup in `CLAUDE.md`.
 
-**Time:** ~30 min. Blocks data collection.
+**Verified visually:** `--no-board` mode on Chrome, both bands flicker at correct relative speeds, console reports detected refresh rate.
+
+**Actual time:** ~2 hrs (vs. 30 min estimated). Scope creep was warranted — original plan would have only fixed one of five sources of jitter.
 
 ---
 
-## Step 2 — Design the recording protocol (on paper)
+## Step 2 — Design the recording protocol (on paper) ✅ DONE (2026-04-27)
 
 **Why:** rushed protocol = noisy labels = wasted data. 30 min of paper design saves a day of regret.
 
-**Decide:**
-- Trial structure. Proposed: **10–15 s gaze trials, 3 s rest between, 20 trials per direction (LEFT / RIGHT)**.
-- Prompt sequence (random or alternating?).
-- What the screen shows during rest (blank? fixation cross? center flicker?).
-- Keypress semantics: "press space the instant you BEGIN looking; release when prompted to stop."
-- Steady-state window for training: discard first 1.5 s after keypress; use seconds 1.5–4.5 (or wider if trials are longer) as the supervised signal.
-- Filename / metadata schema for recordings.
+**Output:** [`plans/recording-protocol.md`](recording-protocol.md) — versioned (v1) protocol that step 3 implements verbatim.
 
-**Output:** a short protocol description committed alongside the data.
+**Decisions locked:**
+- 15 s trials, 20 LEFT + 20 RIGHT, strict L/R alternation, 3 s rest w/ central fixation cross.
+- Cue: centered arrow `←` / `→`. No text, no audio.
+- Keypress: press at gaze onset, release at offset. Steady-state window = `[t_press + 1.5 s, t_release]`.
+- Metadata captured liberally — protocol version, subject id, sampling rate, channels used, **actual measured stimulus freqs** (not nominal 10/15), display refresh, browser UA, filter chain, headset notes.
+- File format: one `.npz` per session at `recordings/<YYYYMMDD-HHMMSS>.npz` with `eeg`, `eeg_t`, `events`, `edge_log`, `metadata` arrays.
+- Loading snippet (5 lines, numpy + matplotlib) documented inside the protocol.
 
 ---
 
