@@ -648,6 +648,9 @@ if RECORDING_MODE:
         recording_session['last_event_seq'] = seq
         return no_update
 
+    LIVE_WINDOW_S = 1.5
+    LIVE_DOWNSAMPLE_HZ = 60  # browser-side traces don't need full 250Hz
+
     @app.callback(
         Output('eeg-live-store', 'data'),
         Input('status-interval', 'n_intervals'),
@@ -655,9 +658,12 @@ if RECORDING_MODE:
         prevent_initial_call=True,
     )
     def update_eeg_live_status(_, app_status):
-        """Best-effort 'is the headset actually streaming?' readout. Fires
-        every 500 ms; reads the last ~0.5 s of board data and computes per-
-        channel mean/std for the live indicator.
+        """Stream a recent slice of FILTERED EEG to the browser for the
+        live waveform plot. Filter chain matches the recording pipeline
+        (detrend → 5-45 Hz BP → 50/60 Hz notches) so the displayed scale
+        is centered, μV-range scalp EEG — not raw -100 mV DC offset.
+        Downsamples to ~LIVE_DOWNSAMPLE_HZ before sending to keep the
+        store payload small.
         """
         status = (app_status or {}).get('status', '')
         if not status.startswith('RECORD_'):
@@ -667,25 +673,52 @@ if RECORDING_MODE:
         try:
             if not board.is_prepared():
                 return {'streaming': False, 'reason': 'session not prepared'}
-            n = int(sampling_rate * 0.5) if sampling_rate else 125
+            n = int(sampling_rate * LIVE_WINDOW_S) if sampling_rate else 375
             data = board.get_current_board_data(n)
         except Exception as e:
             return {'streaming': False, 'reason': str(e)}
-        if data is None or data.size == 0 or data.shape[1] == 0:
+        if data is None or data.size == 0 or data.shape[1] < 20:
             return {'streaming': False, 'reason': 'no samples'}
-        chans = []
-        for ch_idx in (bci_eeg_channels or [])[:4]:
-            ch = data[ch_idx]
-            chans.append({
-                'mean':   float(np.mean(ch)),
-                'std':    float(np.std(ch)),
-                'latest': float(ch[-1]),
-            })
+
+        chans_idx = (bci_eeg_channels or [])[:4]
+        traces = []
+        chan_stats = []
+        # Filter each channel using the same chain as the recording pipeline,
+        # then downsample for transport. Operate on a copy so we don't mutate
+        # the board's buffer.
+        for ch_idx in chans_idx:
+            x = np.ascontiguousarray((data[ch_idx] * 1e6).astype(np.float64))
+            try:
+                if x.size > 20:
+                    DataFilter.detrend(x, DetrendOperations.CONSTANT.value)
+                    DataFilter.perform_lowpass(x, sampling_rate, float(FILTER_HIGH_CUT_HZ),
+                                               FILTER_ORDER, FilterTypes.BUTTERWORTH.value, 0)
+                    DataFilter.perform_highpass(x, sampling_rate, float(FILTER_LOW_CUT_HZ),
+                                                FILTER_ORDER, FilterTypes.BUTTERWORTH.value, 0)
+                    DataFilter.perform_bandstop(x, sampling_rate, 48.0, 52.0, 3,
+                                                FilterTypes.BUTTERWORTH.value, 0)
+                    DataFilter.perform_bandstop(x, sampling_rate, 58.0, 62.0, 3,
+                                                FilterTypes.BUTTERWORTH.value, 0)
+            except Exception as e:
+                print(f"[eeg-live] filter failed on ch{ch_idx}: {e}")
+
+            # Downsample by simple stride for transport. With sr=250 and target
+            # 60 Hz that's stride 4 → 90 samples for a 1.5 s window. Plenty of
+            # resolution for a small display plot.
+            stride = max(1, int(round(sampling_rate / LIVE_DOWNSAMPLE_HZ))) if sampling_rate else 4
+            ds = x[::stride]
+            traces.append([float(v) for v in ds])
+            chan_stats.append({'mean': float(np.mean(x)), 'std': float(np.std(x))})
+
         return {
-            'streaming':  True,
-            'n_samples':  int(data.shape[1]),
-            'channels':   chans,
-            'srate':      int(sampling_rate) if sampling_rate else None,
+            'streaming': True,
+            'n_samples': int(data.shape[1]),
+            'srate':     int(sampling_rate) if sampling_rate else None,
+            'window_s':  LIVE_WINDOW_S,
+            'effective_hz': int(LIVE_DOWNSAMPLE_HZ),
+            'channel_indices': list(chans_idx),
+            'channels': chan_stats,
+            'traces':   traces,
         }
 
     @app.callback(
