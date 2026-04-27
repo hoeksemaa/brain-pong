@@ -37,6 +37,10 @@ pip install -e /Users/john/Dev/cerelog/Shared_brainflow-cerelog/python_package
 
 The fork imports `pkg_resources`, which is why `requirements.txt` pins `setuptools<81`. Without that pin, you'll hit `ModuleNotFoundError: No module named 'pkg_resources'` at import time. `--no-board` mode also reads the constant at module-load and so requires the fork (or stub) to be installed even though it doesn't use the board.
 
+### Recordings policy
+
+**`recordings/*.npz` is committed to git.** This is a personal project; the owner is fine with biosignal data being public. Don't add `recordings/` to `.gitignore`. Don't omit recordings from PRs.
+
 ### Recording mode (`--record`)
 
 ```bash
