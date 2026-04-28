@@ -86,7 +86,7 @@ Playability targets (from prior conversation):
 
 ---
 
-## Step 6 — Build the automated latency test bench
+## Step 6 — Build the automated latency test bench ✅ DONE (2026-04-28)
 
 **Why:** this is the lever that turns optimization from vibes-based into measurement-based. Every algorithm change from here on gets benchmarked.
 
@@ -105,7 +105,23 @@ Playability targets (from prior conversation):
 
 ---
 
-## Step 7 — Run the bench, write down the numbers
+## Step 7 — Run the bench, write down the numbers ✅ DONE (2026-04-28)
+
+**Baseline (HPF=5, default live-game params) on `recordings/20260427-191502.npz`:**
+- accuracy (majority vote per trial): **29/40 = 72.5%**
+- latency_first: p50=288ms, p95=3.5s
+- latency_sustained: p50=288ms, p95=2.6s
+- L→L: 20/20 (100%)  ·  R→R: 9/20 (45%) — same asymmetric failure as offline, more pronounced under streaming
+- 5/40 trials never produced a sustained-correct result during the press window
+
+**HPF=8 sweep:** 28/40 = 70.0%. Hypothesis from FFT analysis (EOG drown at 5–8Hz suggested HPF=8 would help) **did not hold up** in streaming. File under "this is why we built the bench."
+
+**Why 72.5% (bench) ≠ 85% (offline analysis):**
+- Offline ran one CCA over the full 3–7s steady-state window per trial → high SNR per call.
+- Bench mimics the live game: 1.5s windows every 300ms, EMA-smoothed, majority vote across all in-trial windows. Lower SNR per CCA, sensitive to the noisy R-trial windows that the offline view averages out.
+- The bench number is the live-game-realistic one. Use it as the baseline.
+
+Reports: `plans/baseline-results.md` (HPF=5), `plans/baseline-results-hpf8.md` (HPF=8 sweep). Bench overwrites these each run — copy/rename when keeping a snapshot.
 
 **Why:** establishes the baseline. Every future optimization gets compared against this.
 

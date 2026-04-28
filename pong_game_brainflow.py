@@ -37,6 +37,9 @@ from brainflow.data_filter import DataFilter, FilterTypes, NoiseTypes, DetrendOp
 # (Removed unused Scipy imports like butter, lfilter)
 from sklearn.cross_decomposition import CCA as SklearnCCA
 
+# --- Shared algorithm module (single source of truth for DSP + CCA) ---
+import algorithm
+
 # ==============================================================================
 # === 1. TUNABLE CONFIGURATION ===============================================
 # ==============================================================================
@@ -118,43 +121,16 @@ recording_session = {
 }
 
 def preprocess_eeg_window(eeg_data):
-    """
-    Applies the BrainFlow specific filtering pipeline using global config settings.
-    """
-    if eeg_data.ndim == 1: 
-        eeg_data = eeg_data.reshape(-1, 1)
-    
-    # Work on a contiguous copy to ensure C-compatibility
-    data_to_process = np.ascontiguousarray(eeg_data.T) 
-    n_channels = data_to_process.shape[0]
-
-    for i in range(n_channels):
-        if data_to_process[i].size > 20:
-            # 1. Detrend (Center at 0)
-            DataFilter.detrend(data_to_process[i], DetrendOperations.CONSTANT.value)
-            
-            # 2. Low-Pass (Remove High Freq Noise) using FILTER_HIGH_CUT_HZ (e.g., 45Hz)
-            DataFilter.perform_lowpass(data_to_process[i], sampling_rate, float(FILTER_HIGH_CUT_HZ), FILTER_ORDER, FilterTypes.BUTTERWORTH.value, 0)
-            
-            # 3. High-Pass (Remove Low Freq Drift) using FILTER_LOW_CUT_HZ (e.g., 5Hz)
-            DataFilter.perform_highpass(data_to_process[i], sampling_rate, float(FILTER_LOW_CUT_HZ), FILTER_ORDER, FilterTypes.BUTTERWORTH.value, 0)
-
-            # 4. Notch Filters (Grid Noise) - Kept hardcoded as grid noise is always 50/60Hz
-            DataFilter.perform_bandstop(data_to_process[i], sampling_rate, 48.0, 52.0, 3, FilterTypes.BUTTERWORTH.value, 0)
-            DataFilter.perform_bandstop(data_to_process[i], sampling_rate, 58.0, 62.0, 3, FilterTypes.BUTTERWORTH.value, 0)
-            
-            # 5. Rolling Median (Smoothing)
-            DataFilter.perform_rolling_filter(data_to_process[i], 3, AggOperations.MEDIAN.value)
-
-    return data_to_process.T
+    """Thin wrapper around algorithm.filter_window for backward compat (used by
+    the PSD plot path which sometimes hands in a 1D signal)."""
+    return algorithm.filter_window(
+        eeg_data, sampling_rate,
+        hpf_hz=FILTER_LOW_CUT_HZ, lpf_hz=FILTER_HIGH_CUT_HZ,
+        filter_order=FILTER_ORDER,
+    )
 
 def get_cca_correlation(eeg_data_multi_channel, ref_signals):
-    if eeg_data_multi_channel.shape[0] < eeg_data_multi_channel.shape[1] or eeg_data_multi_channel.shape[0] != ref_signals.shape[0]: return 0.0
-    try:
-        cca_model.fit(eeg_data_multi_channel, ref_signals)
-        U, V = cca_model.transform(eeg_data_multi_channel, ref_signals)
-        return np.corrcoef(U.T, V.T)[0, 1]
-    except Exception: return 0.0
+    return algorithm.cca_correlation(eeg_data_multi_channel, ref_signals)
 
 # ==============================================================================
 # === Recording mode helpers ===================================================
@@ -508,25 +484,35 @@ def update_bci_command(_, app_status, cal_data, last_bci_command):
     if data.shape[1] < fft_samples:
         return no_update, no_update
     eeg_window = data[bci_eeg_channels].T
-    processed_eeg = preprocess_eeg_window(eeg_window)
-    corr_left = get_cca_correlation(processed_eeg, cca_ref_signals[SSVEP_FREQ_LEFT])
-    corr_right = get_cca_correlation(processed_eeg, cca_ref_signals[SSVEP_FREQ_RIGHT])
-    raw_score = (corr_right - corr_left) * BCI_SCORE_AMPLIFIER
+
+    # One-step decision via the shared algorithm module. EMA state carries over
+    # across calls via last_bci_command.smoothed_score (which is forced to 0
+    # during CALIBRATING by the explicit return below, so it doesn't leak into
+    # PLAYING).
+    state_in = {'smoothed': last_bci_command.get('smoothed_score', 0.0) if USE_EMA_SMOOTHING else 0.0}
+    label, _, dbg = algorithm.cca_decision(
+        eeg_window, state_in, sampling_rate,
+        freq_l=SSVEP_FREQ_LEFT, freq_r=SSVEP_FREQ_RIGHT,
+        harmonics=CCA_NUM_HARMONICS,
+        hpf_hz=FILTER_LOW_CUT_HZ, lpf_hz=FILTER_HIGH_CUT_HZ,
+        ema_alpha=(EMA_SMOOTHING_FACTOR if USE_EMA_SMOOTHING else 0.0),
+        score_amplifier=BCI_SCORE_AMPLIFIER,
+        thresholds=cal_data.get('thresholds') if status == 'PLAYING' else None,
+    )
+    raw_score = dbg['raw_score']
+    smoothed_score = dbg['smoothed_score']
+
     if status.startswith('CALIBRATING'):
-        if 'LEFT' in status: cal_data['scores_left'].append(raw_score)
+        if 'LEFT' in status:    cal_data['scores_left'].append(raw_score)
         elif 'RIGHT' in status: cal_data['scores_right'].append(raw_score)
-        elif 'REST' in status: cal_data['scores_rest'].append(raw_score)
+        elif 'REST' in status:  cal_data['scores_rest'].append(raw_score)
         return {'command': 'NEUTRAL', 'raw_score': raw_score, 'smoothed_score': 0.0}, cal_data
     elif status == 'PLAYING':
-        smoothed_score = raw_score
-        if USE_EMA_SMOOTHING:
-            last_smoothed = last_bci_command.get('smoothed_score', 0.0)
-            smoothed_score = (EMA_SMOOTHING_FACTOR * last_smoothed) + ((1 - EMA_SMOOTHING_FACTOR) * raw_score)
         thresholds = cal_data.get('thresholds')
-        if not thresholds: return no_update, no_update
-        if smoothed_score > thresholds['right']: command = 'RIGHT'
-        elif smoothed_score < thresholds['left']: command = 'LEFT'
-        else: command = 'NEUTRAL'
+        if not thresholds:
+            return no_update, no_update
+        # Map algorithm labels (L/R/NEUTRAL) to live-game command names.
+        command = {'L': 'LEFT', 'R': 'RIGHT'}.get(label, 'NEUTRAL')
         return {'command': command, 'raw_score': raw_score, 'smoothed_score': smoothed_score}, no_update
     return no_update, no_update
 
