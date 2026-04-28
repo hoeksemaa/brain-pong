@@ -88,6 +88,19 @@ Cerelog X8 → serial(/dev/cu.usbserial-1120, hardcoded) → BrainFlow ringbuffe
 
 `--no-board` flag skips hardware and calibration entirely; arrow goes `STARTING → PLAYING` and the user controls with A/D keys only.
 
+## Data integrity — CRITICAL
+
+**`recordings/*.npz` is read-only ground truth.** It backs the step-6 latency bench, future ML training, and every algorithm comparison. Never mutate the underlying data; never re-save over a session file.
+
+Concrete rules when handling recorded data:
+
+- **Filtering algorithms (DSP, CCA preprocessing, etc.) operate on copies, not the loaded arrays.** BrainFlow's `DataFilter.*` functions mutate their input *in place*. If a caller does `DataFilter.detrend(eeg[i], ...)` on a slice of the loaded npz array, it corrupts the source. Always copy first: `x = np.ascontiguousarray(eeg[i].astype(np.float64))`, then filter `x`.
+- **The mock-board adapter (step 6) returns copies** of the requested window, never views into the underlying recording array. Matches BrainFlow's real behavior.
+- **`np.savez` over an existing recording is forbidden** unless we're explicitly migrating a session to a new format (and even then, write to `<id>.npz.tmp` first, verify load round-trips, then atomic rename).
+- **Outputs (analysis results, baseline numbers, plots) live elsewhere** — `plans/baseline-results.md`, notebooks, derived files. Never write back into `recordings/`.
+
+The reason: as algorithms change (HPF cutoff, freq pair, harmonics, classifier), we want to compare apples-to-apples against the same reference recordings. If we ever silently mutate the source data, comparisons across PRs become meaningless.
+
 ## Three Dash intervals
 
 - `game-interval` 16 ms (~60 Hz physics + render)
