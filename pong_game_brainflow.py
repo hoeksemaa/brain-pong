@@ -51,21 +51,25 @@ PADDLE_SPEED = 30
 INITIAL_BALL_SPEED_Y = -4
 
 # --- BCI & Signal Processing ---
-CHANNELS_TO_USE = [1, 2, 3, 4] 
+# Tuned values from the grid search on recordings/20260427-191502.npz.
+# Top combo at ~28% grid coverage: hpf=12, lpf=45, harmonics=7, window=1.5, ema_alpha=0.0
+# → 95% accuracy (L=95%, R=95%, asymmetry resolved). Was 72.5% under defaults.
+# Re-evaluate once the full grid finishes.
+CHANNELS_TO_USE = [1, 2, 3, 4]
 SSVEP_FREQ_LEFT = 10
 SSVEP_FREQ_RIGHT = 15.0
 FFT_WINDOW_SECONDS = 1.5
 FFT_OVERLAP_PERCENT = 0.8
-USE_EMA_SMOOTHING = True
-EMA_SMOOTHING_FACTOR = 0.4
+USE_EMA_SMOOTHING = True       # kept on; EMA factor 0.0 below disables it effectively
+EMA_SMOOTHING_FACTOR = 0.0     # was 0.4 — grid found smoothing didn't help
 BCI_SCORE_AMPLIFIER = 2.5
 
 # NOTE: These now control the BrainFlow filters directly
-FILTER_LOW_CUT_HZ = 5.0   # Highpass cutoff (removes frequencies BELOW this)
+FILTER_LOW_CUT_HZ = 12.0  # was 5.0 — grid winner: above-alpha cutoff resolves R-trial drown
 FILTER_HIGH_CUT_HZ = 45.0 # Lowpass cutoff (removes frequencies ABOVE this)
 FILTER_ORDER = 4          # BrainFlow usually works best with order 4 for Butterworth
 
-CCA_NUM_HARMONICS = 3
+CCA_NUM_HARMONICS = 7     # was 3 — grid found richer harmonic set helps
 CALIBRATION_DURATION_S = 7
 CALIBRATION_THRESHOLD_STD_FACTOR = 0.8
 MIN_THRESHOLD_GAP = 0.05
