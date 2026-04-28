@@ -21,11 +21,11 @@ Used by:
 
 | element | value |
 |---|---|
-| trial length | **15 s** of sustained gaze |
+| trial length | **10 s** of sustained gaze |
 | trials per direction | **20 LEFT + 20 RIGHT = 40 total** |
 | ordering | **strict alternation** (L, R, L, R, …) starting with LEFT |
 | inter-trial rest | **3 s**, central fixation cross, no flicker |
-| total session time | ~12 min trials + ~2 min calibration check + setup overhead ≈ 15 min |
+| total session time | ~9 min trials + ~2 min calibration check + setup overhead ≈ 11 min |
 | breaks | none built-in. if subject reports fatigue, abort and resume in a new session file |
 
 The flicker bands run for the entire session at their target frequencies (10 Hz left, 15 Hz right). Only the **cue** changes per trial — the stimulus is constant.
@@ -38,7 +38,7 @@ Center play area shows:
 
 | phase | display |
 |---|---|
-| trial (15 s) | large arrow `←` (LEFT trial) or `→` (RIGHT trial), centered |
+| trial (10 s) | large arrow `←` (LEFT trial) or `→` (RIGHT trial), centered |
 | rest (3 s)   | small `+` fixation cross, centered |
 | pre-session | "READY — press space to begin" |
 | post-session | "DONE — N trials recorded" |
@@ -190,10 +190,10 @@ plt.show()
    - PSD is shown in real-time; verify peak at expected stim freq when looking left/right
    - subject presses space to begin recorded trials
 
-2. Trials (~12 min, 40 × 18 s)
+2. Trials (~9 min, 40 × 13 s)
    - cue arrow appears
    - subject shifts gaze, presses space
-   - holds for ~15 s of sustained gaze
+   - holds for ~10 s of sustained gaze
    - cue disappears, subject releases space, fixation cross appears for 3 s
    - alternates L/R for 40 trials
 
@@ -209,7 +209,7 @@ plt.show()
 
 - **Human reaction time on press/release.** ~200–300 ms typical. The 1.5 s post-press dropout absorbs this for training. For latency benchmarks, treat as a constant offset.
 - **Saccade asymmetry.** Looking left vs right may have different RTs depending on subject handedness / eye dominance. Not corrected for. Document if it shows up in the data.
-- **Calibration drift over a session.** Headset impedance can change as gel dries. Single-session protocol is short (~12 min) to minimize this; if longer sessions are desired later, add periodic re-calibration trials.
+- **Calibration drift over a session.** Headset impedance can change as gel dries. Single-session protocol is short (~9 min) to minimize this; if longer sessions are desired later, add periodic re-calibration trials.
 - **Subject inattention.** No way to detect a trial where the subject zoned out but kept space pressed. Visual inspection + outlier detection in post-hoc analysis is the only check.
 
 ---

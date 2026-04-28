@@ -175,6 +175,153 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         return status && status.indexOf('RECORD_') === 0;
     }
 
+    // Adaptive y-limits per render call. Smoothed across frames so the scale
+    // doesn't twitch on every update — same pattern as filtered_plot.py.
+    const eegYLimits = { min: -50, max: 50 };
+
+    function drawEegPlot(ctx, x0, y0, w, h, live) {
+        // Draw a small multi-channel oscilloscope. Filtered, μV-scale,
+        // adaptive y-axis. X axis = time (s, with 0 = "now"). Y = μV.
+        ctx.save();
+        ctx.fillStyle = '#0a0a0a';
+        ctx.fillRect(x0, y0, w, h);
+        ctx.strokeStyle = '#222';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x0 + 0.5, y0 + 0.5, w - 1, h - 1);
+
+        if (!live || !live.streaming || !live.traces || !live.traces.length) {
+            ctx.fillStyle = '#888';
+            ctx.font = '12px ui-monospace, Menlo, monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(live && live.reason ? '✗ ' + live.reason : 'waiting for EEG…',
+                         x0 + w / 2, y0 + h / 2);
+            ctx.restore();
+            return;
+        }
+
+        const traces = live.traces;
+        const nCh = traces.length;
+        const windowS = live.window_s || 1.5;
+
+        // Per-channel auto-scale across all visible samples + 20% padding.
+        let allMax = -Infinity, allMin = Infinity;
+        for (let c = 0; c < nCh; c++) {
+            for (let i = 0; i < traces[c].length; i++) {
+                const v = traces[c][i];
+                if (v > allMax) allMax = v;
+                if (v < allMin) allMin = v;
+            }
+        }
+        if (!isFinite(allMax) || !isFinite(allMin) || allMax === allMin) {
+            allMax = 1; allMin = -1;
+        }
+        const targetMax = allMax * 1.2;
+        const targetMin = allMin * 1.2;
+        // EMA smoothing on y-limits so scale eases instead of jumps
+        const smooth = 0.2;
+        eegYLimits.max = eegYLimits.max * (1 - smooth) + targetMax * smooth;
+        eegYLimits.min = eegYLimits.min * (1 - smooth) + targetMin * smooth;
+        const yMin = eegYLimits.min;
+        const yMax = eegYLimits.max;
+
+        // Plot area inside frame with margins for labels.
+        const padL = 46, padR = 6, padT = 14, padB = 22;
+        const plotX = x0 + padL, plotY = y0 + padT;
+        const plotW = w - padL - padR, plotH = h - padT - padB;
+
+        // Y-axis ticks (3): min, 0, max (or simply min/mid/max if 0 is out of range)
+        ctx.fillStyle = '#888';
+        ctx.font = '10px ui-monospace, Menlo, monospace';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        const yTicks = [yMax, (yMax + yMin) / 2, yMin];
+        for (const tv of yTicks) {
+            const py = plotY + plotH * (1 - (tv - yMin) / (yMax - yMin));
+            ctx.fillText(tv.toFixed(0), plotX - 4, py);
+            ctx.strokeStyle = '#222';
+            ctx.beginPath(); ctx.moveTo(plotX, py); ctx.lineTo(plotX + plotW, py); ctx.stroke();
+        }
+        // Y-axis label
+        ctx.save();
+        ctx.translate(x0 + 12, y0 + h / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#aaa';
+        ctx.fillText('μV (filtered)', 0, 0);
+        ctx.restore();
+
+        // X-axis ticks: -1.5s, -1.0s, -0.5s, 0
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = '#888';
+        const nXTicks = 4;
+        for (let i = 0; i < nXTicks; i++) {
+            const frac = i / (nXTicks - 1);
+            const tval = -windowS * (1 - frac);
+            const px = plotX + plotW * frac;
+            ctx.fillText(tval.toFixed(1), px, plotY + plotH + 4);
+            ctx.strokeStyle = '#222';
+            ctx.beginPath(); ctx.moveTo(px, plotY); ctx.lineTo(px, plotY + plotH); ctx.stroke();
+        }
+        ctx.fillStyle = '#aaa';
+        ctx.fillText('time (s, 0 = now)', x0 + w / 2, y0 + h - 11);
+
+        // Channel colors (4 channels, distinct hues)
+        const colors = ['#33ff66', '#ffe600', '#33ccff', '#ff5252'];
+        for (let c = 0; c < nCh; c++) {
+            const trace = traces[c];
+            if (!trace.length) continue;
+            ctx.strokeStyle = colors[c % colors.length];
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let i = 0; i < trace.length; i++) {
+                const fx = i / (trace.length - 1);
+                const px = plotX + plotW * fx;
+                const v = trace[i];
+                const py = plotY + plotH * (1 - (v - yMin) / (yMax - yMin));
+                if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+        }
+
+        // Per-channel legend (top-right corner of plot area)
+        ctx.font = '10px ui-monospace, Menlo, monospace';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        const idxs = live.channel_indices || [];
+        for (let c = 0; c < nCh; c++) {
+            ctx.fillStyle = colors[c % colors.length];
+            const label = (idxs[c] != null ? 'ch' + idxs[c] : 'ch' + c)
+                + (live.channels && live.channels[c] ? ' σ=' + live.channels[c].std.toFixed(0) : '');
+            ctx.fillText(label, x0 + w - 6, y0 + 4 + c * 12);
+        }
+        ctx.restore();
+    }
+
+    function drawEegBadge(ctx, W, H, live) {
+        // Compact "is the headset streaming?" indicator. Drawn in top-right of
+        // the center play area during TRIAL/REST states so the user can see at
+        // a glance that data is still flowing without having to read the full
+        // readout.
+        const bandW = W * BAND_FRACTION;
+        const x = W - bandW - 12;
+        const y = 16;
+        ctx.font = '12px ui-monospace, Menlo, monospace';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        if (!live) {
+            ctx.fillStyle = '#666';
+            ctx.fillText('● EEG ?', x, y);
+        } else if (!live.streaming) {
+            ctx.fillStyle = COL_WARN;
+            ctx.fillText('● EEG ✗', x, y);
+        } else {
+            ctx.fillStyle = '#33ff66';
+            ctx.fillText('● EEG · ' + (live.n_samples || 0), x, y);
+        }
+    }
+
     function drawRecordCueLayer(ctx, W, H, status, nowMs) {
         const bandW = W * BAND_FRACTION;
         const centerX = W / 2;
@@ -195,19 +342,49 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
             return;
         }
         if (status === 'RECORD_READY') {
-            ctx.font = 'bold 28px ui-monospace, Menlo, monospace';
-            ctx.fillText('press SPACE to begin', centerX, centerY - 16);
-            ctx.font = '14px ui-monospace, Menlo, monospace';
+            // Top: prompt + flicker freq readout
+            ctx.font = 'bold 24px ui-monospace, Menlo, monospace';
+            ctx.fillText('press SPACE to begin', centerX, 52);
+            ctx.font = '12px ui-monospace, Menlo, monospace';
             ctx.fillStyle = '#888';
             const m = window.dash_clientside && window.dash_clientside.brainpong_measurement;
             if (m && m.ok) {
                 ctx.fillText(
                     'refresh ' + (m.measuredHz || 0).toFixed(1) + ' Hz · stimulus '
                     + (m.actualLeftHz || 0).toFixed(2) + ' / ' + (m.actualRightHz || 0).toFixed(2) + ' Hz',
-                    centerX, centerY + 16);
+                    centerX, 76);
             } else if (m) {
                 ctx.fillStyle = COL_WARN;
-                ctx.fillText('refresh measurement not OK — flicker may be wrong', centerX, centerY + 16);
+                ctx.fillText('refresh measurement not OK — flicker may be wrong', centerX, 76);
+            }
+
+            // Middle: live filtered EEG plot in the center play area
+            const bandW = W * BAND_FRACTION;
+            const plotW = (W - 2 * bandW) - 24;
+            const plotH = 240;
+            const plotX = bandW + 12;
+            const plotY = (H - plotH) / 2;
+            drawEegPlot(ctx, plotX, plotY, plotW, plotH, rec.eegLive);
+
+            // Status line below the plot
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.font = '12px ui-monospace, Menlo, monospace';
+            const live = rec.eegLive;
+            if (!live) {
+                ctx.fillStyle = '#888';
+                ctx.fillText('EEG: waiting for first sample…', centerX, plotY + plotH + 12);
+            } else if (!live.streaming) {
+                ctx.fillStyle = COL_WARN;
+                ctx.fillText('✗ EEG NOT streaming — ' + (live.reason || 'unknown'),
+                             centerX, plotY + plotH + 12);
+            } else {
+                ctx.fillStyle = '#33ff66';
+                ctx.fillText('✓ EEG · ' + (live.srate || '?') + ' Hz · '
+                    + (live.n_samples || 0) + ' raw samples · plot @ '
+                    + (live.effective_hz || '?') + ' Hz over '
+                    + (live.window_s || 0).toFixed(1) + 's',
+                    centerX, plotY + plotH + 12);
             }
             return;
         }
@@ -250,12 +427,15 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
                 ctx.textBaseline = 'top';
                 ctx.fillText('● HOLDING', centerX, 50);
             }
+            // Small live-EEG indicator (top-right of center area)
+            drawEegBadge(ctx, W, H, rec.eegLive);
             return;
         }
         if (status === 'RECORD_REST') {
             ctx.font = 'bold 64px ui-monospace, Menlo, monospace';
             ctx.fillStyle = '#888';
             ctx.fillText('+', centerX, centerY);
+            drawEegBadge(ctx, W, H, rec.eegLive);
             return;
         }
         if (status === 'RECORD_DONE') {

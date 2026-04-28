@@ -7,7 +7,8 @@ Single-binary Dash app: SSVEP-driven Pong using a Cerelog X8 EEG board over Brai
 - `pong_game_brainflow.py` — everything server-side: BrainFlow I/O, DSP, sklearn CCA, Dash layout, all callbacks, state machine, feedback plots. ~475 LoC.
 - `assets/render.js` — clientside canvas renderer + SSVEP flicker stimulus. Auto-loaded by Dash from the `assets/` folder.
 - `requirements.txt` — pinned-by-name (not version) deps: `brainflow dash plotly numpy scikit-learn`.
-- `tools/refresh-rate.html` — standalone browser probe for measuring display rAF rate + jitter. Run when in doubt about flicker precision.
+- `refresh-rate.html` — standalone browser probe for measuring display rAF rate + jitter. Run when in doubt about flicker precision.
+- `filtered_plot.py` — owner's **gold-standard** real-time EEG plotter (8 channels, 5-stage filter chain). Use as the pre-flight signal-quality check before any recording session. Verbatim copy from `cerelog/Shared_brainflow-cerelog/python_package/cerelog_tests/filtered_plot.py`; do not edit unless syncing with upstream.
 - `ROADMAP.md` — future improvements organized as fun/UX, signal+ML, hardware, user testing.
 - `plans/today.md` — the active day's plan.
 - `plans/automated-benchmark-test-suite.md` — longer-arc plan: build a latency+accuracy benchmark.
@@ -36,6 +37,10 @@ pip install -e /Users/john/Dev/cerelog/Shared_brainflow-cerelog/python_package
 
 The fork imports `pkg_resources`, which is why `requirements.txt` pins `setuptools<81`. Without that pin, you'll hit `ModuleNotFoundError: No module named 'pkg_resources'` at import time. `--no-board` mode also reads the constant at module-load and so requires the fork (or stub) to be installed even though it doesn't use the board.
 
+### Recordings policy
+
+**`recordings/*.npz` is committed to git.** This is a personal project; the owner is fine with biosignal data being public. Don't add `recordings/` to `.gitignore`. Don't omit recordings from PRs.
+
 ### Recording mode (`--record`)
 
 ```bash
@@ -47,7 +52,7 @@ Requires hardware. Errors loud if combined with `--no-board` or with an odd `--t
 
 ## Display / browser setup (matters a LOT for SSVEP precision)
 
-The flicker stimulus must hit precise frequencies. The owner runs a 14"/16" 2021 MBP (M1 Pro, Liquid Retina XDR, ProMotion adaptive 24–120 Hz). Empirical findings from `tools/refresh-rate.html`:
+The flicker stimulus must hit precise frequencies. The owner runs a 14"/16" 2021 MBP (M1 Pro, Liquid Retina XDR, ProMotion adaptive 24–120 Hz). Empirical findings from `refresh-rate.html`:
 
 - **Use Chrome, not Safari.** Chrome on Apple Silicon delivers stable 120 Hz rAF (measured: 120.5 Hz median, 8.30 ms median Δ, p99 = 9.40 ms, 0 drops over 10 s / 1202 frames). Safari quantizes `performance.now()` to 1 ms (privacy hardening) AND tends to settle ProMotion at 60 Hz instead of 120 for canvas content.
 - **Display setting must be "ProMotion"** (System Settings → Displays → Refresh Rate). The fixed-rate options (60 / 59.94 / 50 / 48 / 47.95) are below 120, and macOS does NOT expose a fixed "120 Hz" option for built-in ProMotion displays — that's an Apple API gap, not something we control.
@@ -63,7 +68,7 @@ The flicker stimulus must hit precise frequencies. The owner runs a 14"/16" 2021
 
 Flicker is **black ↔ white** (max luminance contrast for strongest SSVEP evoked response), not the cyan/magenta of the original cosmetic palette.
 
-If anything about the display, browser, or refresh rate changes, **re-run `tools/refresh-rate.html` first** before debugging downstream signal issues.
+If anything about the display, browser, or refresh rate changes, **re-run `refresh-rate.html` first** before debugging downstream signal issues.
 
 ## Pipeline at a glance
 
@@ -118,6 +123,14 @@ Don't treat these as features:
 - Spatial filtering (CAR, Laplacian) — currently zero, each channel filtered independently.
 - FBCCA / TRCA over plain CCA — both well-known SSVEP wins.
 - Replace FFT-based filter chain with Goertzel at the two target freqs for cheaper narrow-band detection.
+
+## Shipping policy
+
+**NEVER open a PR or merge to main without an explicit user request.** Default flow per change:
+1. Branch + commit + push to remote.
+2. **STOP.** Wait for the user to say "PR + merge" (or equivalent) before running `gh pr create` / `gh pr merge`.
+
+This applies even when the change feels obviously complete. The user is the only reviewer; PRs and merges are user-initiated actions.
 
 ## Working agreements
 

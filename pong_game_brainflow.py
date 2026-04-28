@@ -77,7 +77,7 @@ BALL_RADIUS = 10
 
 # --- Recording mode (per plans/recording-protocol.md v1) ---
 RECORDINGS_DIR = 'recordings'
-RECORD_TRIAL_DURATION_S = 15.0
+RECORD_TRIAL_DURATION_S = 10.0
 RECORD_REST_DURATION_S = 3.0
 PROTOCOL_VERSION = 'v1'
 
@@ -343,6 +343,7 @@ app.layout = html.Div(id='main-container', style={'backgroundColor': '#111', 'co
     dcc.Store(id='recording-state-store', data={'trial_idx': 0, 'side': None, 'phase_start_t': None}),
     dcc.Store(id='recording-final-store', data=None),
     dcc.Store(id='recording-save-status-store', data={'saved_path': None, 'error': None}),
+    dcc.Store(id='eeg-live-store', data=None),
     dcc.Interval(id='game-interval', interval=GAME_INTERVAL_MS, n_intervals=0, disabled=False),
     dcc.Interval(id='bci-interval', interval=BCI_UPDATE_INTERVAL_MS, n_intervals=0, disabled=True),
     dcc.Interval(id='status-interval', interval=500, n_intervals=0)
@@ -387,10 +388,12 @@ if RECORDING_MODE:
                 window.dash_clientside.brainpong_space_held = false;
                 document.addEventListener('keydown', function(ev) {
                     if (ev.code !== 'Space' && ev.key !== ' ') return;
-                    if (ev.repeat) return;  // ignore auto-repeat from key being held
+                    // Suppress browser's native page-scroll on EVERY space
+                    // keydown (including auto-repeat) before any guards.
+                    ev.preventDefault();
+                    if (ev.repeat) return;
                     if (window.dash_clientside.brainpong_space_held) return;
                     window.dash_clientside.brainpong_space_held = true;
-                    ev.preventDefault();
                     window.dash_clientside.brainpong_pending_input.push({
                         kind: 'press',
                         side: '',
@@ -399,6 +402,7 @@ if RECORDING_MODE:
                 }, {passive: false});
                 document.addEventListener('keyup', function(ev) {
                     if (ev.code !== 'Space' && ev.key !== ' ') return;
+                    ev.preventDefault();
                     if (!window.dash_clientside.brainpong_space_held) return;
                     window.dash_clientside.brainpong_space_held = false;
                     window.dash_clientside.brainpong_pending_input.push({
@@ -406,7 +410,7 @@ if RECORDING_MODE:
                         side: '',
                         t_browser_ms: performance.now(),
                     });
-                });
+                }, {passive: false});
             }
             var pending = window.dash_clientside.brainpong_pending_input;
             if (!pending.length) {
@@ -451,7 +455,7 @@ if RECORDING_MODE:
 
 clientside_callback(
     f"""
-    function(gameState, appStatus, settings, recState, saveStatus) {{
+    function(gameState, appStatus, settings, recState, saveStatus, eegLive) {{
         if (window.dash_clientside && window.dash_clientside.renderPong) {{
             window.dash_clientside.renderPong(
                 'pong-game-canvas',
@@ -467,7 +471,8 @@ clientside_callback(
                     trialDurationS: {RECORD_TRIAL_DURATION_S},
                     restDurationS: {RECORD_REST_DURATION_S},
                     recState: recState,
-                    saveStatus: saveStatus
+                    saveStatus: saveStatus,
+                    eegLive: eegLive
                 }}
             );
         }}
@@ -479,7 +484,8 @@ clientside_callback(
     Input('app-status-store', 'data'),
     Input('settings-store', 'data'),
     Input('recording-state-store', 'data'),
-    Input('recording-save-status-store', 'data')
+    Input('recording-save-status-store', 'data'),
+    Input('eeg-live-store', 'data')
 )
 
 # ==============================================================================
@@ -642,6 +648,79 @@ if RECORDING_MODE:
         recording_session['last_event_seq'] = seq
         return no_update
 
+    LIVE_WINDOW_S = 1.5
+    LIVE_DOWNSAMPLE_HZ = 60  # browser-side traces don't need full 250Hz
+
+    @app.callback(
+        Output('eeg-live-store', 'data'),
+        Input('status-interval', 'n_intervals'),
+        State('app-status-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def update_eeg_live_status(_, app_status):
+        """Stream a recent slice of FILTERED EEG to the browser for the
+        live waveform plot. Filter chain matches the recording pipeline
+        (detrend → 5-45 Hz BP → 50/60 Hz notches) so the displayed scale
+        is centered, μV-range scalp EEG — not raw -100 mV DC offset.
+        Downsamples to ~LIVE_DOWNSAMPLE_HZ before sending to keep the
+        store payload small.
+        """
+        status = (app_status or {}).get('status', '')
+        if not status.startswith('RECORD_'):
+            return no_update
+        if board is None:
+            return {'streaming': False, 'reason': 'no board object'}
+        try:
+            if not board.is_prepared():
+                return {'streaming': False, 'reason': 'session not prepared'}
+            n = int(sampling_rate * LIVE_WINDOW_S) if sampling_rate else 375
+            data = board.get_current_board_data(n)
+        except Exception as e:
+            return {'streaming': False, 'reason': str(e)}
+        if data is None or data.size == 0 or data.shape[1] < 20:
+            return {'streaming': False, 'reason': 'no samples'}
+
+        chans_idx = (bci_eeg_channels or [])[:4]
+        traces = []
+        chan_stats = []
+        # Filter each channel using the same chain as the recording pipeline,
+        # then downsample for transport. Operate on a copy so we don't mutate
+        # the board's buffer.
+        for ch_idx in chans_idx:
+            x = np.ascontiguousarray((data[ch_idx] * 1e6).astype(np.float64))
+            try:
+                if x.size > 20:
+                    DataFilter.detrend(x, DetrendOperations.CONSTANT.value)
+                    DataFilter.perform_lowpass(x, sampling_rate, float(FILTER_HIGH_CUT_HZ),
+                                               FILTER_ORDER, FilterTypes.BUTTERWORTH.value, 0)
+                    DataFilter.perform_highpass(x, sampling_rate, float(FILTER_LOW_CUT_HZ),
+                                                FILTER_ORDER, FilterTypes.BUTTERWORTH.value, 0)
+                    DataFilter.perform_bandstop(x, sampling_rate, 48.0, 52.0, 3,
+                                                FilterTypes.BUTTERWORTH.value, 0)
+                    DataFilter.perform_bandstop(x, sampling_rate, 58.0, 62.0, 3,
+                                                FilterTypes.BUTTERWORTH.value, 0)
+            except Exception as e:
+                print(f"[eeg-live] filter failed on ch{ch_idx}: {e}")
+
+            # Downsample by simple stride for transport. With sr=250 and target
+            # 60 Hz that's stride 4 → 90 samples for a 1.5 s window. Plenty of
+            # resolution for a small display plot.
+            stride = max(1, int(round(sampling_rate / LIVE_DOWNSAMPLE_HZ))) if sampling_rate else 4
+            ds = x[::stride]
+            traces.append([float(v) for v in ds])
+            chan_stats.append({'mean': float(np.mean(x)), 'std': float(np.std(x))})
+
+        return {
+            'streaming': True,
+            'n_samples': int(data.shape[1]),
+            'srate':     int(sampling_rate) if sampling_rate else None,
+            'window_s':  LIVE_WINDOW_S,
+            'effective_hz': int(LIVE_DOWNSAMPLE_HZ),
+            'channel_indices': list(chans_idx),
+            'channels': chan_stats,
+            'traces':   traces,
+        }
+
     @app.callback(
         Output('recording-save-status-store', 'data'),
         Output('app-status-store', 'data', allow_duplicate=True),
@@ -712,7 +791,14 @@ def manage_app_flow(status_n, pause_clicks, restart_clicks, app_status, cal_data
             baseline = recording_session.get('ready_press_baseline', 0)
             new_events = recording_session['events'][baseline:]
             if any(e.get('kind') == 'press' for e in new_events):
-                # First press in READY = session start. Trial 0 is LEFT by convention.
+                # First press in READY = session start. Flush BrainFlow's pre-
+                # session ring buffer so the saved EEG starts at t=0 of the
+                # actual session, not stream-start. Trial 0 is LEFT by convention.
+                try:
+                    if board is not None and board.is_prepared():
+                        board.get_board_data()  # discards everything buffered
+                except Exception as e:
+                    print(f"[record] pre-session buffer flush failed: {e}")
                 safe_insert_marker(MARKER_SESSION_START)
                 safe_insert_marker(MARKER_CUE_LEFT)
                 recording_session['started'] = True
