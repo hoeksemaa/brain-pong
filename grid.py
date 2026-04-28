@@ -36,14 +36,24 @@ import bench
 # =============================================================================
 # THE GRID
 # =============================================================================
-# 10 values per knob. freq_l / freq_r excluded — they're determined by the
-# recording's actual stimulus and varying them just produces freq-mismatch.
+# 5 values per knob, picked to span the interesting range w/o redundancy.
+# freq_l / freq_r excluded — they're determined by the recording's actual
+# stimulus and varying them just produces freq-mismatch.
+#
+# Reasoning for each value list (informed by the curated sweep):
+#   hpf       — 3 (below all bands), 8 (alpha-band edge, didn't help in sweep),
+#               12 (above-alpha, +12.5pp winner), 16 (well above), 25 (nuclear)
+#   lpf       — 30 (narrow), 45 (default), 60 (preserves 30Hz harmonic),
+#               80 (wide), 90 (very wide)
+#   harmonics — 1 (minimal), 3 (default), 5 (modest), 7 (rich), 10 (max)
+#   window_s  — 0.5 (latency-priority), 1.0, 1.5 (default), 2.5, 4.0 (SNR-priority)
+#   ema_alpha — 0.0 (off), 0.3, 0.5, 0.7, 0.9 (near-frozen)
 GRID_VALUES = {
-    'hpf':       [3.0,  5.0,  7.0,  8.0,  10.0, 12.0, 14.0, 16.0, 20.0, 25.0],
-    'lpf':       [25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 60.0, 70.0, 80.0, 90.0],
-    'harmonics': [1,    2,    3,    4,    5,    6,    7,    8,    9,    10  ],
-    'window_s':  [0.5,  0.75, 1.0,  1.25, 1.5,  1.75, 2.0,  2.5,  3.0,  4.0 ],
-    'ema_alpha': [0.0,  0.1,  0.2,  0.3,  0.4,  0.5,  0.6,  0.7,  0.8,  0.9 ],
+    'hpf':       [3.0, 8.0, 12.0, 16.0, 25.0],
+    'lpf':       [30.0, 45.0, 60.0, 80.0, 90.0],
+    'harmonics': [1, 3, 5, 7, 10],
+    'window_s':  [0.5, 1.0, 1.5, 2.5, 4.0],
+    'ema_alpha': [0.0, 0.3, 0.5, 0.7, 0.9],
 }
 KNOB_ORDER = ['hpf', 'lpf', 'harmonics', 'window_s', 'ema_alpha']
 HPF_LPF_MARGIN = 5.0  # require lpf > hpf + this; below ~5 Hz separation the bandpass dies
