@@ -139,11 +139,13 @@ Don't treat these as features:
 
 ## Shipping policy
 
-**NEVER open a PR or merge to main without an explicit user request.** Default flow per change:
-1. Branch + commit + push to remote.
-2. **STOP.** Wait for the user to say "PR + merge" (or equivalent) before running `gh pr create` / `gh pr merge`.
+**Never commit directly to main. Always branch.** And never open a PR or merge without an explicit user request. Default flow per change:
 
-This applies even when the change feels obviously complete. The user is the only reviewer; PRs and merges are user-initiated actions.
+1. **Branch** (`git checkout -b <name>`). Every change, even one-liner doc edits.
+2. Commit + push to remote.
+3. **STOP.** Wait for the user to say "PR" / "merge" / "ship it" (or equivalent) before running `gh pr create` / `gh pr merge`.
+
+This applies even when the change feels obviously complete or trivially correct. The user is the only reviewer; PR creation and merging are user-initiated actions. Direct commits to main are never the right call — even small doc fixes go through a branch.
 
 ## Working agreements
 
