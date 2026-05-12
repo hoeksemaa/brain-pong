@@ -52,7 +52,7 @@ INITIAL_BALL_SPEED_Y = -4
 
 # --- BCI & Signal Processing ---
 CHANNELS_TO_USE = [1, 2, 3, 4] 
-SSVEP_FREQ_LEFT = 10
+SSVEP_FREQ_LEFT = 20    # was 10 — moved above alpha band (8-12 Hz) to fix L-bias drown
 SSVEP_FREQ_RIGHT = 15.0
 FFT_WINDOW_SECONDS = 1.5
 FFT_OVERLAP_PERCENT = 0.8
