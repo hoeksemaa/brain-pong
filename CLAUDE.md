@@ -1,18 +1,27 @@
 # BrainPong — Claude project notes
 
-Single-binary Dash app: SSVEP-driven Pong using a Cerelog X8 EEG board over BrainFlow.
+Cerelog X8 EEG/EOG project. **Active work is EOG-based eye-tracking** (2-electrode horizontal setup). The original SSVEP pong game and all prior scripts/data are preserved in `archive/`.
 
-## File map
+## Repository layout
 
-- `pong_game_brainflow.py` — everything server-side: BrainFlow I/O, DSP, sklearn CCA, Dash layout, all callbacks, state machine, feedback plots. ~475 LoC.
-- `assets/render.js` — clientside canvas renderer + SSVEP flicker stimulus. Auto-loaded by Dash from the `assets/` folder.
-- `requirements.txt` — pinned-by-name (not version) deps: `brainflow dash plotly numpy scikit-learn`.
-- `refresh-rate.html` — standalone browser probe for measuring display rAF rate + jitter. Run when in doubt about flicker precision.
-- `filtered_plot.py` — owner's **gold-standard** real-time EEG plotter (8 channels, 5-stage filter chain). Use as the pre-flight signal-quality check before any recording session. Verbatim copy from `cerelog/Shared_brainflow-cerelog/python_package/cerelog_tests/filtered_plot.py`; do not edit unless syncing with upstream.
-- `ROADMAP.md` — future improvements organized as fun/UX, signal+ML, hardware, user testing.
-- `plans/today.md` — the active day's plan.
-- `plans/automated-benchmark-test-suite.md` — longer-arc plan: build a latency+accuracy benchmark.
-- `README.md` — three lines, mostly aspirational.
+```
+archive/   — all prior SSVEP pong work (scripts, recordings, plans, assets)
+recordings/eog/   — EOG session recordings (protocol_version: 'eog-v1')
+```
+
+New EOG scripts live at the repo root. Don't put EOG work inside `archive/`.
+
+## Archive contents (SSVEP pong — reference only)
+
+- `archive/pong_game_brainflow.py` — SSVEP Dash app: BrainFlow I/O, DSP, CCA, game loop. ~475 LoC.
+- `archive/assets/render.js` — canvas renderer + SSVEP flicker stimulus.
+- `archive/requirements.txt` — deps for the pong game.
+- `archive/refresh-rate.html` — browser rAF rate probe.
+- `archive/filtered_plot.py` — gold-standard 8-channel EEG plotter. Verbatim copy from upstream cerelog repo; don't edit unless syncing.
+- `archive/eog_filtered_plot.py` — EOG-tuned plotter (the starting point for new EOG work).
+- `archive/recordings/` — SSVEP session `.npz` files (protocol_version: 'v1'). Read-only ground truth.
+- `archive/plans/` — all prior day-plans and benchmark specs.
+- `archive/ROADMAP.md` — future improvements for the pong game.
 
 ## Running it locally
 
@@ -20,11 +29,10 @@ There is a project-local venv at `.venv/` (Python 3.13). **Always activate it be
 
 ```bash
 source .venv/bin/activate
-python pong_game_brainflow.py            # real hardware mode
-python pong_game_brainflow.py --no-board # keyboard-only dev mode
+python <script>.py
 ```
 
-If deps drift, `pip install -r requirements.txt` from inside the activated venv. The venv is gitignored.
+If deps drift, `pip install -r archive/requirements.txt` from inside the activated venv. The venv is gitignored.
 
 ### Cerelog brainflow (real-hardware mode)
 
@@ -39,16 +47,18 @@ The fork imports `pkg_resources`, which is why `requirements.txt` pins `setuptoo
 
 ### Recordings policy
 
-**`recordings/*.npz` is committed to git.** This is a personal project; the owner is fine with biosignal data being public. Don't add `recordings/` to `.gitignore`. Don't omit recordings from PRs.
+**All `.npz` recordings are committed to git.** Personal project; owner is fine with biosignal data being public. Don't gitignore any recordings dir.
 
-### Recording mode (`--record`)
+- SSVEP sessions: `archive/recordings/` — protocol_version `v1`, schema defined in `archive/plans/recording-protocol.md`. Read-only ground truth; never mutate.
+- EOG sessions: `recordings/eog/` — protocol_version `eog-v1`. Same immutability rules apply.
+
+### SSVEP recording mode (archived — for reference)
 
 ```bash
-python pong_game_brainflow.py --record                 # 40 trials (20 L + 20 R)
-python pong_game_brainflow.py --record --trials 4      # smoke-test session, 4 trials
+source .venv/bin/activate
+python archive/pong_game_brainflow.py --record                 # 40 trials
+python archive/pong_game_brainflow.py --record --trials 4      # smoke-test
 ```
-
-Requires hardware. Errors loud if combined with `--no-board` or with an odd `--trials` count. Prompts for `subject_id` and `headset_notes` at startup, then writes `recordings/<YYYYMMDD-HHMMSS>.npz` on RECORD_DONE. Ctrl-C does a finally-block save with `incomplete=True`.
 
 ## Display / browser setup (matters a LOT for SSVEP precision)
 
@@ -90,14 +100,14 @@ Cerelog X8 → serial(/dev/cu.usbserial-1120, hardcoded) → BrainFlow ringbuffe
 
 ## Data integrity — CRITICAL
 
-**`recordings/*.npz` is read-only ground truth.** It backs the step-6 latency bench, future ML training, and every algorithm comparison. Never mutate the underlying data; never re-save over a session file.
+**All `.npz` recordings are read-only ground truth.** They back benchmarks, future ML training, and every algorithm comparison. Never mutate the underlying data; never re-save over a session file.
 
 Concrete rules when handling recorded data:
 
 - **Filtering algorithms (DSP, CCA preprocessing, etc.) operate on copies, not the loaded arrays.** BrainFlow's `DataFilter.*` functions mutate their input *in place*. If a caller does `DataFilter.detrend(eeg[i], ...)` on a slice of the loaded npz array, it corrupts the source. Always copy first: `x = np.ascontiguousarray(eeg[i].astype(np.float64))`, then filter `x`.
 - **The mock-board adapter (step 6) returns copies** of the requested window, never views into the underlying recording array. Matches BrainFlow's real behavior.
 - **`np.savez` over an existing recording is forbidden** unless we're explicitly migrating a session to a new format (and even then, write to `<id>.npz.tmp` first, verify load round-trips, then atomic rename).
-- **Outputs (analysis results, baseline numbers, plots) live elsewhere** — `plans/baseline-results.md`, notebooks, derived files. Never write back into `recordings/`.
+- **Outputs (analysis results, baseline numbers, plots) live elsewhere** — `plans/` or derived files at repo root. Never write back into any `recordings/` directory.
 
 The reason: as algorithms change (HPF cutoff, freq pair, harmonics, classifier), we want to compare apples-to-apples against the same reference recordings. If we ever silently mutate the source data, comparisons across PRs become meaningless.
 
@@ -148,5 +158,5 @@ This applies even when the change feels obviously complete. The user is the only
 ## Working agreements
 
 - Don't add features beyond what the active task asks for; this is a small repo and accidental scope creep shows.
-- The two `.md`s in this repo (`ROADMAP.md`, `plans/automated-benchmark-test-suite.md`) are user-authored intent. Update them when scope changes; don't fork parallel docs.
+- User-authored intent docs live in `archive/ROADMAP.md` and `archive/plans/`. Update them when relevant; don't fork parallel docs. New EOG planning docs go in a root-level `plans/` dir when needed.
 - Project owner is interning at Cerelog (the board vendor), so domain feedback on signal processing should be treated as authoritative — verify code-level claims, but defer on hardware/signal intuition.

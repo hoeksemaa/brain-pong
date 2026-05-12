@@ -3,23 +3,33 @@ Real-time EOG plotter — the gold-standard preflight tool for an EOG session.
 
 Same structure as filtered_plot.py (the EEG version) but tuned for
 electrooculography:
-  - 4 active electrodes (defaults: left canthus, right canthus, above-eye, below-eye)
+  - 4 active electrodes by default (left canthus, right canthus, above-eye, below-eye)
+  - can be reduced to 2 active electrodes by commenting the vertical pair
   - EOG-friendly filter chain (HPF 0.5 Hz, LPF 30 Hz, 50/60 Hz notch)
-  - 6-panel layout: 4 raw + 2 derived (horizontal + vertical EOG diffs)
+  - dynamic layout: raw channels + derived horizontal/vertical diffs when available
   - adaptive y-axis (smoothed)
 
-Hardware reminder: SRB1 (reference) on one mastoid + BIAS on the other mastoid
-or forehead are still required. Without them, channels are meaningless / saturated.
+Today's preferred Pong/debug montage is 6 total electrodes:
+  - CH1: left outer canthus
+  - CH2: right outer canthus
+  - CH3: above one eye
+  - CH4: below the same eye
+  - SRB/reference: mastoid or earlobe
+  - BIAS/ground: other mastoid or forehead
+
+Hardware reminder: SRB1/reference + BIAS/ground are still required. Without
+them, channels are often meaningless / saturated.
 
 Usage:
     source .venv/bin/activate
-    python filtered_plot_eog.py
+    python eog_filtered_plot.py
 
 Sanity check sequence once it's running:
   1. Look straight ahead, hold still — all channels should be flat-ish
   2. Look hard LEFT for 2 s     — horizontal trace should swing one way
   3. Look hard RIGHT for 2 s    — horizontal trace should swing the other way
-  4. Blink 5 times              — vertical trace should show 5 sharp peaks
+  4. Blink 5 times              — raw channels may spike; vertical only exists
+                                  if the optional vertical pair is configured
   5. If any fail → reseat that electrode before trusting any data.
 """
 
@@ -36,15 +46,29 @@ SECONDS_TO_DISPLAY    = 10
 UPDATE_INTERVAL_MS    = 40
 Y_AXIS_PADDING_FACTOR = 1.2
 
-# Which Cerelog EEG-channel slots have your EOG electrodes wired into them.
-# Maps: human-readable name → index into BoardShim.get_eeg_channels(BOARD_ID).
-# Edit if you wire differently. Order matters: the derived "horizontal" trace
-# is right_outer − left_outer, and "vertical" is above − below.
+# Which Cerelog BrainFlow EEG-channel slots have your active EOG electrodes
+# wired into.
+# Maps: human-readable name -> index into BoardShim.get_eeg_channels(BOARD_ID).
+# Edit if you wire differently.
+#
+# Order matters:
+#   slot 0: left outer canthus
+#   slot 1: right outer canthus
+#   slot 2: optional above-eye electrode
+#   slot 3: optional below-eye electrode
+#
+# Probe note, 2026-04-29: the ESP-EEG stream showed constant values on
+# BrainFlow EEG slots 0-3 and live samples on slots 4-7. So the default below
+# intentionally uses slots 4-7, even though the physical electrodes may feel
+# like "channels 1-4" on the board/cable.
+#
+# For a 2-active-electrode horizontal-only setup, comment out the vertical pair:
+# two active EOG electrodes + SRB/reference + BIAS/ground.
 EOG_MONTAGE = [
-    ('L outer (left canthus)',  0),
-    ('R outer (right canthus)', 1),
-    ('V above (above eye)',     2),
-    ('V below (below eye)',     3),
+    ('L outer (left canthus)',  4),
+    ('R outer (right canthus)', 5),
+    ('V above (above eye)',     6),
+    ('V below (below eye)',     7),
 ]
 
 # EOG-specific filter chain. Eyes move slowly — relevant bandwidth is
@@ -80,7 +104,13 @@ def main():
         ch_indices = [all_eeg_channels[idx] for _, idx in EOG_MONTAGE]
         ch_names   = [name for name, _ in EOG_MONTAGE]
 
-        for i in range(6):  # 4 raw + 2 derived
+        n_panels = len(ch_indices)
+        if len(ch_indices) >= 2:
+            n_panels += 1  # horizontal diff
+        if len(ch_indices) >= 4:
+            n_panels += 1  # vertical diff
+
+        for i in range(n_panels):
             y_limits[i] = (-200, 200)  # μV — will adapt
 
         print(f"Connecting to {board.get_board_descr(BOARD_ID)['name']}...")
@@ -88,7 +118,7 @@ def main():
         print("EOG montage:")
         for name, slot in EOG_MONTAGE:
             print(f"  {name:30s} → board ch {all_eeg_channels[slot]}")
-        print("Reminder: SRB1 (reference) + BIAS still need to be connected.")
+        print("Reminder: SRB/reference + BIAS/ground still need to be connected.")
         board.prepare_session()
         print("\nStarting stream — close the plot window to stop.")
         board.start_stream(5 * 60 * sampling_rate)
@@ -97,18 +127,25 @@ def main():
         num_board_channels = BoardShim.get_num_rows(BOARD_ID)
         data_buffer = np.empty((num_board_channels, 0))
 
-        # 6-panel layout: 4 raw on top (2x2), 2 derived below
-        fig, axes = plt.subplots(3, 2, figsize=(14, 10), sharex=True)
-        fig.suptitle('Real-Time EOG (4 raw + 2 derived diffs)', fontsize=14)
-        axes_flat = axes.flatten()
+        rows = int(np.ceil(n_panels / 2))
+        fig, axes = plt.subplots(rows, 2, figsize=(14, 4 + 2.4 * rows), sharex=True)
+        fig.suptitle('Real-Time EOG', fontsize=14)
+        axes_flat = np.atleast_1d(axes).flatten()
+        axes_plot = axes_flat[:n_panels]
+        for ax in axes_flat[n_panels:]:
+            ax.set_visible(False)
 
-        panel_titles = ch_names + ['Horizontal EOG (R − L)', 'Vertical EOG (above − below)']
+        panel_titles = list(ch_names)
+        if len(ch_indices) >= 2:
+            panel_titles.append('Horizontal EOG (R - L)')
+        if len(ch_indices) >= 4:
+            panel_titles.append('Vertical EOG (above - below)')
         lines = []
-        for i, ax in enumerate(axes_flat):
+        for i, ax in enumerate(axes_plot):
             line, = ax.plot([], [], lw=1)
             lines.append(line)
             ax.set_title(panel_titles[i])
-            ax.set_ylabel('μV')
+            ax.set_ylabel('uV')
             ax.grid(True)
             ax.set_xlim(-SECONDS_TO_DISPLAY, 0)
 
@@ -126,7 +163,7 @@ def main():
 
         ani = FuncAnimation(
             fig, update_plot,
-            fargs=(lines, axes_flat, ch_indices),
+            fargs=(lines, axes_plot, ch_indices),
             interval=UPDATE_INTERVAL_MS, blit=False,
         )
         plt.show()
@@ -169,11 +206,14 @@ def update_plot(frame, lines, axes, ch_indices):
                     DataFilter.perform_bandstop(x, sampling_rate, lo, hi, 3, FilterTypes.BUTTERWORTH, 0)
             filtered.append(x)
 
-        # Derived channels (montage order: 0=L, 1=R, 2=above, 3=below)
-        horiz = filtered[1] - filtered[0]   # R outer − L outer  (positive = looking right)
-        vert  = filtered[2] - filtered[3]   # above − below       (positive = looking up)
-
-        all_traces = filtered + [horiz, vert]
+        all_traces = list(filtered)
+        if len(filtered) >= 2:
+            # Montage order: 0=L outer, 1=R outer. Sign may flip depending on
+            # board/electrode polarity; the important thing is opposite
+            # deflection for left vs. right gaze.
+            all_traces.append(filtered[1] - filtered[0])
+        if len(filtered) >= 4:
+            all_traces.append(filtered[2] - filtered[3])
 
         time_vec_full = np.linspace(-SECONDS_TO_DISPLAY, 0, window_size)
         time_vec      = time_vec_full[-n_points:]
