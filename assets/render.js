@@ -451,6 +451,12 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
             const gs = dashState.gameState;
             if (gs) {
                 const paddleW = (dashState.settings && dashState.settings.paddle_width) || 150;
+                const ghostX = [W / 6, W / 2, 5 * W / 6];
+                ctx.fillStyle = 'rgba(180, 180, 180, 0.12)';
+                for (const gx of ghostX) {
+                    ctx.fillRect(gx - paddleW / 2, 0, paddleW, PADDLE_HEIGHT);
+                    ctx.fillRect(gx - paddleW / 2, H - PADDLE_HEIGHT, paddleW, PADDLE_HEIGHT);
+                }
                 ctx.fillStyle = COL_PADDLE_AI;
                 ctx.fillRect(gs.ai_x - paddleW / 2, 0, paddleW, PADDLE_HEIGHT);
                 ctx.fillStyle = COL_PADDLE_PLAYER;

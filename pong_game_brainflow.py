@@ -1,5 +1,7 @@
 import argparse
+import math
 import os
+import random
 import sys
 import time
 from datetime import datetime, timezone
@@ -74,7 +76,8 @@ AI_PADDLE_SPEED = 6
 BALL_SPIN_FACTOR = 0.06
 GAME_WIDTH = 800
 GAME_HEIGHT = 600
-PADDLE_WIDTH = 150
+PADDLE_WIDTH = GAME_WIDTH // 3 - 2   # fills one of three equal zones; 2 px gap = ball can't slip through
+PADDLE_POSITIONS = [GAME_WIDTH // 6, GAME_WIDTH // 2, 5 * GAME_WIDTH // 6]  # left / center / right
 PADDLE_HEIGHT = 20
 BALL_RADIUS = 10
 
@@ -261,7 +264,7 @@ app.title = "BrainFlow BCI Pong"
 
 def get_initial_game_state():
     return { 'player_x': GAME_WIDTH / 2, 'ai_x': GAME_WIDTH / 2, 'ball_x': GAME_WIDTH / 2,
-             'ball_y': GAME_HEIGHT / 2, 'ball_vx': 0, 'ball_vy': INITIAL_BALL_SPEED_Y,
+             'ball_y': GAME_HEIGHT / 2, 'ball_vx': 0, 'ball_vy': INITIAL_BALL_SPEED_Y, 'zone_idx': 1, 'prev_key': 'None',
              'player_score': 0, 'ai_score': 0 }
 
 app.layout = html.Div(id='main-container', style={'backgroundColor': '#111', 'color': '#DDD', 'fontFamily': 'monospace', 'textAlign': 'center'}, children=[
@@ -284,7 +287,7 @@ app.layout = html.Div(id='main-container', style={'backgroundColor': '#111', 'co
         dcc.Graph(id='psd-plot', style={'width': '60%'}),
         dcc.Graph(id='control-plot', style={'width': '35%'})
     ]),
-    dcc.Store(id='settings-store', data={'ball_speed': abs(INITIAL_BALL_SPEED_Y)}),
+    dcc.Store(id='settings-store', data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH}),
     dcc.Store(id='game-state-store', data=get_initial_game_state()),
     dcc.Store(id='app-status-store', data={'status': 'STARTING', 'countdown': 0}),
     dcc.Store(id='calibration-store', data={'scores_left': [], 'scores_right': [], 'scores_rest': [], 'thresholds': None}),
@@ -496,7 +499,7 @@ def update_bci_command(_, app_status, cal_data, last_bci_command):
     Input('ball-speed-slider', 'value'),
 )
 def update_settings(ball_speed):
-    return {'ball_speed': ball_speed}
+    return {'ball_speed': ball_speed, 'paddle_width': PADDLE_WIDTH}
 
 @app.callback(
     Output('game-state-store', 'data', allow_duplicate=True),
@@ -512,21 +515,24 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     if app_status.get('status') != 'PLAYING':
         return no_update
     settings = settings or {}
-    paddle_speed = PADDLE_SPEED
-    paddle_width = PADDLE_WIDTH
     ball_speed = settings.get('ball_speed', abs(INITIAL_BALL_SPEED_Y))
-    ai_speed = AI_PADDLE_SPEED
     key_command = key_data.get('key', 'None')
-    if key_command == 'a': state['player_x'] -= paddle_speed
-    elif key_command == 'd': state['player_x'] += paddle_speed
+    prev_key = state.get('prev_key', 'None')
+    zone_idx = state.get('zone_idx', 1)
+    # Step zone on new key press only (transition detection — hold doesn't repeat)
+    if key_command != prev_key:
+        if key_command == 'a':   zone_idx = max(0, zone_idx - 1)
+        elif key_command == 'd': zone_idx = min(2, zone_idx + 1)
+    state['prev_key'] = key_command
+    state['zone_idx'] = zone_idx
+    state['player_x'] = PADDLE_POSITIONS[zone_idx]
+    # AI: snap to zone containing the ball
+    if state['ball_x'] < GAME_WIDTH / 3:
+        state['ai_x'] = PADDLE_POSITIONS[0]
+    elif state['ball_x'] < 2 * GAME_WIDTH / 3:
+        state['ai_x'] = PADDLE_POSITIONS[1]
     else:
-        bci_move = bci_command.get('command', 'NEUTRAL')
-        if bci_move == 'LEFT': state['player_x'] -= paddle_speed
-        elif bci_move == 'RIGHT': state['player_x'] += paddle_speed
-    state['player_x'] = max(paddle_width / 2, min(GAME_WIDTH - paddle_width / 2, state['player_x']))
-    if state['ai_x'] < state['ball_x']: state['ai_x'] += ai_speed
-    if state['ai_x'] > state['ball_x']: state['ai_x'] -= ai_speed
-    state['ai_x'] = max(paddle_width / 2, min(GAME_WIDTH - paddle_width / 2, state['ai_x']))
+        state['ai_x'] = PADDLE_POSITIONS[2]
     # Rescale ball velocity to match current ball_speed slider (live tuning)
     current_speed = (state['ball_vx']**2 + state['ball_vy']**2) ** 0.5
     if current_speed > 0.01:
@@ -537,12 +543,18 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     state['ball_x'] += state['ball_vx']; state['ball_y'] += state['ball_vy']
     if state['ball_x'] <= BALL_RADIUS or state['ball_x'] >= GAME_WIDTH - BALL_RADIUS: state['ball_vx'] *= -1
     if state['ball_vy'] > 0 and state['ball_y'] + BALL_RADIUS >= GAME_HEIGHT - PADDLE_HEIGHT:
-        if abs(state['player_x'] - state['ball_x']) < paddle_width / 2 + BALL_RADIUS:
-            state['ball_vy'] *= -1; state['ball_vx'] += (state['ball_x'] - state['player_x']) * BALL_SPIN_FACTOR
+        if abs(state['player_x'] - state['ball_x']) < PADDLE_WIDTH / 2 + BALL_RADIUS:
+            spd = math.hypot(state['ball_vx'], state['ball_vy'])
+            a = random.uniform(-math.pi / 3, math.pi / 3)
+            state['ball_vx'] = spd * math.sin(a)
+            state['ball_vy'] = -spd * math.cos(a)
             state['ball_y'] = GAME_HEIGHT - PADDLE_HEIGHT - BALL_RADIUS
     if state['ball_vy'] < 0 and state['ball_y'] - BALL_RADIUS <= PADDLE_HEIGHT:
-        if abs(state['ai_x'] - state['ball_x']) < paddle_width / 2 + BALL_RADIUS:
-            state['ball_vy'] *= -1; state['ball_vx'] += (state['ball_x'] - state['ai_x']) * BALL_SPIN_FACTOR
+        if abs(state['ai_x'] - state['ball_x']) < PADDLE_WIDTH / 2 + BALL_RADIUS:
+            spd = math.hypot(state['ball_vx'], state['ball_vy'])
+            a = random.uniform(-math.pi / 3, math.pi / 3)
+            state['ball_vx'] = spd * math.sin(a)
+            state['ball_vy'] = spd * math.cos(a)
             state['ball_y'] = PADDLE_HEIGHT + BALL_RADIUS
     if state['ball_y'] - BALL_RADIUS > GAME_HEIGHT:
         state['ai_score'] += 1; p_score, a_score = state['player_score'], state['ai_score']
