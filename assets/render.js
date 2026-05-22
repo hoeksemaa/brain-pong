@@ -23,8 +23,6 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     const BAND_FRACTION = 0.25;
 
     // ---------------- Colors ----------------
-    const COL_FLICKER_ON  = '#FFFFFF';
-    const COL_FLICKER_OFF = '#000000';
     const COL_BG_CENTER   = '#1a1a1a';
     const COL_PADDLE_PLAYER = '#33ff66';
     const COL_PADDLE_AI     = '#ff5252';
@@ -59,8 +57,6 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     // ---------------- Loop bookkeeping ----------------
     let started = false;
     let frameIdx = 0;
-    let lastEdgeStateLeft = null;
-    let lastEdgeStateRight = null;
 
     // Refresh measurement
     const measureDeltas = [];
@@ -155,22 +151,6 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     }
 
     // ---------------- Drawing ----------------
-    function flickerAllowed(status, side) {
-        // Flicker runs in both --no-board and real-hardware modes; the SSVEP
-        // stimulus is the experience, and dev/test needs visual verification.
-        if (!status) return false;
-        if (status === 'PLAYING' || status === 'READY') return true;
-        if (status.indexOf('CALIBRATING_REST')  !== -1) return true;
-        if (side === 'L' && status.indexOf('CALIBRATING_LEFT')  !== -1) return true;
-        if (side === 'R' && status.indexOf('CALIBRATING_RIGHT') !== -1) return true;
-        // Recording mode: flicker bands run continuously through the whole
-        // session (READY / TRIAL / REST) so the SSVEP stimulus is uninterrupted.
-        if (status === 'RECORD_READY' || status === 'RECORD_TRIAL' ||
-            status === 'RECORD_REST'  || status === 'RECORD_DONE'  ||
-            status === 'RECORD_SAVED') return true;
-        return false;
-    }
-
     function isRecordingStatus(status) {
         return status && status.indexOf('RECORD_') === 0;
     }
@@ -457,19 +437,13 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         }
     }
 
-    function draw(ctx, W, H, isLeftOn, isRightOn, nowMs) {
+    function draw(ctx, W, H, nowMs) {
         const bandW = W * BAND_FRACTION;
-        const rightBandX = W * (1 - BAND_FRACTION);
         const status = (dashState.appStatus && dashState.appStatus.status) || 'STARTING';
         const recordingStatus = isRecordingStatus(status);
 
         ctx.fillStyle = COL_BG_CENTER;
         ctx.fillRect(0, 0, W, H);
-
-        ctx.fillStyle = isLeftOn ? COL_FLICKER_ON : COL_FLICKER_OFF;
-        ctx.fillRect(0, 0, bandW, H);
-        ctx.fillStyle = isRightOn ? COL_FLICKER_ON : COL_FLICKER_OFF;
-        ctx.fillRect(rightBandX, 0, bandW, H);
 
         if (recordingStatus) {
             drawRecordCueLayer(ctx, W, H, status, nowMs);
@@ -541,35 +515,7 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
                 lastObservedStatus = status;
             }
 
-            const allowL = flickerAllowed(status, 'L');
-            const allowR = flickerAllowed(status, 'R');
-
-            const halfL = leftPeriodFrames / 2;
-            const halfR = rightPeriodFrames / 2;
-            const phaseL = Math.floor(frameIdx / halfL) % 2 === 0;
-            const phaseR = Math.floor(frameIdx / halfR) % 2 === 0;
-
-            const isLeftOn  = allowL && phaseL;
-            const isRightOn = allowR && phaseR;
-
-            if (allowL) {
-                if (lastEdgeStateLeft !== isLeftOn) {
-                    logEdge('L', isLeftOn, frameIdx, nowMs);
-                    lastEdgeStateLeft = isLeftOn;
-                }
-            } else {
-                lastEdgeStateLeft = null;
-            }
-            if (allowR) {
-                if (lastEdgeStateRight !== isRightOn) {
-                    logEdge('R', isRightOn, frameIdx, nowMs);
-                    lastEdgeStateRight = isRightOn;
-                }
-            } else {
-                lastEdgeStateRight = null;
-            }
-
-            draw(ctx, W, H, isLeftOn, isRightOn, nowMs);
+            draw(ctx, W, H, nowMs);
         }
 
         frameIdx++;
