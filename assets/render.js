@@ -16,6 +16,11 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     const COL_BALL          = '#ffe600';
     const COL_SCORE         = '#FFFFFF';
 
+    const FREQ_LEFT     = 880.00;    // A5  — player left
+    const FREQ_RIGHT    = 987.77;    // B5  — player right
+    const FREQ_AI_LEFT  = 1174.66;   // D6  — AI left
+    const FREQ_AI_RIGHT = 1318.51;   // E6  — AI right
+
     const dashState = {
         gameState: null,
         appStatus: null,
@@ -23,7 +28,37 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         canvasId:  null,
     };
 
-    let started = false;
+    let started         = false;
+    let prevZoneIdx     = null;
+    let prevAiX         = null;
+    let audioCtx        = null;
+
+    function getAudioCtx() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            document.addEventListener('click', function () {
+                if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+            });
+        }
+        return audioCtx;
+    }
+
+    function playTone(freq) {
+        const ctx = getAudioCtx();
+        if (ctx.state === 'suspended') ctx.resume().catch(function () {});
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type            = 'sine';
+        osc.frequency.value = freq;
+        const t = ctx.currentTime;
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.35, t + 0.01);
+        gain.gain.linearRampToValueAtTime(0, t + 0.09);
+        osc.start(t);
+        osc.stop(t + 0.09);
+    }
 
     function draw(ctx, W, H) {
         ctx.fillStyle = COL_BG;
@@ -74,9 +109,29 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
 
     function renderPong(canvasId, gameState, appStatus, settings) {
         dashState.canvasId  = canvasId;
-        dashState.gameState = gameState;
         dashState.appStatus = appStatus;
         dashState.settings  = settings;
+
+        const playing = appStatus && appStatus.status === 'PLAYING';
+        if (gameState && playing) {
+            const z = gameState.zone_idx;
+            if (prevZoneIdx !== null && z !== prevZoneIdx) {
+                playTone(z < prevZoneIdx ? FREQ_LEFT : FREQ_RIGHT);
+            }
+            prevZoneIdx = z;
+
+            const ax = gameState.ai_x;
+            if (prevAiX !== null && ax !== prevAiX) {
+                playTone(ax < prevAiX ? FREQ_AI_LEFT : FREQ_AI_RIGHT);
+            }
+            prevAiX = ax;
+
+        } else {
+            prevZoneIdx = null;
+            prevAiX     = null;
+        }
+
+        dashState.gameState = gameState;
         if (!started) {
             started = true;
             requestAnimationFrame(loop);
