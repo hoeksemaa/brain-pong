@@ -7,8 +7,9 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
 (function () {
     "use strict";
 
-    const PADDLE_HEIGHT = 20;
-    const BALL_RADIUS   = 10;
+    const PADDLE_HEIGHT  = 20;
+    const BALL_RADIUS    = 10;
+    const POWERUP_RADIUS = 14;
 
     const COL_BG            = '#1a1a1a';
     const COL_PADDLE_AI     = '#ff5252';
@@ -71,6 +72,43 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         }
     }
 
+    function drawPowerup(ctx, pu) {
+        ctx.save();
+        if (pu.type === 'fire') {
+            ctx.fillStyle = '#ff3333';
+            ctx.beginPath();
+            ctx.arc(pu.x, pu.y, POWERUP_RADIUS, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.font = '18px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('🔥', pu.x, pu.y);
+        } else if (pu.type === 'ice') {
+            ctx.fillStyle = '#3388ff';
+            ctx.beginPath();
+            ctx.arc(pu.x, pu.y, POWERUP_RADIUS, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '18px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('❄', pu.x, pu.y);
+        } else {
+            ctx.fillStyle = '#aa33ff';
+            ctx.beginPath();
+            ctx.arc(pu.x, pu.y, POWERUP_RADIUS, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            const offsets = [{dx: 0, dy: -6}, {dx: -5, dy: 4}, {dx: 5, dy: 4}];
+            for (const o of offsets) {
+                ctx.beginPath();
+                ctx.arc(pu.x + o.dx, pu.y + o.dy, 3, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+        ctx.restore();
+    }
+
     function draw(ctx, W, H) {
         ctx.fillStyle = COL_BG;
         ctx.fillRect(0, 0, W, H);
@@ -94,11 +132,18 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         ctx.fillStyle = COL_PADDLE_PLAYER;
         ctx.fillRect(gs.player_x - paddleW / 2, H - PADDLE_HEIGHT, paddleW, PADDLE_HEIGHT);
 
-        // Ball
+        // Balls
         ctx.fillStyle = COL_BALL;
-        ctx.beginPath();
-        ctx.arc(gs.ball_x, gs.ball_y, BALL_RADIUS, 0, 2 * Math.PI);
-        ctx.fill();
+        for (const ball of (gs.balls || [])) {
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+
+        // Powerups
+        for (const pu of (gs.powerups || [])) {
+            drawPowerup(ctx, pu);
+        }
 
     }
 
