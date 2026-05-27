@@ -100,14 +100,6 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         ctx.arc(gs.ball_x, gs.ball_y, BALL_RADIUS, 0, 2 * Math.PI);
         ctx.fill();
 
-        // Score
-        ctx.font         = 'bold 40px ui-monospace, Menlo, monospace';
-        ctx.textAlign    = 'center';
-        ctx.fillStyle    = COL_SCORE;
-        ctx.textBaseline = 'top';
-        ctx.fillText(String(gs.ai_score),     W / 2, 12);
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(String(gs.player_score), W / 2, H - PADDLE_HEIGHT - 8);
     }
 
     function loop() {
@@ -126,6 +118,14 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         // Create AudioContext early so any gesture during instructions unlocks it
         // before the first paddle tone is needed.
         getAudioCtx();
+
+        // Update score elements outside the canvas
+        if (gameState) {
+            var aiEl = document.getElementById('ai-score-display');
+            var plEl = document.getElementById('player-score-display');
+            if (aiEl) aiEl.textContent = String(gameState.ai_score     || 0);
+            if (plEl) plEl.textContent = String(gameState.player_score || 0);
+        }
 
         const playing = appStatus && appStatus.status === 'PLAYING';
         if (gameState && playing) {
