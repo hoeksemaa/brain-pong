@@ -9,16 +9,14 @@ electrooculography:
   - dynamic layout: raw channels + derived horizontal/vertical diffs when available
   - adaptive y-axis (smoothed)
 
-Today's preferred Pong/debug montage is 6 total electrodes:
+Today's preferred Pong/debug montage is 5 total electrodes:
   - CH1: left outer canthus
   - CH2: right outer canthus
   - CH3: above one eye
   - CH4: below the same eye
-  - SRB/reference: mastoid or earlobe
-  - BIAS/ground: other mastoid or forehead
+  - BIAS/ground: forehead or mastoid
 
-Hardware reminder: SRB1/reference + BIAS/ground are still required. Without
-them, channels are often meaningless / saturated.
+Hardware reminder: BIAS/ground is still required. SRB1 is disabled in firmware.
 
 Usage:
     source .venv/bin/activate
@@ -118,7 +116,7 @@ def main():
         print("EOG montage:")
         for name, slot in EOG_MONTAGE:
             print(f"  {name:30s} → board ch {all_eeg_channels[slot]}")
-        print("Reminder: SRB/reference + BIAS/ground still need to be connected.")
+        print("Reminder: BIAS/ground must be connected. SRB1 is disabled in firmware.")
         board.prepare_session()
         print("\nStarting stream — close the plot window to stop.")
         board.start_stream(5 * 60 * sampling_rate)
