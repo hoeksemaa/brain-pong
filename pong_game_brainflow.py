@@ -47,13 +47,13 @@ EOG_SLOT_L       = 0      # index into get_eeg_channels() — left electrode
 EOG_SLOT_R       = 1      # index into get_eeg_channels() — right electrode
 EOG_LPF_HZ      = 100.0
 EOG_HPF_HZ      = 0.5
-EOG_SIGMA_THR   = 6.0    # sustained_crossing threshold multiplier
+EOG_SIGMA_THR   = 5.0    # sustained_crossing threshold multiplier
 EOG_MIN_DUR_MS  = 12.0   # min crossing duration — rejects EMG spikes
 GLANCE_WINDOW_S  = 0.7   # max seconds between outward and return saccade
 ARMED_MIN_WAIT_S = 0.05  # ignore crossings this soon after arming
 REFRACTORY_S     = 0.8   # cooldown after firing a command
 EOG_BASELINE_S   = 5.0   # seconds of quiet signal to estimate baseline noise
-INSTRUCTIONS_S   = 5.0   # pre-calibration instruction countdown
+INSTRUCTIONS_S   = 5.0   # hands-off buffer after button click; auto-advances to CALIBRATING
 EOG_POLL_S       = 0.1
 EOG_SETTLE_S     = 0.4   # extra signal pulled for IIR filter settling
 
@@ -110,13 +110,15 @@ app = Dash(__name__, assets_folder='assets')
 app.title = "BrainPong — EOG"
 
 
+POINTS_TO_WIN = 5
+
 def get_initial_game_state():
     return {
         'player_x': GAME_WIDTH / 2, 'ai_x': GAME_WIDTH / 2,
         'ball_x': GAME_WIDTH / 2,   'ball_y': GAME_HEIGHT / 2,
         'ball_vx': 0, 'ball_vy': INITIAL_BALL_SPEED_Y,
         'zone_idx': 1, 'prev_key': 'None', 'last_bci_seq': 0,
-        'player_score': 0, 'ai_score': 0,
+        'player_score': 0, 'ai_score': 0, 'winner': None,
     }
 
 
@@ -126,14 +128,40 @@ app.layout = html.Div(
     children=[
         html.H1("BrainPong — EOG"),
         html.Div([
-            html.Button('Pause / Resume',    id='pause-button',   n_clicks=0, style={'marginRight': '20px'}),
-            html.Button('Restart Game',      id='restart-button', n_clicks=0, style={'marginRight': '20px'}),
-            html.Button('Start Game',        id='start-button',  n_clicks=0),
+            html.Button('Pause / Resume', id='pause-button',  n_clicks=0, style={'marginRight': '20px'}),
+            html.Button('Start New Game', id='start-button',  n_clicks=0),
         ], style={'marginBottom': '10px'}),
         html.H3(id='status-display', style={'fontSize': '24px', 'color': 'yellow', 'minHeight': '80px'}),
         html.Div(
-            html.Canvas(id='pong-game-canvas', width=GAME_WIDTH, height=GAME_HEIGHT),
-            style={'width': f'{GAME_WIDTH}px', 'margin': 'auto', 'border': '2px solid #555'},
+            style={'display': 'inline-flex', 'alignItems': 'stretch'},
+            children=[
+                html.Div(
+                    style={'position': 'relative'},
+                    children=[
+                        html.Div(
+                            html.Canvas(id='pong-game-canvas', width=GAME_WIDTH, height=GAME_HEIGHT),
+                            style={'border': '2px solid #555'},
+                        ),
+                        html.Div(
+                            id='winner-overlay',
+                            style={'display': 'none'},
+                        ),
+                    ],
+                ),
+                html.Div(
+                    style={
+                        'display': 'flex', 'flexDirection': 'column',
+                        'justifyContent': 'space-between',
+                        'paddingLeft': '18px', 'paddingTop': '8px', 'paddingBottom': '8px',
+                    },
+                    children=[
+                        html.Div(id='ai-score-display',     children='0',
+                                 style={'fontSize': '32px', 'color': '#ff5252', 'fontWeight': 'bold'}),
+                        html.Div(id='player-score-display', children='0',
+                                 style={'fontSize': '32px', 'color': '#33ff66', 'fontWeight': 'bold'}),
+                    ],
+                ),
+            ],
         ),
         html.Div(
             style={'width': '800px', 'margin': '15px auto', 'textAlign': 'left',
@@ -419,16 +447,65 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
 
     if state['ball_y'] - BALL_RADIUS > GAME_HEIGHT:
         state['ai_score'] += 1
+        if state['ai_score'] >= POINTS_TO_WIN:
+            state['winner'] = 'AI'
+            return state
         p, a = state['player_score'], state['ai_score']
         state = get_initial_game_state()
         state.update({'player_score': p, 'ai_score': a, 'ball_vy': -ball_speed})
     elif state['ball_y'] + BALL_RADIUS < 0:
         state['player_score'] += 1
+        if state['player_score'] >= POINTS_TO_WIN:
+            state['winner'] = 'Player'
+            return state
         p, a = state['player_score'], state['ai_score']
         state = get_initial_game_state()
         state.update({'player_score': p, 'ai_score': a, 'ball_vy': -ball_speed})
 
     return state
+
+
+@app.callback(
+    Output('app-status-store', 'data', allow_duplicate=True),
+    Input('game-state-store', 'data'),
+    State('app-status-store', 'data'),
+    prevent_initial_call=True,
+)
+def check_winner(game_state, app_status):
+    if not game_state or not game_state.get('winner'):
+        return no_update
+    if (app_status or {}).get('status') == 'PLAYING':
+        return {**app_status, 'status': 'GAME_OVER', 'winner': game_state['winner']}
+    return no_update
+
+
+@app.callback(
+    Output('winner-overlay', 'style'),
+    Output('winner-overlay', 'children'),
+    Input('app-status-store', 'data'),
+)
+def update_winner_overlay(app_status):
+    if app_status and app_status.get('status') == 'GAME_OVER':
+        winner = app_status.get('winner', '???')
+        color_name  = 'Red'   if winner == 'AI'     else 'Green'
+        text_color  = '#ff5252' if winner == 'AI'   else '#33ff66'
+        return (
+            {
+                'position': 'absolute', 'top': '0', 'left': '0',
+                'width': '100%', 'height': '100%',
+                'backgroundColor': 'rgba(0,0,0,0.82)',
+                'display': 'flex', 'flexDirection': 'column',
+                'alignItems': 'center', 'justifyContent': 'center',
+                'zIndex': '10',
+            },
+            html.Div([
+                html.Div(f"{color_name} Wins!!!",
+                         style={'fontSize': '64px', 'color': text_color, 'fontWeight': 'bold'}),
+                html.Div("Click  Start New Game  to play again",
+                         style={'fontSize': '18px', 'color': '#ccc', 'marginTop': '16px'}),
+            ]),
+        )
+    return {'display': 'none'}, ''
 
 
 @app.callback(
@@ -439,32 +516,31 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     Output('game-interval', 'disabled'),
     Input('status-interval', 'n_intervals'),
     Input('pause-button', 'n_clicks'),
-    Input('restart-button', 'n_clicks'),
     Input('start-button', 'n_clicks'),
     State('app-status-store', 'data'),
     prevent_initial_call=True,
 )
-def manage_app_flow(status_n, pause_clicks, restart_clicks, start_clicks, app_status):
+def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
     triggered_id   = ctx.triggered_id or 'status-interval'
     status         = app_status.get('status', 'STARTING')
     countdown      = app_status.get('countdown', 0)
     new_status     = status
     new_game_state = no_update
 
-    if triggered_id == 'restart-button' and restart_clicks > 0:
-        new_status     = 'STARTING'
-        new_game_state = get_initial_game_state()
-    elif triggered_id == 'pause-button' and pause_clicks > 0:
+    if triggered_id == 'pause-button' and pause_clicks > 0:
         new_status = 'PAUSED' if status != 'PAUSED' else 'PLAYING'
-    elif triggered_id == 'start-button' and start_clicks > 0 and status == 'INSTRUCTIONS':
-        new_status = 'CALIBRATING'
-        countdown  = EOG_BASELINE_S + 0.5
+    elif triggered_id == 'start-button' and start_clicks > 0:
+        new_status     = 'INSTRUCTIONS'
+        countdown      = INSTRUCTIONS_S
+        new_game_state = get_initial_game_state()
     elif triggered_id == 'status-interval':
         if status == 'STARTING':
-            if EOG_MODE:
-                new_status = 'INSTRUCTIONS'
-            else:
-                new_status = 'PLAYING'
+            new_status = 'PLAYING' if not EOG_MODE else status
+        elif status == 'INSTRUCTIONS':
+            countdown -= 0.5
+            if countdown <= 0:
+                new_status = 'CALIBRATING'
+                countdown  = EOG_BASELINE_S + 0.5
         elif status == 'CALIBRATING':
             countdown -= 0.5
             if countdown <= 0:
@@ -472,13 +548,11 @@ def manage_app_flow(status_n, pause_clicks, restart_clicks, start_clicks, app_st
 
     if new_status == 'INSTRUCTIONS':
         msg = html.Div([
-            html.Div("Get ready to calibrate",
+            html.Div(f"Remove hands from keyboard — calibrating in {max(0, int(countdown))}s",
                      style={'fontSize': '20px', 'color': 'yellow', 'marginBottom': '6px'}),
             html.Div("1. Stare at the CENTER of the screen",   style={'fontSize': '15px', 'color': '#ccc'}),
             html.Div("2. Do NOT blink",                        style={'fontSize': '15px', 'color': '#ccc'}),
             html.Div("3. Keep your eyes completely still",     style={'fontSize': '15px', 'color': '#ccc'}),
-            html.Div("Then click  Start Game  above when ready",
-                     style={'fontSize': '14px', 'color': 'orange', 'marginTop': '8px'}),
         ])
     elif new_status == 'CALIBRATING':
         msg = f"Calibrating — hold still, eyes forward...  {max(0, int(countdown))}s"
@@ -492,7 +566,7 @@ def manage_app_flow(status_n, pause_clicks, restart_clicks, start_clicks, app_st
         msg = ""
 
     bci_disabled  = NO_BOARD_MODE or (new_status not in ('PLAYING', 'CALIBRATING'))
-    game_disabled = (new_status == 'PAUSED')
+    game_disabled = new_status in ('PAUSED', 'GAME_OVER')
 
     return msg, {'status': new_status, 'countdown': countdown}, new_game_state, bci_disabled, game_disabled
 
