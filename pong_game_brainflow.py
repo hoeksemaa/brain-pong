@@ -52,7 +52,8 @@ EOG_MIN_DUR_MS  = 12.0   # min crossing duration — rejects EMG spikes
 GLANCE_WINDOW_S  = 0.7   # max seconds between outward and return saccade
 ARMED_MIN_WAIT_S = 0.05  # ignore crossings this soon after arming
 REFRACTORY_S     = 0.8   # cooldown after firing a command
-EOG_BASELINE_S   = 3.0   # seconds of quiet signal to estimate baseline noise
+EOG_BASELINE_S   = 5.0   # seconds of quiet signal to estimate baseline noise
+INSTRUCTIONS_S   = 5.0   # pre-calibration instruction countdown
 EOG_POLL_S       = 0.1
 EOG_SETTLE_S     = 0.4   # extra signal pulled for IIR filter settling
 
@@ -128,7 +129,7 @@ app.layout = html.Div(
             html.Button('Pause / Resume', id='pause-button',   n_clicks=0, style={'marginRight': '20px'}),
             html.Button('Restart Game',   id='restart-button', n_clicks=0),
         ], style={'marginBottom': '10px'}),
-        html.H3(id='status-display', style={'fontSize': '24px', 'color': 'yellow', 'height': '30px'}),
+        html.H3(id='status-display', style={'fontSize': '24px', 'color': 'yellow', 'minHeight': '80px'}),
         html.Div(
             html.Canvas(id='pong-game-canvas', width=GAME_WIDTH, height=GAME_HEIGHT),
             style={'width': f'{GAME_WIDTH}px', 'margin': 'auto', 'border': '2px solid #555'},
@@ -456,17 +457,30 @@ def manage_app_flow(status_n, pause_clicks, restart_clicks, app_status):
     elif triggered_id == 'status-interval':
         if status == 'STARTING':
             if EOG_MODE:
-                new_status = 'CALIBRATING'
-                countdown  = EOG_BASELINE_S + 0.5   # small buffer over the 3 s accumulation
+                new_status = 'INSTRUCTIONS'
+                countdown  = INSTRUCTIONS_S
             else:
                 new_status = 'PLAYING'
+        elif status == 'INSTRUCTIONS':
+            countdown -= 0.5
+            if countdown <= 0:
+                new_status = 'CALIBRATING'
+                countdown  = EOG_BASELINE_S + 0.5
         elif status == 'CALIBRATING':
             countdown -= 0.5
             if countdown <= 0:
                 new_status = 'PLAYING'
 
-    if new_status == 'CALIBRATING':
-        msg = f"Calibrating baseline — sit still...  {max(0, int(countdown))}s"
+    if new_status == 'INSTRUCTIONS':
+        msg = html.Div([
+            html.Div(f"Get ready — calibration starts in {max(0, int(countdown))}s",
+                     style={'fontSize': '20px', 'color': 'yellow', 'marginBottom': '6px'}),
+            html.Div("1. Stare at the CENTER of the screen",   style={'fontSize': '15px', 'color': '#ccc'}),
+            html.Div("2. Do NOT blink",                        style={'fontSize': '15px', 'color': '#ccc'}),
+            html.Div("3. Keep your eyes completely still",     style={'fontSize': '15px', 'color': '#ccc'}),
+        ])
+    elif new_status == 'CALIBRATING':
+        msg = f"Calibrating — hold still, eyes forward...  {max(0, int(countdown))}s"
     elif new_status == 'PLAYING':
         if NO_BOARD_MODE: msg = "NO BOARD — keyboard only (A/D)"
         elif EOG_MODE:    msg = "PLAYING — glance left/right to move  |  A/D to override"
