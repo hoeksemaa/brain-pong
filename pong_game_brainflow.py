@@ -126,8 +126,9 @@ app.layout = html.Div(
     children=[
         html.H1("BrainPong — EOG"),
         html.Div([
-            html.Button('Pause / Resume', id='pause-button',   n_clicks=0, style={'marginRight': '20px'}),
-            html.Button('Restart Game',   id='restart-button', n_clicks=0),
+            html.Button('Pause / Resume',    id='pause-button',   n_clicks=0, style={'marginRight': '20px'}),
+            html.Button('Restart Game',      id='restart-button', n_clicks=0, style={'marginRight': '20px'}),
+            html.Button('Start Game',        id='start-button',  n_clicks=0),
         ], style={'marginBottom': '10px'}),
         html.H3(id='status-display', style={'fontSize': '24px', 'color': 'yellow', 'minHeight': '80px'}),
         html.Div(
@@ -439,10 +440,11 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     Input('status-interval', 'n_intervals'),
     Input('pause-button', 'n_clicks'),
     Input('restart-button', 'n_clicks'),
+    Input('start-button', 'n_clicks'),
     State('app-status-store', 'data'),
     prevent_initial_call=True,
 )
-def manage_app_flow(status_n, pause_clicks, restart_clicks, app_status):
+def manage_app_flow(status_n, pause_clicks, restart_clicks, start_clicks, app_status):
     triggered_id   = ctx.triggered_id or 'status-interval'
     status         = app_status.get('status', 'STARTING')
     countdown      = app_status.get('countdown', 0)
@@ -454,18 +456,15 @@ def manage_app_flow(status_n, pause_clicks, restart_clicks, app_status):
         new_game_state = get_initial_game_state()
     elif triggered_id == 'pause-button' and pause_clicks > 0:
         new_status = 'PAUSED' if status != 'PAUSED' else 'PLAYING'
+    elif triggered_id == 'start-button' and start_clicks > 0 and status == 'INSTRUCTIONS':
+        new_status = 'CALIBRATING'
+        countdown  = EOG_BASELINE_S + 0.5
     elif triggered_id == 'status-interval':
         if status == 'STARTING':
             if EOG_MODE:
                 new_status = 'INSTRUCTIONS'
-                countdown  = INSTRUCTIONS_S
             else:
                 new_status = 'PLAYING'
-        elif status == 'INSTRUCTIONS':
-            countdown -= 0.5
-            if countdown <= 0:
-                new_status = 'CALIBRATING'
-                countdown  = EOG_BASELINE_S + 0.5
         elif status == 'CALIBRATING':
             countdown -= 0.5
             if countdown <= 0:
@@ -473,11 +472,13 @@ def manage_app_flow(status_n, pause_clicks, restart_clicks, app_status):
 
     if new_status == 'INSTRUCTIONS':
         msg = html.Div([
-            html.Div(f"Get ready — calibration starts in {max(0, int(countdown))}s",
+            html.Div("Get ready to calibrate",
                      style={'fontSize': '20px', 'color': 'yellow', 'marginBottom': '6px'}),
             html.Div("1. Stare at the CENTER of the screen",   style={'fontSize': '15px', 'color': '#ccc'}),
             html.Div("2. Do NOT blink",                        style={'fontSize': '15px', 'color': '#ccc'}),
             html.Div("3. Keep your eyes completely still",     style={'fontSize': '15px', 'color': '#ccc'}),
+            html.Div("Then click  Start Game  above when ready",
+                     style={'fontSize': '14px', 'color': 'orange', 'marginTop': '8px'}),
         ])
     elif new_status == 'CALIBRATING':
         msg = f"Calibrating — hold still, eyes forward...  {max(0, int(countdown))}s"

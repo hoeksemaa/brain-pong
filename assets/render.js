@@ -36,28 +36,39 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     function getAudioCtx() {
         if (!audioCtx) {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            document.addEventListener('click', function () {
-                if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-            });
+            function tryUnlock() {
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    audioCtx.resume().catch(function () {});
+                }
+            }
+            document.addEventListener('click',     tryUnlock);
+            document.addEventListener('keydown',   tryUnlock);
+            document.addEventListener('mousedown', tryUnlock);
         }
         return audioCtx;
     }
 
     function playTone(freq) {
         const ctx = getAudioCtx();
-        if (ctx.state === 'suspended') ctx.resume().catch(function () {});
-        const osc  = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type            = 'sine';
-        osc.frequency.value = freq;
-        const t = ctx.currentTime;
-        gain.gain.setValueAtTime(0, t);
-        gain.gain.linearRampToValueAtTime(0.35, t + 0.01);
-        gain.gain.linearRampToValueAtTime(0, t + 0.09);
-        osc.start(t);
-        osc.stop(t + 0.09);
+        function doPlay() {
+            const osc  = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type            = 'sine';
+            osc.frequency.value = freq;
+            const t = ctx.currentTime;
+            gain.gain.setValueAtTime(0, t);
+            gain.gain.linearRampToValueAtTime(0.35, t + 0.01);
+            gain.gain.linearRampToValueAtTime(0, t + 0.09);
+            osc.start(t);
+            osc.stop(t + 0.09);
+        }
+        if (ctx.state === 'suspended') {
+            ctx.resume().then(doPlay).catch(function () {});
+        } else {
+            doPlay();
+        }
     }
 
     function draw(ctx, W, H) {
@@ -111,6 +122,10 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         dashState.canvasId  = canvasId;
         dashState.appStatus = appStatus;
         dashState.settings  = settings;
+
+        // Create AudioContext early so any gesture during instructions unlocks it
+        // before the first paddle tone is needed.
+        getAudioCtx();
 
         const playing = appStatus && appStatus.status === 'PLAYING';
         if (gameState && playing) {
