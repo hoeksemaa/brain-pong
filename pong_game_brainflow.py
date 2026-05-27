@@ -39,6 +39,9 @@ PADDLE_WIDTH         = GAME_WIDTH // 3 - 2   # fills one of three equal zones; 2
 PADDLE_POSITIONS     = [GAME_WIDTH // 6, GAME_WIDTH // 2, 5 * GAME_WIDTH // 6]
 PADDLE_HEIGHT        = 20
 BALL_RADIUS          = 10
+POWERUP_RADIUS        = 14
+POWERUP_FALL_SPEED    = 3
+AI_REACTION_FRAMES    = 31  # frames between AI zone decisions (0.5 s at 16 ms/frame)
 
 BCI_UPDATE_INTERVAL_MS = 100  # fast enough to catch return saccades within glance window
 
@@ -110,13 +113,16 @@ app = Dash(__name__, assets_folder='assets')
 app.title = "BrainPong — EOG"
 
 
-POINTS_TO_WIN = 5
+POINTS_TO_WIN = 10
 
 def get_initial_game_state():
     return {
         'player_x': GAME_WIDTH / 2, 'ai_x': GAME_WIDTH / 2,
-        'ball_x': GAME_WIDTH / 2,   'ball_y': GAME_HEIGHT / 2,
-        'ball_vx': 0, 'ball_vy': INITIAL_BALL_SPEED_Y,
+        'balls': [{'x': GAME_WIDTH / 2, 'y': GAME_HEIGHT / 2,
+                   'vx': 0, 'vy': INITIAL_BALL_SPEED_Y}],
+        'powerups': [],
+        'speed_mult': 1.0,
+        'ai_zone_idx': 1, 'ai_move_timer': 0,
         'zone_idx': 1, 'prev_key': 'None', 'last_bci_seq': 0,
         'player_score': 0, 'ai_score': 0, 'winner': None,
     }
@@ -383,11 +389,14 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     if app_status.get('status') != 'PLAYING':
         return no_update
 
-    settings   = settings or {}
+    settings    = settings or {}
     ball_speed  = settings.get('ball_speed', abs(INITIAL_BALL_SPEED_Y))
     key_command = key_data.get('key', 'None')
     prev_key    = state.get('prev_key', 'None')
     zone_idx    = state.get('zone_idx', 1)
+    speed_mult  = state.get('speed_mult', 1.0)
+    balls       = state.get('balls', [])
+    powerups    = state.get('powerups', [])
 
     # Keyboard: step one zone per new key press (hold doesn't repeat)
     if key_command != prev_key:
@@ -406,61 +415,136 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     state['zone_idx'] = zone_idx
     state['player_x'] = PADDLE_POSITIONS[zone_idx]
 
-    # AI snaps to the zone containing the ball
-    if state['ball_x'] < GAME_WIDTH / 3:
-        state['ai_x'] = PADDLE_POSITIONS[0]
-    elif state['ball_x'] < 2 * GAME_WIDTH / 3:
-        state['ai_x'] = PADDLE_POSITIONS[1]
+    # AI re-evaluates its zone every AI_REACTION_FRAMES frames then snaps instantly.
+    ai_zone_idx   = state.get('ai_zone_idx', 1)
+    ai_move_timer = state.get('ai_move_timer', 0)
+    if ai_move_timer <= 0:
+        target_ball = next(
+            (b for b in sorted(balls, key=lambda b: b['y']) if b['vy'] < 0),
+            balls[0] if balls else None,
+        )
+        if target_ball:
+            bx = target_ball['x']
+            if bx < GAME_WIDTH / 3:
+                ai_zone_idx = 0
+            elif bx < 2 * GAME_WIDTH / 3:
+                ai_zone_idx = 1
+            else:
+                ai_zone_idx = 2
+        ai_move_timer = AI_REACTION_FRAMES
     else:
-        state['ai_x'] = PADDLE_POSITIONS[2]
+        ai_move_timer -= 1
+    state['ai_zone_idx']   = ai_zone_idx
+    state['ai_move_timer'] = ai_move_timer
+    state['ai_x']          = PADDLE_POSITIONS[ai_zone_idx]
 
-    # Rescale ball velocity to match the speed slider (live tuning)
-    current_speed = math.hypot(state['ball_vx'], state['ball_vy'])
-    if current_speed > 0.01:
-        scale = ball_speed / current_speed
-        state['ball_vx'] *= scale
-        state['ball_vy'] *= scale
-    else:
-        state['ball_vy'] = -ball_speed
+    target_speed       = ball_speed * speed_mult
+    balls_remaining    = []
+    last_exit_scorer   = None   # 'player' or 'ai' — updated for every ball that exits
+    new_powerup_spawns = []
 
-    state['ball_x'] += state['ball_vx']
-    state['ball_y'] += state['ball_vy']
+    for ball in balls:
+        spd = math.hypot(ball['vx'], ball['vy'])
+        if spd > 0.01:
+            s = target_speed / spd
+            ball['vx'] *= s
+            ball['vy'] *= s
+        else:
+            ball['vy'] = -target_speed
 
-    if state['ball_x'] <= BALL_RADIUS or state['ball_x'] >= GAME_WIDTH - BALL_RADIUS:
-        state['ball_vx'] *= -1
+        ball['x'] += ball['vx']
+        ball['y'] += ball['vy']
 
-    if state['ball_vy'] > 0 and state['ball_y'] + BALL_RADIUS >= GAME_HEIGHT - PADDLE_HEIGHT:
-        if abs(state['player_x'] - state['ball_x']) < PADDLE_WIDTH / 2 + BALL_RADIUS:
-            spd = math.hypot(state['ball_vx'], state['ball_vy'])
-            a   = random.uniform(-math.pi / 3, math.pi / 3)
-            state['ball_vx'] = spd * math.sin(a)
-            state['ball_vy'] = -spd * math.cos(a)
-            state['ball_y']  = GAME_HEIGHT - PADDLE_HEIGHT - BALL_RADIUS
+        if ball['x'] <= BALL_RADIUS or ball['x'] >= GAME_WIDTH - BALL_RADIUS:
+            ball['vx'] *= -1
 
-    if state['ball_vy'] < 0 and state['ball_y'] - BALL_RADIUS <= PADDLE_HEIGHT:
-        if abs(state['ai_x'] - state['ball_x']) < PADDLE_WIDTH / 2 + BALL_RADIUS:
-            spd = math.hypot(state['ball_vx'], state['ball_vy'])
-            a   = random.uniform(-math.pi / 3, math.pi / 3)
-            state['ball_vx'] = spd * math.sin(a)
-            state['ball_vy'] = spd * math.cos(a)
-            state['ball_y']  = PADDLE_HEIGHT + BALL_RADIUS
+        if ball['vy'] > 0 and ball['y'] + BALL_RADIUS >= GAME_HEIGHT - PADDLE_HEIGHT:
+            if abs(state['player_x'] - ball['x']) < PADDLE_WIDTH / 2 + BALL_RADIUS:
+                spd = math.hypot(ball['vx'], ball['vy'])
+                a = random.uniform(-math.pi / 3, math.pi / 3)
+                ball['vx'] = spd * math.sin(a)
+                ball['vy'] = -spd * math.cos(a)
+                ball['y']  = GAME_HEIGHT - PADDLE_HEIGHT - BALL_RADIUS
 
-    if state['ball_y'] - BALL_RADIUS > GAME_HEIGHT:
-        state['ai_score'] += 1
-        if state['ai_score'] >= POINTS_TO_WIN:
-            state['winner'] = 'AI'
-            return state
+        if ball['vy'] < 0 and ball['y'] - BALL_RADIUS <= PADDLE_HEIGHT:
+            if abs(state['ai_x'] - ball['x']) < PADDLE_WIDTH / 2 + BALL_RADIUS:
+                spd = math.hypot(ball['vx'], ball['vy'])
+                a = random.uniform(-math.pi / 3, math.pi / 3)
+                ball['vx'] = spd * math.sin(a)
+                ball['vy'] = spd * math.cos(a)
+                ball['y']  = PADDLE_HEIGHT + BALL_RADIUS
+                if random.random() < 0.7:
+                    ptype = random.choice(['fire', 'ice', 'multi'])
+                    new_powerup_spawns.append({
+                        'x':   float(ball['x']),
+                        'y':   float(PADDLE_HEIGHT + BALL_RADIUS + POWERUP_RADIUS + 2),
+                        'vy':  float(POWERUP_FALL_SPEED),
+                        'type': ptype,
+                    })
+
+        if ball['y'] - BALL_RADIUS > GAME_HEIGHT:
+            state['ai_score'] += 1
+            if state['ai_score'] >= POINTS_TO_WIN:
+                state.update({'winner': 'AI', 'balls': [], 'powerups': []})
+                return state
+        elif ball['y'] + BALL_RADIUS < 0:
+            state['player_score'] += 1
+            if state['player_score'] >= POINTS_TO_WIN:
+                state.update({'winner': 'Player', 'balls': [], 'powerups': []})
+                return state
+        else:
+            balls_remaining.append(ball)
+
+    # New round only once every ball has been scored
+    if not balls_remaining:
         p, a = state['player_score'], state['ai_score']
         state = get_initial_game_state()
-        state.update({'player_score': p, 'ai_score': a, 'ball_vy': -ball_speed})
-    elif state['ball_y'] + BALL_RADIUS < 0:
-        state['player_score'] += 1
-        if state['player_score'] >= POINTS_TO_WIN:
-            state['winner'] = 'Player'
-            return state
-        p, a = state['player_score'], state['ai_score']
-        state = get_initial_game_state()
-        state.update({'player_score': p, 'ai_score': a, 'ball_vy': -ball_speed})
+        state.update({
+            'player_score': p, 'ai_score': a,
+            'balls': [{'x': GAME_WIDTH / 2, 'y': GAME_HEIGHT / 2, 'vx': 0, 'vy': -ball_speed}],
+        })
+        return state
+
+    # --- Powerup physics and catch detection ---
+    active_powerups = []
+    multi_triggered = False
+
+    for pu in powerups:
+        pu['y'] += pu['vy']
+
+        if pu['y'] - POWERUP_RADIUS > GAME_HEIGHT:
+            continue  # fell off screen
+
+        if (pu['y'] + POWERUP_RADIUS >= GAME_HEIGHT - PADDLE_HEIGHT and
+                abs(state['player_x'] - pu['x']) < PADDLE_WIDTH / 2 + POWERUP_RADIUS):
+            if pu['type'] == 'fire':
+                speed_mult = min(4.0, speed_mult * 2.0)
+            elif pu['type'] == 'ice':
+                speed_mult = max(0.25, speed_mult * 0.5)
+            elif pu['type'] == 'multi' and not multi_triggered:
+                multi_triggered = True
+                tripled = []
+                for b in balls_remaining:
+                    spd = math.hypot(b['vx'], b['vy'])
+                    if spd < 0.01:
+                        spd = target_speed
+                    for _ in range(3):
+                        a = random.uniform(-math.pi / 3, math.pi / 3)
+                        tripled.append({
+                            'x':  float(b['x']),
+                            'y':  float(b['y']),
+                            'vx': float(spd * math.sin(a)),
+                            'vy': float(-abs(spd * math.cos(a))),
+                        })
+                balls_remaining = tripled
+            continue  # caught, remove from active
+
+        active_powerups.append(pu)
+
+    active_powerups.extend(new_powerup_spawns)
+    state['balls']      = balls_remaining
+    state['powerups']   = active_powerups
+    state['speed_mult'] = speed_mult
 
     return state
 
