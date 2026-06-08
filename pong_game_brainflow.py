@@ -14,13 +14,19 @@ _cli_parser = argparse.ArgumentParser(add_help=False)
 _cli_parser.add_argument('--no-board', action='store_true',
                          help='Run without BrainFlow hardware (keyboard-only).')
 _cli_parser.add_argument('--eog', action='store_true',
-                         help='Use EOG glance-pair detector (requires hardware).')
+                         help='Single-player EOG glance-pair detector (requires hardware).')
+_cli_parser.add_argument('--2player', dest='two_player', action='store_true',
+                         help='Two-player EOG: P1=ch1-2, P2=ch3-4. Exclusive with --eog.')
 _cli_args, _ = _cli_parser.parse_known_args()
-NO_BOARD_MODE = _cli_args.no_board
-EOG_MODE      = _cli_args.eog
+NO_BOARD_MODE   = _cli_args.no_board
+EOG_MODE        = _cli_args.eog
+TWO_PLAYER_MODE = _cli_args.two_player
 
 if EOG_MODE and NO_BOARD_MODE:
     print("ERROR: --eog requires hardware; cannot combine with --no-board.", file=sys.stderr)
+    sys.exit(2)
+if TWO_PLAYER_MODE and EOG_MODE:
+    print("ERROR: --2player and --eog are mutually exclusive.", file=sys.stderr)
     sys.exit(2)
 
 # --- BrainFlow ---
@@ -35,30 +41,33 @@ INITIAL_BALL_SPEED_Y = -4
 GAME_INTERVAL_MS     = 16
 GAME_WIDTH           = 800
 GAME_HEIGHT          = 600
-PADDLE_WIDTH         = GAME_WIDTH // 3 - 2   # fills one of three equal zones; 2 px gap
+PADDLE_WIDTH         = GAME_WIDTH // 3 - 2
 PADDLE_POSITIONS     = [GAME_WIDTH // 6, GAME_WIDTH // 2, 5 * GAME_WIDTH // 6]
 PADDLE_HEIGHT        = 20
 BALL_RADIUS          = 10
-POWERUP_RADIUS        = 14
-POWERUP_FALL_SPEED    = 3
-AI_REACTION_FRAMES    = 31  # frames between AI zone decisions (0.5 s at 16 ms/frame)
+POWERUP_RADIUS       = 14
+POWERUP_FALL_SPEED   = 3
+AI_REACTION_FRAMES   = 31
 
-BCI_UPDATE_INTERVAL_MS = 100  # fast enough to catch return saccades within glance window
+BCI_UPDATE_INTERVAL_MS = 100
 
-# EOG glance-pair detector
-EOG_SLOT_L       = 0      # index into get_eeg_channels() — left electrode
-EOG_SLOT_R       = 1      # index into get_eeg_channels() — right electrode
+# EOG electrode slot indices into get_eeg_channels()
+EOG_SLOT_L  = 0   # P1 left
+EOG_SLOT_R  = 1   # P1 right
+EOG_SLOT_L2 = 2   # P2 left
+EOG_SLOT_R2 = 3   # P2 right
+
 EOG_LPF_HZ      = 100.0
 EOG_HPF_HZ      = 0.5
-EOG_SIGMA_THR   = 5.0    # sustained_crossing threshold multiplier
-EOG_MIN_DUR_MS  = 12.0   # min crossing duration — rejects EMG spikes
-GLANCE_WINDOW_S  = 0.7   # max seconds between outward and return saccade
-ARMED_MIN_WAIT_S = 0.05  # ignore crossings this soon after arming
-REFRACTORY_S     = 0.8   # cooldown after firing a command
-EOG_BASELINE_S   = 5.0   # seconds of quiet signal to estimate baseline noise
-INSTRUCTIONS_S   = 5.0   # hands-off buffer after button click; auto-advances to CALIBRATING
+EOG_SIGMA_THR   = 5.0
+EOG_MIN_DUR_MS  = 12.0
+GLANCE_WINDOW_S  = 0.7
+ARMED_MIN_WAIT_S = 0.05
+REFRACTORY_S     = 0.8
+EOG_BASELINE_S   = 5.0
+INSTRUCTIONS_S   = 5.0
 EOG_POLL_S       = 0.1
-EOG_SETTLE_S     = 0.4   # extra signal pulled for IIR filter settling
+EOG_SETTLE_S     = 0.4
 
 # ==============================================================================
 # === 2. RUNTIME STATE =========================================================
@@ -66,16 +75,22 @@ EOG_SETTLE_S     = 0.4   # extra signal pulled for IIR filter settling
 board         = None
 sampling_rate = 0
 
-eog_state = {
-    'ch_L': None, 'ch_R': None, 'sr': None,
-    'sm': 'CALIBRATING',   # CALIBRATING | IDLE | ARMED | REFRACTORY
-    'baseline_acc': [],
-    'baseline_sigma': None,
-    'first_dir': None,
-    'arm_time': None,
-    'last_cmd_time': 0.0,
-    'cmd_seq': 0,
-}
+
+def _make_eog_state():
+    return {
+        'ch_L': None, 'ch_R': None, 'sr': None,
+        'sm': 'CALIBRATING',
+        'baseline_acc': [],
+        'baseline_sigma': None,
+        'first_dir': None,
+        'arm_time': None,
+        'last_cmd_time': 0.0,
+        'cmd_seq': 0,
+    }
+
+
+eog_state    = _make_eog_state()
+eog_state_p2 = _make_eog_state()
 
 
 def _eog_filter(x_uv, sr):
@@ -106,14 +121,83 @@ def _sustained_crossing(signal, sigma, sr):
     return 'RIGHT' if signal[onset] > 0 else 'LEFT'
 
 
+def _poll_eog(eog_st):
+    """Pull latest window from board, filter, return new_sig slice or None."""
+    if board is None or eog_st['ch_L'] is None or eog_st['sr'] is None:
+        return None
+    sr       = eog_st['sr']
+    n_settle = int(EOG_SETTLE_S * sr)
+    n_new    = max(1, int(EOG_POLL_S * sr))
+    data = board.get_current_board_data(n_settle + n_new)
+    if data.shape[1] < n_settle + n_new:
+        return None
+    diff_raw = (data[eog_st['ch_R']] - data[eog_st['ch_L']]) * 1e6
+    filtered = _eog_filter(diff_raw.copy(), sr)
+    return filtered[-n_new:]
+
+
+def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
+    """Advance one EOG state machine tick. Returns a command dict or None."""
+    if eog_st['sm'] == 'CALIBRATING':
+        eog_st['baseline_acc'].append(new_sig.copy())
+        total = np.concatenate(eog_st['baseline_acc'])
+        if total.size >= int(EOG_BASELINE_S * eog_st['sr']):
+            eog_st['baseline_sigma'] = float(np.std(total))
+            eog_st['sm'] = 'IDLE'
+            print(f"[{label}] baseline σ = {eog_st['baseline_sigma']:.2f} µV — ready")
+        return None
+
+    if eog_st['sm'] == 'REFRACTORY':
+        if now - eog_st['last_cmd_time'] > REFRACTORY_S:
+            eog_st['sm'] = 'IDLE'
+        return None
+
+    sigma    = eog_st['baseline_sigma']
+    crossing = _sustained_crossing(new_sig, sigma, eog_st['sr'])
+
+    if eog_st['sm'] == 'IDLE':
+        if crossing is not None:
+            eog_st['sm']        = 'ARMED'
+            eog_st['first_dir'] = crossing
+            eog_st['arm_time']  = now
+
+    elif eog_st['sm'] == 'ARMED':
+        if now - eog_st['arm_time'] > GLANCE_WINDOW_S:
+            eog_st['sm']        = 'IDLE'
+            eog_st['first_dir'] = None
+        elif now - eog_st['arm_time'] > ARMED_MIN_WAIT_S and crossing is not None:
+            opposite = {'LEFT': 'RIGHT', 'RIGHT': 'LEFT'}
+            if crossing == opposite.get(eog_st['first_dir']):
+                cmd = eog_st['first_dir']
+                eog_st['cmd_seq']      += 1
+                eog_st['last_cmd_time'] = now
+                eog_st['sm']            = 'REFRACTORY'
+                eog_st['first_dir']     = None
+                print(f"[{label}] command={cmd}  seq={eog_st['cmd_seq']}")
+                return {'command': cmd, 'seq': eog_st['cmd_seq']}
+    return None
+
+
+def _reset_eog_st(eog_st):
+    eog_st['sm']             = 'CALIBRATING'
+    eog_st['baseline_acc']   = []
+    eog_st['baseline_sigma'] = None
+    eog_st['first_dir']      = None
+    eog_st['arm_time']       = None
+    eog_st['last_cmd_time']  = 0.0
+
+
 # ==============================================================================
 # === 3. APP LAYOUT ============================================================
 # ==============================================================================
 app = Dash(__name__, assets_folder='assets')
-app.title = "BrainPong — EOG"
-
+app.title = "BrainPong — 2-Player EOG" if TWO_PLAYER_MODE else "BrainPong — EOG"
 
 POINTS_TO_WIN = 10
+
+_P1_LABEL = 'P1' if TWO_PLAYER_MODE else 'Player'
+_P2_LABEL = 'P2' if TWO_PLAYER_MODE else 'AI'
+
 
 def get_initial_game_state():
     return {
@@ -123,7 +207,8 @@ def get_initial_game_state():
         'powerups': [],
         'speed_mult': 1.0,
         'ai_zone_idx': 1, 'ai_move_timer': 0,
-        'zone_idx': 1, 'prev_key': 'None', 'last_bci_seq': 0,
+        'zone_idx': 1,    'prev_key': 'None',    'last_bci_seq': 0,
+        'zone_idx_p2': 1, 'prev_key_p2': 'None', 'last_bci_seq_p2': 0,
         'player_score': 0, 'ai_score': 0, 'winner': None,
     }
 
@@ -132,10 +217,10 @@ app.layout = html.Div(
     id='main-container',
     style={'backgroundColor': '#111', 'color': '#DDD', 'fontFamily': 'monospace', 'textAlign': 'center'},
     children=[
-        html.H1("BrainPong — EOG"),
+        html.H1("BrainPong — 2-Player EOG" if TWO_PLAYER_MODE else "BrainPong — EOG"),
         html.Div([
-            html.Button('Pause / Resume', id='pause-button',  n_clicks=0, style={'marginRight': '20px'}),
-            html.Button('Start New Game', id='start-button',  n_clicks=0),
+            html.Button('Pause / Resume', id='pause-button', n_clicks=0, style={'marginRight': '20px'}),
+            html.Button('Start New Game', id='start-button', n_clicks=0),
         ], style={'marginBottom': '10px'}),
         html.H3(id='status-display', style={'fontSize': '24px', 'color': 'yellow', 'minHeight': '80px'}),
         html.Div(
@@ -148,10 +233,7 @@ app.layout = html.Div(
                             html.Canvas(id='pong-game-canvas', width=GAME_WIDTH, height=GAME_HEIGHT),
                             style={'border': '2px solid #555'},
                         ),
-                        html.Div(
-                            id='winner-overlay',
-                            style={'display': 'none'},
-                        ),
+                        html.Div(id='winner-overlay', style={'display': 'none'}),
                     ],
                 ),
                 html.Div(
@@ -161,10 +243,16 @@ app.layout = html.Div(
                         'paddingLeft': '18px', 'paddingTop': '8px', 'paddingBottom': '8px',
                     },
                     children=[
-                        html.Div(id='ai-score-display',     children='0',
-                                 style={'fontSize': '32px', 'color': '#ff5252', 'fontWeight': 'bold'}),
-                        html.Div(id='player-score-display', children='0',
-                                 style={'fontSize': '32px', 'color': '#33ff66', 'fontWeight': 'bold'}),
+                        html.Div([
+                            html.Div(_P2_LABEL, style={'fontSize': '13px', 'color': '#888', 'marginBottom': '2px'}),
+                            html.Div(id='ai-score-display', children='0',
+                                     style={'fontSize': '32px', 'color': '#ff5252', 'fontWeight': 'bold'}),
+                        ]),
+                        html.Div([
+                            html.Div(_P1_LABEL, style={'fontSize': '13px', 'color': '#888', 'marginBottom': '2px'}),
+                            html.Div(id='player-score-display', children='0',
+                                     style={'fontSize': '32px', 'color': '#33ff66', 'fontWeight': 'bold'}),
+                        ]),
                     ],
                 ),
             ],
@@ -185,15 +273,32 @@ app.layout = html.Div(
                 ),
             ])],
         ),
+        # P1 EOG live plot
         html.Div(
-            dcc.Graph(id='eog-live-plot', config={'displayModeBar': False}),
-            style={'width': '800px', 'margin': '0 auto', 'display': 'block' if EOG_MODE else 'none'},
+            [
+                html.Div('Player 1 — HEOG' if TWO_PLAYER_MODE else '',
+                         style={'color': '#33ff66', 'fontSize': '13px', 'marginBottom': '2px'}),
+                dcc.Graph(id='eog-live-plot', config={'displayModeBar': False}),
+            ],
+            style={'width': '800px', 'margin': '0 auto',
+                   'display': 'block' if (EOG_MODE or TWO_PLAYER_MODE) else 'none'},
         ),
-        dcc.Store(id='settings-store',    data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH}),
-        dcc.Store(id='game-state-store',  data=get_initial_game_state()),
-        dcc.Store(id='app-status-store',  data={'status': 'STARTING', 'countdown': 0}),
-        dcc.Store(id='bci-command-store', data={'command': 'NEUTRAL', 'seq': 0}),
-        dcc.Store(id='key-press-store',   data={'key': 'None'}),
+        # P2 EOG live plot (2-player only)
+        html.Div(
+            [
+                html.Div('Player 2 — HEOG',
+                         style={'color': '#ff5252', 'fontSize': '13px', 'marginBottom': '2px', 'marginTop': '10px'}),
+                dcc.Graph(id='eog-live-plot-p2', config={'displayModeBar': False}),
+            ],
+            style={'width': '800px', 'margin': '0 auto',
+                   'display': 'block' if TWO_PLAYER_MODE else 'none'},
+        ),
+        dcc.Store(id='settings-store',       data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH}),
+        dcc.Store(id='game-state-store',     data=get_initial_game_state()),
+        dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0}),
+        dcc.Store(id='bci-command-store',    data={'command': 'NEUTRAL', 'seq': 0}),
+        dcc.Store(id='bci-command-store-p2', data={'command': 'NEUTRAL', 'seq': 0}),
+        dcc.Store(id='key-press-store',      data={'key': 'None', 'key_p2': 'None'}),
         dcc.Interval(id='game-interval',   interval=GAME_INTERVAL_MS,       n_intervals=0, disabled=False),
         dcc.Interval(id='bci-interval',    interval=BCI_UPDATE_INTERVAL_MS,  n_intervals=0, disabled=True),
         dcc.Interval(id='status-interval', interval=500,                     n_intervals=0),
@@ -209,15 +314,28 @@ clientside_callback(
         if (!window.dash_clientside) { window.dash_clientside = {}; }
         if (!window.dash_clientside.key_listener_added) {
             window.dash_clientside.key_listener_added = true;
-            window.dash_clientside.current_key = 'None';
+            window.dash_clientside.current_key    = 'None';
+            window.dash_clientside.current_key_p2 = 'None';
             document.addEventListener('keydown', function(e) {
-                if (e.key === 'a' || e.key === 'd') { window.dash_clientside.current_key = e.key; }
+                if (e.key === 'a' || e.key === 'd') {
+                    window.dash_clientside.current_key = e.key;
+                }
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    window.dash_clientside.current_key_p2 = e.key;
+                }
             });
             document.addEventListener('keyup', function(e) {
-                if (e.key === 'a' || e.key === 'd') { window.dash_clientside.current_key = 'None'; }
+                if (e.key === 'a' || e.key === 'd') {
+                    window.dash_clientside.current_key = 'None';
+                }
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                    window.dash_clientside.current_key_p2 = 'None';
+                }
             });
         }
-        return {key: window.dash_clientside.current_key};
+        return {key: window.dash_clientside.current_key,
+                key_p2: window.dash_clientside.current_key_p2};
     }
     """,
     Output('key-press-store', 'data'),
@@ -253,64 +371,70 @@ def update_bci_command(_, app_status):
         return no_update
     if app_status.get('status') not in ('PLAYING', 'CALIBRATING'):
         return no_update
-
-    sr   = eog_state['sr']
-    ch_L = eog_state['ch_L']
-    ch_R = eog_state['ch_R']
-
-    n_settle = int(EOG_SETTLE_S * sr)
-    n_new    = max(1, int(EOG_POLL_S * sr))
-    data = board.get_current_board_data(n_settle + n_new)
-    if data.shape[1] < n_settle + n_new:
+    new_sig = _poll_eog(eog_state)
+    if new_sig is None:
         return no_update
+    result = _run_eog_sm(eog_state, new_sig, time.time(), label='P1')
+    return result if result is not None else no_update
 
-    diff_raw = (data[ch_R] - data[ch_L]) * 1e6
+
+@app.callback(
+    Output('bci-command-store-p2', 'data'),
+    Input('bci-interval', 'n_intervals'),
+    State('app-status-store', 'data'),
+    prevent_initial_call=True,
+)
+def update_bci_command_p2(_, app_status):
+    if not TWO_PLAYER_MODE:
+        return no_update
+    if board is None or eog_state_p2['ch_L'] is None:
+        return no_update
+    if app_status.get('status') not in ('PLAYING', 'CALIBRATING'):
+        return no_update
+    new_sig = _poll_eog(eog_state_p2)
+    if new_sig is None:
+        return no_update
+    result = _run_eog_sm(eog_state_p2, new_sig, time.time(), label='P2')
+    return result if result is not None else no_update
+
+
+EOG_DISPLAY_SECS = 8.0
+
+
+def _make_eog_figure(eog_st, title, line_color, thr_color):
+    sr = eog_st['sr']
+    if sr is None:
+        return None
+    n_req = int(EOG_DISPLAY_SECS * sr)
+    data  = board.get_current_board_data(n_req)
+    if data.shape[1] < 20:
+        return None
+    diff_raw = (data[eog_st['ch_R']] - data[eog_st['ch_L']]) * 1e6
     filtered = _eog_filter(diff_raw.copy(), sr)
-    new_sig  = filtered[-n_new:]
-    now      = time.time()
+    n_pts    = len(filtered)
+    t        = np.linspace(-n_pts / sr, 0, n_pts)
 
-    if eog_state['sm'] == 'CALIBRATING':
-        eog_state['baseline_acc'].append(new_sig.copy())
-        total = np.concatenate(eog_state['baseline_acc'])
-        if total.size >= int(EOG_BASELINE_S * sr):
-            eog_state['baseline_sigma'] = float(np.std(total))
-            eog_state['sm'] = 'IDLE'
-            print(f"[EOG] baseline σ = {eog_state['baseline_sigma']:.2f} µV — ready")
-        return no_update
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=t, y=filtered, mode='lines', name='R−L',
+                             line=dict(color=line_color, width=1)))
+    sigma = eog_st['baseline_sigma']
+    if sigma is not None:
+        thr = EOG_SIGMA_THR * sigma
+        fig.add_hline(y= thr, line_dash='dash', line_color=thr_color,
+                      annotation_text=f'+{EOG_SIGMA_THR:.0f}σ', annotation_font_color=thr_color)
+        fig.add_hline(y=-thr, line_dash='dash', line_color=thr_color,
+                      annotation_text=f'-{EOG_SIGMA_THR:.0f}σ', annotation_font_color=thr_color)
+    peak = max(float(np.abs(filtered).max()) * 1.3, 50.0) if filtered.size else 50.0
+    fig.update_layout(
+        template='plotly_dark', paper_bgcolor='#111111', plot_bgcolor='#111111',
+        margin=dict(l=50, r=30, t=30, b=40), height=200,
+        title=dict(text=title, font=dict(size=12, color='#aaa'), x=0.5),
+        xaxis=dict(title='time (s)', range=[-EOG_DISPLAY_SECS, 0], color='#666'),
+        yaxis=dict(title='µV', range=[-peak, peak], color='#666'),
+        showlegend=False,
+    )
+    return fig
 
-    if eog_state['sm'] == 'REFRACTORY':
-        if now - eog_state['last_cmd_time'] > REFRACTORY_S:
-            eog_state['sm'] = 'IDLE'
-        return no_update
-
-    sigma    = eog_state['baseline_sigma']
-    crossing = _sustained_crossing(new_sig, sigma, sr)
-
-    if eog_state['sm'] == 'IDLE':
-        if crossing is not None:
-            eog_state['sm']        = 'ARMED'
-            eog_state['first_dir'] = crossing
-            eog_state['arm_time']  = now
-
-    elif eog_state['sm'] == 'ARMED':
-        if now - eog_state['arm_time'] > GLANCE_WINDOW_S:
-            eog_state['sm']        = 'IDLE'
-            eog_state['first_dir'] = None
-        elif now - eog_state['arm_time'] > ARMED_MIN_WAIT_S and crossing is not None:
-            opposite = {'LEFT': 'RIGHT', 'RIGHT': 'LEFT'}
-            if crossing == opposite.get(eog_state['first_dir']):
-                cmd = eog_state['first_dir']
-                eog_state['cmd_seq']      += 1
-                eog_state['last_cmd_time'] = now
-                eog_state['sm']            = 'REFRACTORY'
-                eog_state['first_dir']     = None
-                print(f"[EOG] command={cmd}  seq={eog_state['cmd_seq']}")
-                return {'command': cmd, 'seq': eog_state['cmd_seq']}
-
-    return no_update
-
-
-EOG_DISPLAY_SECS = 8.0   # rolling window shown in the live plot
 
 @app.callback(
     Output('eog-live-plot', 'figure'),
@@ -319,51 +443,30 @@ EOG_DISPLAY_SECS = 8.0   # rolling window shown in the live plot
     prevent_initial_call=True,
 )
 def update_eog_plot(_, app_status):
-    if not EOG_MODE or board is None or eog_state['ch_L'] is None:
+    if not (EOG_MODE or TWO_PLAYER_MODE) or board is None or eog_state['ch_L'] is None:
         raise PreventUpdate
-    status = (app_status or {}).get('status', '')
-    if status not in ('CALIBRATING', 'PLAYING', 'PAUSED'):
+    if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING', 'PAUSED'):
         raise PreventUpdate
-
-    sr   = eog_state['sr']
-    ch_L = eog_state['ch_L']
-    ch_R = eog_state['ch_R']
-
-    n_req = int(EOG_DISPLAY_SECS * sr)
-    data  = board.get_current_board_data(n_req)
-    if data.shape[1] < 20:
+    fig = _make_eog_figure(eog_state, 'P1 HEOG  (R − L, filtered)', '#aaffaa', 'orange')
+    if fig is None:
         raise PreventUpdate
+    return fig
 
-    diff_raw = (data[ch_R] - data[ch_L]) * 1e6
-    filtered = _eog_filter(diff_raw.copy(), sr)
-    n_pts    = len(filtered)
-    t        = np.linspace(-n_pts / sr, 0, n_pts)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=t, y=filtered, mode='lines', name='R−L',
-                             line=dict(color='#aaffaa', width=1)))
-
-    sigma = eog_state['baseline_sigma']
-    if sigma is not None:
-        thr = EOG_SIGMA_THR * sigma
-        fig.add_hline(y= thr, line_dash='dash', line_color='orange',
-                      annotation_text=f'+{EOG_SIGMA_THR:.0f}σ', annotation_font_color='orange')
-        fig.add_hline(y=-thr, line_dash='dash', line_color='orange',
-                      annotation_text=f'-{EOG_SIGMA_THR:.0f}σ', annotation_font_color='orange')
-
-    peak = max(float(np.abs(filtered).max()) * 1.3, 50.0) if filtered.size else 50.0
-
-    fig.update_layout(
-        template='plotly_dark',
-        paper_bgcolor='#111111',
-        plot_bgcolor='#111111',
-        margin=dict(l=50, r=30, t=30, b=40),
-        height=200,
-        title=dict(text='HEOG  (R − L, filtered)', font=dict(size=12, color='#aaa'), x=0.5),
-        xaxis=dict(title='time (s)', range=[-EOG_DISPLAY_SECS, 0], color='#666'),
-        yaxis=dict(title='µV', range=[-peak, peak], color='#666'),
-        showlegend=False,
-    )
+@app.callback(
+    Output('eog-live-plot-p2', 'figure'),
+    Input('status-interval', 'n_intervals'),
+    State('app-status-store', 'data'),
+    prevent_initial_call=True,
+)
+def update_eog_plot_p2(_, app_status):
+    if not TWO_PLAYER_MODE or board is None or eog_state_p2['ch_L'] is None:
+        raise PreventUpdate
+    if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING', 'PAUSED'):
+        raise PreventUpdate
+    fig = _make_eog_figure(eog_state_p2, 'P2 HEOG  (R − L, filtered)', '#ffaaaa', 'cyan')
+    if fig is None:
+        raise PreventUpdate
     return fig
 
 
@@ -380,12 +483,13 @@ def update_settings(ball_speed):
     Input('game-interval', 'n_intervals'),
     State('game-state-store', 'data'),
     State('bci-command-store', 'data'),
+    State('bci-command-store-p2', 'data'),
     State('app-status-store', 'data'),
     State('key-press-store', 'data'),
     State('settings-store', 'data'),
     prevent_initial_call=True,
 )
-def update_game_physics(_, state, bci_command, app_status, key_data, settings):
+def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_data, settings):
     if app_status.get('status') != 'PLAYING':
         return no_update
 
@@ -398,13 +502,13 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     balls       = state.get('balls', [])
     powerups    = state.get('powerups', [])
 
-    # Keyboard: step one zone per new key press (hold doesn't repeat)
+    # --- P1 keyboard ---
     if key_command != prev_key:
         if key_command == 'a':   zone_idx = max(0, zone_idx - 1)
         elif key_command == 'd': zone_idx = min(2, zone_idx + 1)
     state['prev_key'] = key_command
 
-    # EOG: one-shot — only act when seq increments
+    # --- P1 EOG ---
     bci_seq = (bci_command or {}).get('seq', 0)
     if bci_seq != state.get('last_bci_seq', 0):
         state['last_bci_seq'] = bci_seq
@@ -415,32 +519,49 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     state['zone_idx'] = zone_idx
     state['player_x'] = PADDLE_POSITIONS[zone_idx]
 
-    # AI re-evaluates its zone every AI_REACTION_FRAMES frames then snaps instantly.
-    ai_zone_idx   = state.get('ai_zone_idx', 1)
-    ai_move_timer = state.get('ai_move_timer', 0)
-    if ai_move_timer <= 0:
-        target_ball = next(
-            (b for b in sorted(balls, key=lambda b: b['y']) if b['vy'] < 0),
-            balls[0] if balls else None,
-        )
-        if target_ball:
-            bx = target_ball['x']
-            if bx < GAME_WIDTH / 3:
-                ai_zone_idx = 0
-            elif bx < 2 * GAME_WIDTH / 3:
-                ai_zone_idx = 1
-            else:
-                ai_zone_idx = 2
-        ai_move_timer = AI_REACTION_FRAMES
+    # --- Top paddle: P2 (2-player) or AI (single-player) ---
+    if TWO_PLAYER_MODE:
+        zone_idx_p2 = state.get('zone_idx_p2', 1)
+        prev_key_p2 = state.get('prev_key_p2', 'None')
+        key_p2      = key_data.get('key_p2', 'None')
+
+        if key_p2 != prev_key_p2:
+            if key_p2 == 'ArrowLeft':  zone_idx_p2 = max(0, zone_idx_p2 - 1)
+            elif key_p2 == 'ArrowRight': zone_idx_p2 = min(2, zone_idx_p2 + 1)
+        state['prev_key_p2'] = key_p2
+
+        bci_seq_p2 = (bci_command_p2 or {}).get('seq', 0)
+        if bci_seq_p2 != state.get('last_bci_seq_p2', 0):
+            state['last_bci_seq_p2'] = bci_seq_p2
+            bci_move_p2 = (bci_command_p2 or {}).get('command', 'NEUTRAL')
+            if bci_move_p2 == 'LEFT':  zone_idx_p2 = max(0, zone_idx_p2 - 1)
+            elif bci_move_p2 == 'RIGHT': zone_idx_p2 = min(2, zone_idx_p2 + 1)
+
+        state['zone_idx_p2'] = zone_idx_p2
+        state['ai_x']        = PADDLE_POSITIONS[zone_idx_p2]
+
     else:
-        ai_move_timer -= 1
-    state['ai_zone_idx']   = ai_zone_idx
-    state['ai_move_timer'] = ai_move_timer
-    state['ai_x']          = PADDLE_POSITIONS[ai_zone_idx]
+        ai_zone_idx   = state.get('ai_zone_idx', 1)
+        ai_move_timer = state.get('ai_move_timer', 0)
+        if ai_move_timer <= 0:
+            target_ball = next(
+                (b for b in sorted(balls, key=lambda b: b['y']) if b['vy'] < 0),
+                balls[0] if balls else None,
+            )
+            if target_ball:
+                bx = target_ball['x']
+                if bx < GAME_WIDTH / 3:       ai_zone_idx = 0
+                elif bx < 2 * GAME_WIDTH / 3: ai_zone_idx = 1
+                else:                          ai_zone_idx = 2
+            ai_move_timer = AI_REACTION_FRAMES
+        else:
+            ai_move_timer -= 1
+        state['ai_zone_idx']   = ai_zone_idx
+        state['ai_move_timer'] = ai_move_timer
+        state['ai_x']          = PADDLE_POSITIONS[ai_zone_idx]
 
     target_speed       = ball_speed * speed_mult
     balls_remaining    = []
-    last_exit_scorer   = None   # 'player' or 'ai' — updated for every ball that exits
     new_powerup_spawns = []
 
     for ball in balls:
@@ -458,6 +579,7 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
         if ball['x'] <= BALL_RADIUS or ball['x'] >= GAME_WIDTH - BALL_RADIUS:
             ball['vx'] *= -1
 
+        # P1 paddle (bottom)
         if ball['vy'] > 0 and ball['y'] + BALL_RADIUS >= GAME_HEIGHT - PADDLE_HEIGHT:
             if abs(state['player_x'] - ball['x']) < PADDLE_WIDTH / 2 + BALL_RADIUS:
                 spd = math.hypot(ball['vx'], ball['vy'])
@@ -465,7 +587,17 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
                 ball['vx'] = spd * math.sin(a)
                 ball['vy'] = -spd * math.cos(a)
                 ball['y']  = GAME_HEIGHT - PADDLE_HEIGHT - BALL_RADIUS
+                # In 2-player, spawn powerup rising toward P2
+                if TWO_PLAYER_MODE and random.random() < 0.7:
+                    ptype = random.choice(['fire', 'ice', 'multi'])
+                    new_powerup_spawns.append({
+                        'x':    float(ball['x']),
+                        'y':    float(GAME_HEIGHT - PADDLE_HEIGHT - BALL_RADIUS - POWERUP_RADIUS - 2),
+                        'vy':   float(-POWERUP_FALL_SPEED),
+                        'type': ptype,
+                    })
 
+        # P2/AI paddle (top)
         if ball['vy'] < 0 and ball['y'] - BALL_RADIUS <= PADDLE_HEIGHT:
             if abs(state['ai_x'] - ball['x']) < PADDLE_WIDTH / 2 + BALL_RADIUS:
                 spd = math.hypot(ball['vx'], ball['vy'])
@@ -476,26 +608,27 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
                 if random.random() < 0.7:
                     ptype = random.choice(['fire', 'ice', 'multi'])
                     new_powerup_spawns.append({
-                        'x':   float(ball['x']),
-                        'y':   float(PADDLE_HEIGHT + BALL_RADIUS + POWERUP_RADIUS + 2),
-                        'vy':  float(POWERUP_FALL_SPEED),
+                        'x':    float(ball['x']),
+                        'y':    float(PADDLE_HEIGHT + BALL_RADIUS + POWERUP_RADIUS + 2),
+                        'vy':   float(POWERUP_FALL_SPEED),
                         'type': ptype,
                     })
 
         if ball['y'] - BALL_RADIUS > GAME_HEIGHT:
             state['ai_score'] += 1
             if state['ai_score'] >= POINTS_TO_WIN:
-                state.update({'winner': 'AI', 'balls': [], 'powerups': []})
+                state.update({'winner': 'P2' if TWO_PLAYER_MODE else 'AI',
+                              'balls': [], 'powerups': []})
                 return state
         elif ball['y'] + BALL_RADIUS < 0:
             state['player_score'] += 1
             if state['player_score'] >= POINTS_TO_WIN:
-                state.update({'winner': 'Player', 'balls': [], 'powerups': []})
+                state.update({'winner': 'P1' if TWO_PLAYER_MODE else 'Player',
+                              'balls': [], 'powerups': []})
                 return state
         else:
             balls_remaining.append(ball)
 
-    # New round only once every ball has been scored
     if not balls_remaining:
         p, a = state['player_score'], state['ai_score']
         state = get_initial_game_state()
@@ -512,11 +645,26 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
     for pu in powerups:
         pu['y'] += pu['vy']
 
+        # Off screen (either end)
         if pu['y'] - POWERUP_RADIUS > GAME_HEIGHT:
-            continue  # fell off screen
+            continue
+        if pu['y'] + POWERUP_RADIUS < 0:
+            continue
 
+        caught = False
+
+        # P1 catch (bottom)
         if (pu['y'] + POWERUP_RADIUS >= GAME_HEIGHT - PADDLE_HEIGHT and
                 abs(state['player_x'] - pu['x']) < PADDLE_WIDTH / 2 + POWERUP_RADIUS):
+            caught = True
+
+        # P2 catch (top, 2-player only)
+        if (not caught and TWO_PLAYER_MODE and
+                pu['y'] - POWERUP_RADIUS <= PADDLE_HEIGHT and
+                abs(state['ai_x'] - pu['x']) < PADDLE_WIDTH / 2 + POWERUP_RADIUS):
+            caught = True
+
+        if caught:
             if pu['type'] == 'fire':
                 speed_mult = min(4.0, speed_mult * 2.0)
             elif pu['type'] == 'ice':
@@ -537,7 +685,7 @@ def update_game_physics(_, state, bci_command, app_status, key_data, settings):
                             'vy': float(-abs(spd * math.cos(a))),
                         })
                 balls_remaining = tripled
-            continue  # caught, remove from active
+            continue
 
         active_powerups.append(pu)
 
@@ -571,8 +719,10 @@ def check_winner(game_state, app_status):
 def update_winner_overlay(app_status):
     if app_status and app_status.get('status') == 'GAME_OVER':
         winner = app_status.get('winner', '???')
-        color_name  = 'Red'   if winner == 'AI'     else 'Green'
-        text_color  = '#ff5252' if winner == 'AI'   else '#33ff66'
+        top_wins = winner in ('AI', 'P2')
+        text_color = '#ff5252' if top_wins else '#33ff66'
+        display_map = {'AI': 'AI', 'Player': 'Player', 'P1': 'Player 1', 'P2': 'Player 2'}
+        display_name = display_map.get(winner, winner)
         return (
             {
                 'position': 'absolute', 'top': '0', 'left': '0',
@@ -583,7 +733,7 @@ def update_winner_overlay(app_status):
                 'zIndex': '10',
             },
             html.Div([
-                html.Div(f"{color_name} Wins!!!",
+                html.Div(f"{display_name} Wins!!!",
                          style={'fontSize': '64px', 'color': text_color, 'fontWeight': 'bold'}),
                 html.Div("Click  Start New Game  to play again",
                          style={'fontSize': '18px', 'color': '#ccc', 'marginTop': '16px'}),
@@ -611,15 +761,23 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
     new_status     = status
     new_game_state = no_update
 
+    needs_eog_flow = EOG_MODE or (TWO_PLAYER_MODE and not NO_BOARD_MODE)
+
     if triggered_id == 'pause-button' and pause_clicks > 0:
         new_status = 'PAUSED' if status != 'PAUSED' else 'PLAYING'
     elif triggered_id == 'start-button' and start_clicks > 0:
-        new_status     = 'INSTRUCTIONS'
-        countdown      = INSTRUCTIONS_S
         new_game_state = get_initial_game_state()
+        if needs_eog_flow:
+            new_status = 'INSTRUCTIONS'
+            countdown  = INSTRUCTIONS_S
+            states_to_reset = [eog_state, eog_state_p2] if TWO_PLAYER_MODE else [eog_state]
+            for st in states_to_reset:
+                _reset_eog_st(st)
+        else:
+            new_status = 'PLAYING'
     elif triggered_id == 'status-interval':
         if status == 'STARTING':
-            new_status = 'PLAYING' if not EOG_MODE else status
+            new_status = 'PLAYING' if not needs_eog_flow else status
         elif status == 'INSTRUCTIONS':
             countdown -= 0.5
             if countdown <= 0:
@@ -639,11 +797,19 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
             html.Div("3. Keep your eyes completely still",     style={'fontSize': '15px', 'color': '#ccc'}),
         ])
     elif new_status == 'CALIBRATING':
-        msg = f"Calibrating — hold still, eyes forward...  {max(0, int(countdown))}s"
+        who = "Both players — " if TWO_PLAYER_MODE else ""
+        msg = f"Calibrating — {who}hold still, eyes forward...  {max(0, int(countdown))}s"
     elif new_status == 'PLAYING':
-        if NO_BOARD_MODE: msg = "NO BOARD — keyboard only (A/D)"
-        elif EOG_MODE:    msg = "PLAYING — glance left/right to move  |  A/D to override"
-        else:             msg = "PLAYING — A/D keys"
+        if TWO_PLAYER_MODE and NO_BOARD_MODE:
+            msg = "2-PLAYER — P1: A/D  |  P2: ←/→"
+        elif TWO_PLAYER_MODE:
+            msg = "2-PLAYER EOG — glance to move  |  P1: A/D override  |  P2: ←/→ override"
+        elif NO_BOARD_MODE:
+            msg = "NO BOARD — keyboard only (A/D)"
+        elif EOG_MODE:
+            msg = "PLAYING — glance left/right to move  |  A/D to override"
+        else:
+            msg = "PLAYING — A/D keys"
     elif new_status == 'PAUSED':
         msg = "PAUSED"
     else:
@@ -652,7 +818,11 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
     bci_disabled  = NO_BOARD_MODE or (new_status not in ('PLAYING', 'CALIBRATING'))
     game_disabled = new_status in ('PAUSED', 'GAME_OVER')
 
-    return msg, {'status': new_status, 'countdown': countdown}, new_game_state, bci_disabled, game_disabled
+    new_app_status = {'status': new_status, 'countdown': countdown}
+    if app_status.get('winner') and new_status == 'GAME_OVER':
+        new_app_status['winner'] = app_status['winner']
+
+    return msg, new_app_status, new_game_state, bci_disabled, game_disabled
 
 
 # ==============================================================================
@@ -662,14 +832,23 @@ def main():
     global board, sampling_rate
 
     if NO_BOARD_MODE:
-        print("NO-BOARD MODE: keyboard only (A/D).")
-        log = logging.getLogger('werkzeug')
-        log.setLevel(logging.ERROR)
+        mode_msg = ("2-PLAYER NO-BOARD: P1=A/D, P2=←/→." if TWO_PLAYER_MODE
+                    else "NO-BOARD MODE: keyboard only (A/D).")
+        print(mode_msg)
+        logging.getLogger('werkzeug').setLevel(logging.ERROR)
         print("Open http://127.0.0.1:8050/ in your browser.")
         app.run(debug=False, use_reloader=False)
         return
 
-    if EOG_MODE:
+    if TWO_PLAYER_MODE:
+        print("=" * 60)
+        print("2-PLAYER EOG MODE")
+        print("P1 (bottom, green): ch1–2. Glance left→center / right→center.")
+        print("P2 (top,    red  ): ch3–4. Same gestures.")
+        print("Players hold hands — shared bias electrode is fine.")
+        print("Both sit still during baseline calibration.")
+        print("=" * 60)
+    elif EOG_MODE:
         print("=" * 60)
         print("EOG MODE: glance-pair detector active.")
         print("Glance left→center to move left; right→center to move right.")
@@ -687,20 +866,27 @@ def main():
         all_eeg_channels = BoardShim.get_eeg_channels(BOARD_ID)
         print(f"Board connected. Sampling rate: {sampling_rate} Hz")
 
-        if EOG_MODE:
+        if EOG_MODE or TWO_PLAYER_MODE:
             eog_state['sr']   = sampling_rate
             eog_state['ch_L'] = all_eeg_channels[EOG_SLOT_L]
             eog_state['ch_R'] = all_eeg_channels[EOG_SLOT_R]
-            print(f"EOG channels: ch_L={eog_state['ch_L']}  ch_R={eog_state['ch_R']}")
+            print(f"P1 EOG channels: ch_L={eog_state['ch_L']}  ch_R={eog_state['ch_R']}")
+
+        if TWO_PLAYER_MODE:
+            eog_state_p2['sr']   = sampling_rate
+            eog_state_p2['ch_L'] = all_eeg_channels[EOG_SLOT_L2]
+            eog_state_p2['ch_R'] = all_eeg_channels[EOG_SLOT_R2]
+            print(f"P2 EOG channels: ch_L={eog_state_p2['ch_L']}  ch_R={eog_state_p2['ch_R']}")
 
         print("Starting data stream...")
         board.start_stream(450000)
         time.sleep(1.0)
 
-        log = logging.getLogger('werkzeug')
-        log.setLevel(logging.ERROR)
+        logging.getLogger('werkzeug').setLevel(logging.ERROR)
         print("Open http://127.0.0.1:8050/ in your browser.")
-        if EOG_MODE:
+        if TWO_PLAYER_MODE:
+            print("Both players sit still for baseline calibration, then glance to play.")
+        elif EOG_MODE:
             print("Sit still for 3 s — baseline calibrating, then glance to play.")
         app.run(debug=False, use_reloader=False)
     except Exception as e:
