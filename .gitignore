@@ -45,3 +45,7 @@ env/
 # Misc
 tmp/
 .cache/
+
+# Test artifacts
+.coverage
+.pytest_cache/

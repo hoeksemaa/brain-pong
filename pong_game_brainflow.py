@@ -31,7 +31,15 @@ if TWO_PLAYER_MODE and EOG_MODE:
 
 # --- BrainFlow ---
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
-from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
+
+# Shared EOG detection core — identical for the 1-player and 2-player paths.
+# Detection logic + its constants live in eog_core.py so they're testable
+# without standing up Dash/the board; don't re-inline them here.
+from eog_core import (
+    EOG_SIGMA_THR, EOG_BASELINE_S,
+    eog_diff, _make_eog_state, _eog_filter, _sustained_crossing,
+    _run_eog_sm, _reset_eog_st,
+)
 
 # ==============================================================================
 # === 1. CONFIGURATION =========================================================
@@ -57,14 +65,9 @@ EOG_SLOT_R  = 1   # P1 right
 EOG_SLOT_L2 = 2   # P2 left
 EOG_SLOT_R2 = 3   # P2 right
 
-EOG_LPF_HZ      = 100.0
-EOG_HPF_HZ      = 0.5
-EOG_SIGMA_THR   = 5.0
-EOG_MIN_DUR_MS  = 12.0
-GLANCE_WINDOW_S  = 0.7
-ARMED_MIN_WAIT_S = 0.05
-REFRACTORY_S     = 0.8
-EOG_BASELINE_S   = 5.0
+# Detection constants (EOG_LPF/HPF_HZ, EOG_SIGMA_THR, EOG_MIN_DUR_MS,
+# GLANCE_WINDOW_S, ARMED_MIN_WAIT_S, REFRACTORY_S, EOG_BASELINE_S) now live in
+# eog_core. The knobs below are game-loop poll/UI timing, not the detector.
 INSTRUCTIONS_S   = 5.0
 EOG_POLL_S       = 0.1
 EOG_SETTLE_S     = 0.4
@@ -76,53 +79,16 @@ board         = None
 sampling_rate = 0
 
 
-def _make_eog_state():
-    return {
-        'ch_L': None, 'ch_R': None, 'sr': None,
-        'sm': 'CALIBRATING',
-        'baseline_acc': [],
-        'baseline_sigma': None,
-        'first_dir': None,
-        'arm_time': None,
-        'last_cmd_time': 0.0,
-        'cmd_seq': 0,
-    }
-
-
 eog_state    = _make_eog_state()
 eog_state_p2 = _make_eog_state()
 
 
-def _eog_filter(x_uv, sr):
-    """0.5–100 Hz causal IIR chain — mirrors segment_diff_filter preprocessing."""
-    y = np.ascontiguousarray(x_uv.astype(np.float64))
-    if y.size < 20:
-        return y
-    DataFilter.detrend(y, DetrendOperations.CONSTANT.value)
-    DataFilter.perform_lowpass(y, sr, EOG_LPF_HZ, 4, FilterTypes.BUTTERWORTH.value, 0)
-    for lo, hi in ((48.0, 52.0), (58.0, 62.0)):
-        DataFilter.perform_bandstop(y, sr, lo, hi, 3, FilterTypes.BUTTERWORTH.value, 0)
-    DataFilter.perform_highpass(y, sr, EOG_HPF_HZ, 4, FilterTypes.BUTTERWORTH.value, 0)
-    return y
-
-
-def _sustained_crossing(signal, sigma, sr):
-    """Returns 'LEFT'/'RIGHT' if |signal| > EOG_SIGMA_THR×σ for ≥ EOG_MIN_DUR_MS, else None."""
-    if sigma < 1e-9 or signal.size == 0:
-        return None
-    thr     = EOG_SIGMA_THR * sigma
-    min_dur = max(1, int(EOG_MIN_DUR_MS / 1000 * sr))
-    above   = np.abs(signal) > thr
-    conv    = np.convolve(above.astype(np.int32), np.ones(min_dur, dtype=np.int32), mode='valid')
-    hits    = np.where(conv == min_dur)[0]
-    if len(hits) == 0:
-        return None
-    onset = int(hits[0])
-    return 'RIGHT' if signal[onset] > 0 else 'LEFT'
-
-
 def _poll_eog(eog_st):
-    """Pull latest window from board, filter, return new_sig slice or None."""
+    """Pull latest window from board, filter, return new_sig slice or None.
+
+    Hardware-bound (reads the global `board`), so it stays here; the pure parts
+    (eog_diff, _eog_filter) live in eog_core and are tested there.
+    """
     if board is None or eog_st['ch_L'] is None or eog_st['sr'] is None:
         return None
     sr       = eog_st['sr']
@@ -131,60 +97,9 @@ def _poll_eog(eog_st):
     data = board.get_current_board_data(n_settle + n_new)
     if data.shape[1] < n_settle + n_new:
         return None
-    diff_raw = (data[eog_st['ch_R']] - data[eog_st['ch_L']]) * 1e6
+    diff_raw = eog_diff(data, eog_st['ch_R'], eog_st['ch_L'])
     filtered = _eog_filter(diff_raw.copy(), sr)
     return filtered[-n_new:]
-
-
-def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
-    """Advance one EOG state machine tick. Returns a command dict or None."""
-    if eog_st['sm'] == 'CALIBRATING':
-        eog_st['baseline_acc'].append(new_sig.copy())
-        total = np.concatenate(eog_st['baseline_acc'])
-        if total.size >= int(EOG_BASELINE_S * eog_st['sr']):
-            eog_st['baseline_sigma'] = float(np.std(total))
-            eog_st['sm'] = 'IDLE'
-            print(f"[{label}] baseline σ = {eog_st['baseline_sigma']:.2f} µV — ready")
-        return None
-
-    if eog_st['sm'] == 'REFRACTORY':
-        if now - eog_st['last_cmd_time'] > REFRACTORY_S:
-            eog_st['sm'] = 'IDLE'
-        return None
-
-    sigma    = eog_st['baseline_sigma']
-    crossing = _sustained_crossing(new_sig, sigma, eog_st['sr'])
-
-    if eog_st['sm'] == 'IDLE':
-        if crossing is not None:
-            eog_st['sm']        = 'ARMED'
-            eog_st['first_dir'] = crossing
-            eog_st['arm_time']  = now
-
-    elif eog_st['sm'] == 'ARMED':
-        if now - eog_st['arm_time'] > GLANCE_WINDOW_S:
-            eog_st['sm']        = 'IDLE'
-            eog_st['first_dir'] = None
-        elif now - eog_st['arm_time'] > ARMED_MIN_WAIT_S and crossing is not None:
-            opposite = {'LEFT': 'RIGHT', 'RIGHT': 'LEFT'}
-            if crossing == opposite.get(eog_st['first_dir']):
-                cmd = eog_st['first_dir']
-                eog_st['cmd_seq']      += 1
-                eog_st['last_cmd_time'] = now
-                eog_st['sm']            = 'REFRACTORY'
-                eog_st['first_dir']     = None
-                print(f"[{label}] command={cmd}  seq={eog_st['cmd_seq']}")
-                return {'command': cmd, 'seq': eog_st['cmd_seq']}
-    return None
-
-
-def _reset_eog_st(eog_st):
-    eog_st['sm']             = 'CALIBRATING'
-    eog_st['baseline_acc']   = []
-    eog_st['baseline_sigma'] = None
-    eog_st['first_dir']      = None
-    eog_st['arm_time']       = None
-    eog_st['last_cmd_time']  = 0.0
 
 
 # ==============================================================================
@@ -409,7 +324,7 @@ def _make_eog_figure(eog_st, title, line_color, thr_color):
     data  = board.get_current_board_data(n_req)
     if data.shape[1] < 20:
         return None
-    diff_raw = (data[eog_st['ch_R']] - data[eog_st['ch_L']]) * 1e6
+    diff_raw = eog_diff(data, eog_st['ch_R'], eog_st['ch_L'])
     filtered = _eog_filter(diff_raw.copy(), sr)
     n_pts    = len(filtered)
     t        = np.linspace(-n_pts / sr, 0, n_pts)
