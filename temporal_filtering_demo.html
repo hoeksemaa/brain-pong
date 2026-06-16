@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Temporal Filtering in BCIs — interactive demo</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#c9d1d9; --dim:#8b949e;
+          --sig:#3fb950; --raw:#6e7681; --accent:#58a6ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .wrap { max-width:980px; margin:0 auto; padding:24px 20px 60px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin:0 0 20px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px 28px;
+          background:var(--panel); border:1px solid var(--line);
+          border-radius:8px; padding:16px 18px; margin-bottom:18px; }
+  .col h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+            color:var(--dim); margin:0 0 10px; border-bottom:1px solid var(--line);
+            padding-bottom:6px; }
+  .row { display:flex; align-items:center; gap:10px; margin:7px 0; }
+  .row label { flex:0 0 116px; color:var(--fg); }
+  .row input[type=range] { flex:1; accent-color:var(--accent); min-width:0; }
+  .row .val { flex:0 0 64px; text-align:right; color:var(--accent); }
+  .row.chk label { flex:1; }
+  .row input[type=checkbox] { accent-color:var(--sig); width:16px; height:16px; }
+  button { background:#21262d; color:var(--fg); border:1px solid var(--line);
+           border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--accent); }
+  .plot { background:var(--panel); border:1px solid var(--line);
+          border-radius:8px; padding:10px 12px 4px; margin-bottom:16px; }
+  .plot .cap { display:flex; justify-content:space-between; align-items:baseline;
+               color:var(--dim); font-size:12px; margin-bottom:4px; }
+  .legend span { margin-left:14px; }
+  .legend .sw { display:inline-block; width:11px; height:11px; vertical-align:-1px;
+                margin-right:4px; border-radius:2px; }
+  canvas { width:100%; display:block; }
+  .snr { color:var(--sig); }
+  code { color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Temporal filtering in BCIs</h1>
+  <p class="sub">A µV neural signal buried under drift, mains hum &amp; noise. Sculpt the
+     frequency content per-channel until the signal pops out. Defaults mirror the BrainPong
+     SSVEP chain: <code>HP 5 → LP 45 → notch 60</code>.</p>
+
+  <div class="grid">
+    <div class="col">
+      <h2>Synthetic signal (the "electrode")</h2>
+      <div class="row"><label>Neural freq</label><input id="sigFreq" type="range" min="5" max="40" step="1" value="10"><span class="val" id="sigFreqV"></span></div>
+      <div class="row"><label>Neural amp</label><input id="sigAmp" type="range" min="0" max="2" step="0.05" value="1"><span class="val" id="sigAmpV"></span></div>
+      <div class="row"><label>Drift (~0.4Hz)</label><input id="driftAmp" type="range" min="0" max="6" step="0.1" value="3"><span class="val" id="driftAmpV"></span></div>
+      <div class="row"><label>60Hz mains</label><input id="mainsAmp" type="range" min="0" max="6" step="0.1" value="4"><span class="val" id="mainsAmpV"></span></div>
+      <div class="row"><label>Broadband noise</label><input id="noiseAmp" type="range" min="0" max="1" step="0.02" value="0.3"><span class="val" id="noiseAmpV"></span></div>
+      <div class="row"><button id="regen">↻ regenerate noise</button></div>
+    </div>
+    <div class="col">
+      <h2>Temporal filters (causal IIR, real-time)</h2>
+      <div class="row chk"><input id="hpOn" type="checkbox" checked><label>High-pass — kill drift/DC</label></div>
+      <div class="row"><label>↳ cutoff</label><input id="hpFreq" type="range" min="0.5" max="20" step="0.5" value="5"><span class="val" id="hpFreqV"></span></div>
+      <div class="row chk"><input id="lpOn" type="checkbox" checked><label>Low-pass — kill EMG/HF</label></div>
+      <div class="row"><label>↳ cutoff</label><input id="lpFreq" type="range" min="10" max="120" step="1" value="45"><span class="val" id="lpFreqV"></span></div>
+      <div class="row chk"><input id="notch60" type="checkbox" checked><label>Notch 60Hz — US mains</label></div>
+      <div class="row chk"><input id="notch50" type="checkbox"><label>Notch 50Hz — EU mains</label></div>
+    </div>
+  </div>
+
+  <div class="plot">
+    <div class="cap">
+      <span>Time domain — 2&nbsp;s window <span class="snr" id="snrTime"></span></span>
+      <span class="legend"><span><span class="sw" style="background:var(--raw)"></span>raw</span><span><span class="sw" style="background:var(--sig)"></span>filtered</span></span>
+    </div>
+    <canvas id="timeCanvas" height="220"></canvas>
+  </div>
+
+  <div class="plot">
+    <div class="cap">
+      <span>Frequency domain — magnitude (dB) vs Hz</span>
+      <span class="legend"><span><span class="sw" style="background:var(--raw)"></span>raw spectrum</span><span><span class="sw" style="background:var(--sig)"></span>filtered spectrum</span></span>
+    </div>
+    <canvas id="freqCanvas" height="220"></canvas>
+  </div>
+</div>
+
+<script>
+"use strict";
+const Fs = 256, N = 1024;            // 256 Hz sample rate, 4 s buffer, 0.25 Hz bins
+
+// ---------- deterministic noise so filter-only tweaks show clean before/after ----------
+let seed = 1;
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function randn(rng){let u=0,v=0;while(u===0)u=rng();while(v===0)v=rng();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+
+// ---------- RBJ cookbook biquads (a0-normalized), applied causally (Direct Form I) ------
+function lowpass(f0,Q){const w=2*Math.PI*f0/Fs,c=Math.cos(w),s=Math.sin(w),al=s/(2*Q),a0=1+al;
+  return {b0:(1-c)/2/a0,b1:(1-c)/a0,b2:(1-c)/2/a0,a1:-2*c/a0,a2:(1-al)/a0};}
+function highpass(f0,Q){const w=2*Math.PI*f0/Fs,c=Math.cos(w),s=Math.sin(w),al=s/(2*Q),a0=1+al;
+  return {b0:(1+c)/2/a0,b1:-(1+c)/a0,b2:(1+c)/2/a0,a1:-2*c/a0,a2:(1-al)/a0};}
+function notch(f0,Q){const w=2*Math.PI*f0/Fs,c=Math.cos(w),s=Math.sin(w),al=s/(2*Q),a0=1+al;
+  return {b0:1/a0,b1:-2*c/a0,b2:1/a0,a1:-2*c/a0,a2:(1-al)/a0};}
+function applyBiquad(x,k){const y=new Float64Array(x.length);let x1=0,x2=0,y1=0,y2=0;
+  for(let n=0;n<x.length;n++){const xn=x[n];const yn=k.b0*xn+k.b1*x1+k.b2*x2-k.a1*y1-k.a2*y2;
+    x2=x1;x1=xn;y2=y1;y1=yn;y[n]=yn;}return y;}
+
+// ---------- iterative radix-2 FFT (in place) ----------
+function fft(re,im){const n=re.length;
+  for(let i=1,j=0;i<n;i++){let bit=n>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;
+    if(i<j){[re[i],re[j]]=[re[j],re[i]];[im[i],im[j]]=[im[j],im[i]];}}
+  for(let len=2;len<=n;len<<=1){const ang=-2*Math.PI/len,wr=Math.cos(ang),wi=Math.sin(ang);
+    for(let i=0;i<n;i+=len){let cr=1,ci=0;
+      for(let k=0;k<len/2;k++){const a=i+k,b=i+k+len/2;
+        const vr=re[b]*cr-im[b]*ci,vi=re[b]*ci+im[b]*cr;
+        re[b]=re[a]-vr;im[b]=im[a]-vi;re[a]+=vr;im[a]+=vi;
+        const ncr=cr*wr-ci*wi;ci=cr*wi+ci*wr;cr=ncr;}}}
+}
+function spectrumDb(x){ // Hann-windowed single-sided magnitude in dB
+  const re=new Float64Array(N),im=new Float64Array(N);
+  for(let n=0;n<N;n++){const w=0.5*(1-Math.cos(2*Math.PI*n/(N-1)));re[n]=x[n]*w;}
+  fft(re,im);
+  const half=N/2,db=new Float64Array(half);
+  for(let k=0;k<half;k++){const mag=Math.hypot(re[k],im[k])/N*2;db[k]=20*Math.log10(mag+1e-9);}
+  return db;
+}
+function snrDb(db,fHz){ // power in signal bin ±2 vs everything else (skip DC)
+  const bin=Math.round(fHz/(Fs/N));let s=0,no=0;
+  for(let k=2;k<db.length;k++){const p=Math.pow(10,db[k]/10);
+    if(Math.abs(k-bin)<=2)s+=p;else no+=p;}
+  return 10*Math.log10((s+1e-12)/(no+1e-12));
+}
+
+// ---------- DOM ----------
+const $=id=>document.getElementById(id);
+const ctrls=["sigFreq","sigAmp","driftAmp","mainsAmp","noiseAmp","hpOn","hpFreq",
+             "lpOn","lpFreq","notch60","notch50"];
+function num(id){return parseFloat($(id).value);}
+
+function buildRaw(){
+  const rng=mulberry32(seed);
+  const sigF=num("sigFreq"),sigA=num("sigAmp"),drA=num("driftAmp"),
+        maA=num("mainsAmp"),noA=num("noiseAmp");
+  const x=new Float64Array(N);
+  for(let n=0;n<N;n++){const t=n/Fs;
+    x[n]=sigA*Math.sin(2*Math.PI*sigF*t)
+        +drA*Math.sin(2*Math.PI*0.4*t)+0.4*drA   // slow drift + DC offset
+        +maA*Math.sin(2*Math.PI*60*t)
+        +noA*8*randn(rng);}
+  return x;
+}
+function filter(x){
+  let y=x;
+  if($("hpOn").checked) y=applyBiquad(y,highpass(num("hpFreq"),0.707));
+  if($("lpOn").checked) y=applyBiquad(y,lowpass(num("lpFreq"),0.707));
+  if($("notch60").checked) y=applyBiquad(y,notch(60,18));
+  if($("notch50").checked) y=applyBiquad(y,notch(50,18));
+  return y;
+}
+
+// ---------- drawing ----------
+function setup(c){const dpr=window.devicePixelRatio||1;const w=c.clientWidth||900;
+  c.width=w*dpr;c.height=220*dpr;const ctx=c.getContext("2d");ctx.scale(dpr,dpr);
+  return {ctx,w,h:220};}
+function clear(ctx,w,h){ctx.clearRect(0,0,w,h);ctx.fillStyle="#0d1117";ctx.fillRect(0,0,w,h);}
+
+function drawTime(rawF,filtF){
+  const {ctx,w,h}=setup($("timeCanvas"));clear(ctx,w,h);
+  const pad=34,off=256,M=512;             // skip startup transient, show 2 s
+  let mx=1e-9;for(let i=0;i<M;i++)mx=Math.max(mx,Math.abs(rawF[off+i]));
+  const X=i=>pad+i/(M-1)*(w-pad-8);
+  const Y=v=>h/2-v/mx*(h/2-14);
+  // grid + zero line
+  ctx.strokeStyle="#21262d";ctx.lineWidth=1;
+  for(let s=0;s<=2;s+=0.5){const xx=pad+s/2*(w-pad-8);ctx.beginPath();ctx.moveTo(xx,8);ctx.lineTo(xx,h-18);ctx.stroke();}
+  ctx.strokeStyle="#30363d";ctx.beginPath();ctx.moveTo(pad,h/2);ctx.lineTo(w-8,h/2);ctx.stroke();
+  ctx.fillStyle="#8b949e";ctx.font="11px monospace";
+  for(let s=0;s<=2;s+=0.5){ctx.fillText(s+"s",pad+s/2*(w-pad-8)-6,h-5);}
+  const trace=(arr,col,lw)=>{ctx.strokeStyle=col;ctx.lineWidth=lw;ctx.beginPath();
+    for(let i=0;i<M;i++){const xx=X(i),yy=Y(arr[off+i]);i?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy);}ctx.stroke();};
+  trace(rawF,"#6e7681",1);
+  trace(filtF,"#3fb950",1.8);
+}
+function drawFreq(rawDb,filtDb){
+  const {ctx,w,h}=setup($("freqCanvas"));clear(ctx,w,h);
+  const pad=34,fmax=Fs/2,dbLo=-70,dbHi=15,half=N/2;
+  const X=f=>pad+f/fmax*(w-pad-8);
+  const Y=d=>{const c=Math.max(dbLo,Math.min(dbHi,d));return 8+(dbHi-c)/(dbHi-dbLo)*(h-26);};
+  ctx.strokeStyle="#21262d";ctx.fillStyle="#8b949e";ctx.font="11px monospace";ctx.lineWidth=1;
+  for(let f=0;f<=120;f+=20){const xx=X(f);ctx.beginPath();ctx.moveTo(xx,8);ctx.lineTo(xx,h-18);ctx.stroke();
+    ctx.fillText(f+"Hz",xx-9,h-5);}
+  const trace=(db,col,lw)=>{ctx.strokeStyle=col;ctx.lineWidth=lw;ctx.beginPath();
+    for(let k=1;k<half;k++){const xx=X(k*Fs/N),yy=Y(db[k]);k>1?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy);}ctx.stroke();};
+  trace(rawDb,"#6e7681",1);
+  trace(filtDb,"#3fb950",1.6);
+  // mark the neural target freq
+  const sf=num("sigFreq");ctx.strokeStyle="#58a6ff55";ctx.setLineDash([4,4]);
+  ctx.beginPath();ctx.moveTo(X(sf),8);ctx.lineTo(X(sf),h-18);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle="#58a6ff";ctx.fillText("signal",X(sf)+3,16);
+}
+
+function render(){
+  ctrls.forEach(id=>{const el=$(id+"V");if(el)el.textContent=$(id).value;});
+  const raw=buildRaw(), filt=filter(raw);
+  drawTime(raw,filt);
+  const rdb=spectrumDb(raw), fdb=spectrumDb(filt), sf=num("sigFreq");
+  drawFreq(rdb,fdb);
+  $("snrTime").textContent="·  SNR @"+sf+"Hz:  "+snrDb(rdb,sf).toFixed(1)+" → "+snrDb(fdb,sf).toFixed(1)+" dB";
+}
+
+ctrls.forEach(id=>$(id).addEventListener("input",render));
+$("regen").addEventListener("click",()=>{seed++;render();});
+window.addEventListener("resize",render);
+render();
+</script>
+</body>
+</html>

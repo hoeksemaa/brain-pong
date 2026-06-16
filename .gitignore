@@ -49,3 +49,9 @@ tmp/
 # Test artifacts
 .coverage
 .pytest_cache/
+
+# Personal notes (local only)
+notes/
+
+# Claude Code local/personal settings
+.claude/settings.local.json
