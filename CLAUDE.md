@@ -11,6 +11,58 @@ recordings/eog/   — EOG session recordings (protocol_version: 'eog-v1')
 
 New EOG scripts live at the repo root. Don't put EOG work inside `archive/`.
 
+## EOG diagnostic dashboard (active build)
+
+Goal: a **live raw-data dashboard** (frontend display + backend store) to tease apart an oscillating-noise problem on the current rig — 2 electrodes at the outer canthi (differential pair into one channel) + a single **active bias-drive** ear clip, **no ground**. Scope is deliberately minimal: display + store raw signal only. **No filtering, no real-signal extraction, no formal `.npz` recording protocol yet.**
+
+Why live (not record→offline): every diagnostic test is an *interactive manipulation* (re-prep electrode, switch to battery, toggle `PD_BIAS`/`MUX`), so the signal must respond under your hands in real time. "Raw" means genuinely raw: pre-filter, pre-HPF, in real units, with an explicit clip/rail indicator — quietly running the existing filter chain would hide the exact failures (#2 CMRR-collapse, #3 DC-rail) we're hunting. Adapt `archive/eog_filtered_plot.py` / `archive/filtered_plot.py`; don't greenfield a new Dash app.
+
+### Datapoints each recording stores
+
+**Per-recording (session metadata, constant within a recording):**
+
+| field | notes |
+|---|---|
+| Unix start time | when the session began; doubles as a natural ID |
+| Sample rate (fs) | ticks/sec (e.g. 250); denominator for the time axis |
+| Gain | amp setting (e.g. ×24); converts counts→volts *and* sets the clip ceiling. **Changing gain = new recording** |
+| Signal unit | what the stored numbers are: raw counts vs µV (BrainFlow may pre-convert — record which) |
+| Board used | which physical board |
+| Person recorded | subject |
+| Method / montage | e.g. "2 electrodes at outer canthi (differential) + active bias on ear clip, no ground" |
+| Free-text notes | catch-all; defaults to blank |
+
+**Per-sample (every tick):**
+
+| field | notes |
+|---|---|
+| Running sample count | 0,1,2,3… — gives the honest evenly-spaced timeline and catches dropped data |
+| Raw signal | measured value(s), one per channel, in the unit named above |
+
+**Event markers (sparse):** a label + the sample count (or time) it occurred at, so it pins to the signal.
+
+Sample time is **derived, not stored**: `start_time + count / fs`. Use that uniform `n/fs` axis for any spectral/frequency analysis — *not* host arrival timestamps (USB delivers samples in bursts, so arrival times are lumpy and would smear the PSD). Clip/rail = signal approaching the ceiling implied by gain (≈ ±4.5 V / gain referred to input; ±187 mV at ×24).
+
+**Deliberately deferred** (flagged, not adopted in v1 — don't treat as oversights): structured per-segment instrument condition (`PD_BIAS`/`MUX` state per chunk — for now lives in free-text notes), structured electrode→channel→site map (cf. [[project_electrode_swap_john]]), lead-off / status-word ΔZ readout, and versioning (dashboard SHA / brainflow-fork / schema tag).
+
+### Static raw-waveform web viewer (built — `web/`)
+
+The **goal is a public, globally-accessible website** (not a local tool) — owner wants anyone to view the raw waveforms; data is public by policy. First shipped piece: a **static site** plotting RAW waveforms of `recordings/eog/` sessions (no filtering). `web/build.py` reads each `eog-v1-labeled` npz → min/max-decimated JSON (`web/data/*.json` + `manifest.json`, committed); `web/{index.html,app.js,style.css}` is a Plotly.js page (stacked per-channel, µV, **per-channel autoscale** so the raw DC offset doesn't flatten the trace; dashed LEFT/RIGHT cue lines). No server. **Deploy to Vercel**: root dir = `web/`, framework "Other", no build step (data pre-built). Rerun `python web/build.py` + redeploy after new recordings. Same page can later repoint from npz-JSON to the live SQLite store. Currently includes the 3 `recordings/eog/` sessions only.
+
+### Storage format + live architecture (decided, not yet built)
+
+Live capture will use **SQLite (WAL)**, not npz — npz is write-once (RAM-buffered, no crash durability) with a poor metadata story. Schema: `recording` (per-session metadata), `chunk` (one row per `get_board_data()` chunk; signal as `(n_channels,n_samples)` C-order BLOB, dtype/n_channels in `recording`), `event` (sample-pinned markers). Commit per chunk; `PRAGMA busy_timeout`. Architecture: two decoupled processes through the DB file — `recorder.py` (owns board, only acquires+stores) + frontend (reads via WAL, renders); **SQLite is the bus**, no sockets. Sample time derived `unix_start + sample_index/fs`. Existing 9 npz stay frozen ground truth — conform via a load-time sidecar shim, never re-save. Deduced constants for the old corpus: unit=volts, board=CERELOG_X8 (id 65), start=`eeg[10][0]` (EOG)/`started_at_iso` (SSVEP); **gain not stored anywhere — deduce ×24 (Cerelog default), confirm against fork**.
+
+### Oscillating-noise diagnostic protocol (what the dashboard serves)
+
+Turn each hypothesis into a falsifiable prediction; toggle one variable at a time:
+
+1. **Raw PSD** — frequency IDs the culprit: 60.0 Hz locked + harmonics → mains/CMRR (#2); odd non-mains peak → bias-loop self-oscillation (#1); sub-1 Hz / sawtooth → DC-rail (#3).
+2. **Input-short (`CHnSET` MUX=001)** — partitions board-internal vs electrode-side: oscillation persists → internal; vanishes → input-side.
+3. **`PD_BIAS` off** — splits #1 from #2: dies → #1 (bias loop generating its own oscillation via high-Z ear contact); worse/rails → #2 (mains leaking differential through canthus impedance mismatch ΔZ).
+
+Root of #2 is **electrode-impedance asymmetry** between the two canthi (system CMRR ≈ chip CMRR + ΔZ/Zin_cm), so a matched-electrode bench rig hides it — verdicts must be reproduced on the real canthus montage. See [[project_noise_60hz_cmrr]].
+
 ## Archive contents (SSVEP pong — reference only)
 
 - `archive/pong_game_brainflow.py` — SSVEP Dash app: BrainFlow I/O, DSP, CCA, game loop. ~475 LoC.

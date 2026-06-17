@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BrainPong — raw EOG waveforms</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>BrainPong · raw EOG</h1>
+    <div class="controls">
+      <label for="rec">Recording</label>
+      <select id="rec"></select>
+      <span id="meta" class="meta"></span>
+    </div>
+    <p class="note">
+      Unfiltered signal, µV. Each channel auto-scales independently — the large
+      offset you see is the raw electrode DC potential (proximity to it = clipping risk).
+      Dashed lines mark <span class="L">LEFT</span> / <span class="R">RIGHT</span> gaze cues.
+      Drag to zoom, double-click to reset.
+    </p>
+  </header>
+  <main>
+    <div id="plot"></div>
+    <p id="status" class="status"></p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
