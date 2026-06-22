@@ -27,7 +27,7 @@ Why live (not record→offline): every diagnostic test is an *interactive manipu
 | Sample rate (fs) | ticks/sec (e.g. 250); denominator for the time axis |
 | Gain | amp setting (e.g. ×24); converts counts→volts *and* sets the clip ceiling. **Changing gain = new recording** |
 | Signal unit | what the stored numbers are: raw counts vs µV (BrainFlow may pre-convert — record which) |
-| Board used | which physical board |
+| Board used | single `board` str = model + **which physical unit**, e.g. `"CERELOG_X8 unit:original"`. Model is constant; the unit label (user-asserted via `--board`, default "original") is the part that matters now that a 2nd, possibly-faulty board exists — every recording must pin to one unit. BrainFlow can't distinguish two same-model units over serial, hence asserted not detected. (Numeric board id 65 lives only in the hardcoded `BOARD_ID` constant — runtime needs it, but it's 1:1 with the name so not stored) |
 | Person recorded | subject |
 | Method / montage | e.g. "2 electrodes at outer canthi (differential) + active bias on ear clip, no ground" |
 | Free-text notes | catch-all; defaults to blank |
