@@ -21,7 +21,6 @@ signature rather than raw amplitude, which keeps it robust to drift.
 - `scripts/` — runnable entrypoints (game, recorder, eval, plots).
 - `data/eog/` — labeled EOG sessions (`eog-v1`/`eog-v2`). Read-only ground truth; never mutated.
 - `derivatives/` — regenerable outputs (`derivatives/results/` = benchmark JSON).
-- `web/` — static raw-waveform viewer (deployed to Vercel).
 - `archive/` — prior SSVEP pong work. Reference only; superseded by the EOG approach.
 
 ## Key files

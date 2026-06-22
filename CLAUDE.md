@@ -9,7 +9,6 @@ src/brainpong/    — importable library (eog_core, preprocess, detect); `pip in
 scripts/          — runnable entrypoints (record_eog, eog_display, bench, eval_*, plot_*)
 data/eog/         — EOG session recordings (.npz, protocol_version 'eog-v1'/'eog-v2')
 derivatives/      — regenerable outputs (derivatives/results/ = bench JSON)
-web/              — static raw-waveform viewer (self-contained; Vercel root = web/)
 tests/            — pytest suite (imports brainpong from src/ via conftest)
 archive/          — all prior SSVEP pong work (scripts, recordings, plans, assets)
 plans/, notes/    — planning docs / local notes
@@ -18,7 +17,7 @@ plans/, notes/    — planning docs / local notes
 Library code goes in `src/brainpong/`; new runnable scripts go in `scripts/` and
 import the library as `from brainpong.X import …` (run after `pip install -e .`).
 Don't put EOG work inside `archive/`. Root stays minimal (README, CLAUDE.md,
-AGENTS.md, pyproject.toml only).
+pyproject.toml only).
 
 ## EOG diagnostic dashboard (active build)
 
@@ -55,9 +54,13 @@ Sample time is **derived, not stored**: `start_time + count / fs`. Use that unif
 
 **Deliberately deferred** (flagged, not adopted in v1 — don't treat as oversights): structured per-segment instrument condition (`PD_BIAS`/`MUX` state per chunk — for now lives in free-text notes), structured electrode→channel→site map (cf. [[project_electrode_swap_john]]), lead-off / status-word ΔZ readout, and versioning (dashboard SHA / brainflow-fork / schema tag).
 
-### Static raw-waveform web viewer (built — `web/`)
+### Raw-waveform web viewer — REMOVED
 
-The **goal is a public, globally-accessible website** (not a local tool) — owner wants anyone to view the raw waveforms; data is public by policy. First shipped piece: a **static site** plotting RAW waveforms of `data/eog/` sessions (no filtering). `web/build.py` reads each `eog-v1`/`eog-v2-labeled` npz from `data/eog/` → min/max-decimated JSON (`web/data/*.json` + `manifest.json`, committed); `web/{index.html,app.js,style.css}` is a Plotly.js page (stacked per-channel, µV, **per-channel autoscale** so the raw DC offset doesn't flatten the trace; dashed LEFT/RIGHT cue lines). No server. **Deploy to Vercel**: root dir = `web/`, framework "Other", no build step (data pre-built). `web/` is kept intact as a self-contained deployable (its `build.py` is the one script that stays out of `scripts/`, and its decimated `web/data/*.json` is a derivative coupled to the deploy). Rerun `python web/build.py` + redeploy after new recordings. Same page can later repoint from npz-JSON to the live SQLite store.
+A static Plotly.js viewer (`web/`, npz→decimated-JSON, Vercel-deployed) was the
+first attempt at a public raw-waveform website. **Removed 2026-06-22 — it never
+worked.** The underlying *goal* (a public, globally-accessible site to view raw
+waveforms; data is public by policy) may be revisited, but any future viewer
+starts fresh, ideally reading the live SQLite store rather than pre-built JSON.
 
 ### Storage format + live architecture (decided, not yet built)
 

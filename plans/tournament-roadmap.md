@@ -81,8 +81,7 @@ Toggle **one variable at a time**. Start with the no-firmware-needed manipulatio
 
 Robust detection needs clean ground truth captured under the locked protocol.
 
-- [ ] **Record ≥3 fresh clean sessions** under the new prep protocol (yourself + dry-run subjects if available). *Done when:* npz in `recordings/eog/`, event→waveform alignment eyeballed.
-- [ ] **Rebuild the public viewer** (`python web/build.py`) and confirm new sessions render raw. *Done when:* manifest updated, page shows them.
+- [ ] **Record ≥3 fresh clean sessions** under the new prep protocol (yourself + dry-run subjects if available). *Done when:* npz in `data/eog/`, event→waveform alignment eyeballed.
 
 ---
 
