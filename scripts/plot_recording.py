@@ -1,13 +1,13 @@
 """
 Offline EOG recording viewer.
 
-Loads a recordings/eog/*.npz file and plots the full session with event
+Loads a data/eog/*.npz file and plots the full session with event
 markers so you can visually verify signal quality and label alignment.
 
 Usage:
     source .venv/bin/activate
-    python plot_recording.py                         # latest recording
-    python plot_recording.py recordings/eog/foo.npz  # specific file
+    python scripts/plot_recording.py                         # latest recording
+    python scripts/plot_recording.py data/eog/foo.npz  # specific file
 """
 
 import sys
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 
-RECORDINGS_DIR = Path(__file__).parent / "recordings" / "eog"
+RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "data" / "eog"
 
 LPF_HZ      = 100.0
 HPF_HZ      = 0.5
@@ -70,7 +70,7 @@ def main():
     else:
         files = sorted(RECORDINGS_DIR.glob("*.npz"))
         if not files:
-            print("No recordings found in recordings/eog/")
+            print("No recordings found in data/eog/")
             return
         path = files[-1]
 

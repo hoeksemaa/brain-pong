@@ -7,8 +7,8 @@ If they're dead you'll see a flat line at 0.
 
 Usage:
     source .venv/bin/activate
-    python eog_display.py
-    python eog_display.py --slots 4 5   # override if needed
+    python scripts/eog_display.py
+    python scripts/eog_display.py --slots 4 5   # override if needed
 """
 
 import argparse

@@ -1,14 +1,13 @@
 """
 Pytest bootstrap for the BrainPong test suite.
 
-Keeps the suite fully self-contained under tests/: the only thing it needs from
-the software side is for the repo root to be importable so `import eog_core`
-resolves. We add it to sys.path here rather than adding a pyproject/pytest.ini
-to the repo root, so nothing outside tests/ changes.
+Makes the `brainpong` package importable from `src/` without requiring a
+`pip install -e .` first, so the suite runs standalone. (The editable install
+also works; this is a zero-setup fallback.)
 """
 import pathlib
 import sys
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_SRC = pathlib.Path(__file__).resolve().parent.parent / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))

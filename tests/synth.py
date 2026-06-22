@@ -8,7 +8,7 @@ the minimal signal shapes that pin each behaviour. Sample rate defaults to
 """
 import numpy as np
 
-from eog_core import _make_eog_state
+from brainpong.eog_core import _make_eog_state
 
 SR = 250  # Hz, matches the X8
 

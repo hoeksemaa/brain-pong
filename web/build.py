@@ -16,7 +16,7 @@ import numpy as np
 from pathlib import Path
 
 REPO      = Path(__file__).resolve().parent.parent
-SRC_DIRS  = [REPO / "recordings" / "eog"]          # canonical labeled sessions
+SRC_DIRS  = [REPO / "data" / "eog"]          # canonical labeled sessions
 OUT_DIR   = Path(__file__).resolve().parent / "data"
 TARGET_BUCKETS = 3000                               # ≈6000 pts/channel after min/max
 

@@ -17,9 +17,9 @@ Standard filter chain applied per channel before computing diff:
 Use --raw to skip filtering (shows electrode drift — saccades will be tiny).
 
 Usage:
-    python plot_subjects.py                          # all recordings/eog/*.npz
-    python plot_subjects.py recordings/eog/foo.npz   # specific file(s)
-    python plot_subjects.py --raw                    # no filtering
+    python scripts/plot_subjects.py                          # all data/eog/*.npz
+    python scripts/plot_subjects.py data/eog/foo.npz   # specific file(s)
+    python scripts/plot_subjects.py --raw                    # no filtering
 """
 
 import argparse
@@ -31,7 +31,7 @@ from pathlib import Path
 
 from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 
-RECORDINGS_DIR = Path(__file__).parent / "recordings" / "eog"
+RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "data" / "eog"
 
 LPF_HZ      = 100.0
 HPF_HZ      = 0.5
@@ -110,7 +110,7 @@ def prepare(rec, apply_filter=True, skip_s=2.0):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('files', nargs='*',
-                        help='.npz recordings — default: all in recordings/eog/')
+                        help='.npz recordings — default: all in data/eog/')
     parser.add_argument('--raw', action='store_true',
                         help='Skip filtering (shows electrode drift; saccades will be tiny)')
     parser.add_argument('--skip', type=float, default=2.0,
@@ -124,7 +124,7 @@ def main():
     else:
         paths = sorted(RECORDINGS_DIR.glob("*.npz"))
         if not paths:
-            print("No recordings found in recordings/eog/")
+            print("No recordings found in data/eog/")
             return
 
     recs = [load(p) for p in paths]

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brainpong"
+version = "0.1.0"
+description = "Cerelog X8 EOG eye-tracking — acquisition, analysis, and viewer."
+requires-python = ">=3.13"
+# Runtime deps are managed in the project venv (see CLAUDE.md); intentionally
+# not pinned here so `pip install -e .` doesn't disturb the Cerelog brainflow
+# fork. Reusable library code lives under src/brainpong/; runnable entrypoints
+# live in scripts/.
+
+[tool.setuptools.packages.find]
+where = ["src"]

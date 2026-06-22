@@ -1,7 +1,7 @@
 """
 Preprocessing functions: NPZ path → PrepResult dict.
 
-Each function takes a path to a recordings/eog/*.npz file and returns a
+Each function takes a path to a data/eog/*.npz file and returns a
 PrepResult with these guaranteed keys:
 
     subject        str

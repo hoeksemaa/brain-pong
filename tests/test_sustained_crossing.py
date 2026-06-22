@@ -8,7 +8,7 @@ so each test pins one behaviour independent of the production defaults.
 import numpy as np
 import pytest
 
-from eog_core import _sustained_crossing
+from brainpong.eog_core import _sustained_crossing
 from synth import SR, const_window
 
 SIGMA = 2.0

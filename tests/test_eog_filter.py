@@ -10,7 +10,7 @@ the production default moves.
 import numpy as np
 import pytest
 
-from eog_core import _eog_filter
+from brainpong.eog_core import _eog_filter
 from synth import SR, sine, interior_rms
 
 

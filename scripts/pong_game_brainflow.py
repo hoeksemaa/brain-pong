@@ -35,7 +35,7 @@ from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 # Shared EOG detection core — identical for the 1-player and 2-player paths.
 # Detection logic + its constants live in eog_core.py so they're testable
 # without standing up Dash/the board; don't re-inline them here.
-from eog_core import (
+from brainpong.eog_core import (
     EOG_SIGMA_THR, EOG_BASELINE_S,
     eog_diff, _make_eog_state, _eog_filter, _sustained_crossing,
     _run_eog_sm, _reset_eog_st,

@@ -11,7 +11,7 @@ monitoring only. The stored array therefore also carries the board's own
 package counter (row 0) and per-sample unix timestamps (row 10), so dropped
 samples and the true wall-clock start are recoverable post-hoc.
 
-Saves to:  recordings/eog/<timestamp>-<subject_id>.npz
+Saves to:  data/eog/<timestamp>-<subject_id>.npz
 Protocol:  eog-v2-labeled   (eog-v1 = same raw data, fewer metadata fields)
 
 Schema (canonical in CLAUDE.md):
@@ -26,10 +26,10 @@ Schema (canonical in CLAUDE.md):
 
 Usage:
     source .venv/bin/activate
-    python record_eog.py --subject john
-    python record_eog.py --subject alice --trials 15
-    python record_eog.py --subject john --gain 24 --notes "battery, PD_BIAS off"
-    python record_eog.py --subject john --board second --notes "new unit, untested"
+    python scripts/record_eog.py --subject john
+    python scripts/record_eog.py --subject alice --trials 15
+    python scripts/record_eog.py --subject john --gain 24 --notes "battery, PD_BIAS off"
+    python scripts/record_eog.py --subject john --board second --notes "new unit, untested"
 """
 
 import time
@@ -83,7 +83,7 @@ LPF_HZ      = 100.0
 HPF_HZ      = 0.5
 NOTCH_BANDS = ((48.0, 52.0), (58.0, 62.0))
 
-OUT_DIR = Path(__file__).parent / "recordings" / "eog"
+OUT_DIR = Path(__file__).resolve().parent.parent / "data" / "eog"
 
 CUE_TEXT = {
     'BASELINE': 'BASELINE\nsit still — eyes forward',
