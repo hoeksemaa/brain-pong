@@ -44,7 +44,7 @@ def minmax_decimate(x, sr, target_buckets):
 
 def build_one(path):
     d = np.load(path, allow_pickle=True)
-    if str(d.get("protocol_version", ["?"])[0]) != "eog-v1-labeled":
+    if str(d.get("protocol_version", ["?"])[0]) not in ("eog-v1-labeled", "eog-v2-labeled"):
         return None
     sr      = int(d["sample_rate"][0])
     ch_L    = int(d["eog_ch_L"][0])
@@ -70,6 +70,9 @@ def build_one(path):
         for s, l in zip(d["event_samples"].astype(int), d["event_labels"].astype(str))
     ]
 
+    def _scalar(key, default=None):
+        return d[key].ravel()[0].item() if key in d.files else default
+
     return {
         "id":          path.stem,
         "subject":     subject,
@@ -78,6 +81,11 @@ def build_one(path):
         "duration_s":  round(n / sr, 1),
         "unit":        "uV",
         "raw":         True,
+        # v2 metadata (None for legacy eog-v1 files)
+        "gain":        _scalar("gain"),
+        "montage":     _scalar("montage"),
+        "notes":       _scalar("notes"),
+        "unix_start":  _scalar("unix_start"),
         "channels":    chans,
         "events":      events,
     }
