@@ -73,6 +73,8 @@ def build_one(path):
     def _scalar(key, default=None):
         return d[key].ravel()[0].item() if key in d.files else default
 
+    tags = [str(t) for t in d["tags"]] if "tags" in d.files else []
+
     return {
         "id":          path.stem,
         "subject":     subject,
@@ -81,11 +83,12 @@ def build_one(path):
         "duration_s":  round(n / sr, 1),
         "unit":        "uV",
         "raw":         True,
-        # v2 metadata (None for legacy eog-v1 files)
+        # v2 metadata (None / [] for legacy eog-v1 files)
         "gain":        _scalar("gain"),
         "montage":     _scalar("montage"),
         "notes":       _scalar("notes"),
         "unix_start":  _scalar("unix_start"),
+        "tags":        tags,
         "channels":    chans,
         "events":      events,
     }
