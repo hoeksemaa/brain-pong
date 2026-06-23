@@ -11,7 +11,7 @@ data/eog/         — EOG session recordings (.npz, protocol_version 'eog-v1'/'e
 derivatives/      — regenerable outputs (derivatives/results/ = bench JSON)
 tests/            — pytest suite (imports brainpong from src/ via conftest)
 archive/          — all prior SSVEP pong work (scripts, recordings, plans, assets)
-plans/, notes/    — planning docs / local notes
+docs/             — project documentation (roadmaps, protocols)
 ```
 
 Library code goes in `src/brainpong/`; new runnable scripts go in `scripts/` and
@@ -173,7 +173,7 @@ Concrete rules when handling recorded data:
 - **Filtering algorithms (DSP, CCA preprocessing, etc.) operate on copies, not the loaded arrays.** BrainFlow's `DataFilter.*` functions mutate their input *in place*. If a caller does `DataFilter.detrend(eeg[i], ...)` on a slice of the loaded npz array, it corrupts the source. Always copy first: `x = np.ascontiguousarray(eeg[i].astype(np.float64))`, then filter `x`.
 - **The mock-board adapter (step 6) returns copies** of the requested window, never views into the underlying recording array. Matches BrainFlow's real behavior.
 - **`np.savez` over an existing recording is forbidden** unless we're explicitly migrating a session to a new format (and even then, write to `<id>.npz.tmp` first, verify load round-trips, then atomic rename).
-- **Outputs (analysis results, baseline numbers, plots) live elsewhere** — `plans/` or derived files at repo root. Never write back into any `recordings/` directory.
+- **Outputs (analysis results, baseline numbers, plots) live elsewhere** — `derivatives/` or `docs/`. Never write back into any `data/` recordings directory.
 
 The reason: as algorithms change (HPF cutoff, freq pair, harmonics, classifier), we want to compare apples-to-apples against the same reference recordings. If we ever silently mutate the source data, comparisons across PRs become meaningless.
 
@@ -224,5 +224,5 @@ This applies even when the change feels obviously complete. The user is the only
 ## Working agreements
 
 - Don't add features beyond what the active task asks for; this is a small repo and accidental scope creep shows.
-- User-authored intent docs live in `archive/ROADMAP.md` and `archive/plans/`. Update them when relevant; don't fork parallel docs. New EOG planning docs go in a root-level `plans/` dir when needed.
+- User-authored intent docs live in `docs/` (active EOG) and `archive/ROADMAP.md` / `archive/plans/` (prior SSVEP). Update them when relevant; don't fork parallel docs. New EOG planning docs go in `docs/`.
 - Project owner is interning at Cerelog (the board vendor), so domain feedback on signal processing should be treated as authoritative — verify code-level claims, but defer on hardware/signal intuition.
