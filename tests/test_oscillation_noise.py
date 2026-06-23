@@ -22,7 +22,7 @@ flip to asserting zero spurious fires.
 import numpy as np
 import pytest
 
-from eog_core import _eog_filter, _run_eog_sm, EOG_SIGMA_THR
+from brainpong.eog_core import _eog_filter, _run_eog_sm, EOG_SIGMA_THR
 from synth import SR, sine, calibrated_state, interior_rms, threshold_runs
 
 

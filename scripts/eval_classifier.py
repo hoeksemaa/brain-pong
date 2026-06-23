@@ -1,7 +1,7 @@
 """
 Phase 1 — offline EOG classifier eval.
 
-Loads all recordings/eog/*.npz files, runs leave-one-subject-out (LOO)
+Loads all data/eog/*.npz files, runs leave-one-subject-out (LOO)
 cross-validation, and reports accuracy / detection latency / false-positive
 rate across a sweep of z-score thresholds.
 
@@ -19,10 +19,10 @@ LOO protocol:
 
 Usage:
     source .venv/bin/activate
-    python eval_classifier.py
-    python eval_classifier.py --tau 2.0          # fixed τ, skip sweep
-    python eval_classifier.py --no-plot          # suppress matplotlib
-    python eval_classifier.py --post 0.4         # shorter detection window
+    python scripts/eval_classifier.py
+    python scripts/eval_classifier.py --tau 2.0          # fixed τ, skip sweep
+    python scripts/eval_classifier.py --no-plot          # suppress matplotlib
+    python scripts/eval_classifier.py --post 0.4         # shorter detection window
 """
 
 import argparse
@@ -33,7 +33,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 
-RECORDINGS_DIR = Path(__file__).parent / "recordings" / "eog"
+RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "data" / "eog"
 
 # Filter chain shared by all callers (matches record_eog.py exactly)
 LPF_HZ      = 100.0
@@ -404,7 +404,7 @@ def plot_tradeoff(preps, tau_grid, pre_s, post_s, selected_taus, loo_results):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('files', nargs='*',
-                        help='.npz recordings (default: all in recordings/eog/)')
+                        help='.npz recordings (default: all in data/eog/)')
     parser.add_argument('--tau',  type=float, default=None,
                         help='Fixed threshold in σ units (skip LOO τ-selection)')
     parser.add_argument('--pre',  type=float, default=DEFAULT_DETECT_PRE,

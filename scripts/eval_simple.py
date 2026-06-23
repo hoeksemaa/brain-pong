@@ -19,9 +19,9 @@ The only free parameter is FPR_THRESHOLD_UV (fixed, in µV).
 
 Usage:
     source .venv/bin/activate
-    python eval_simple.py
-    python eval_simple.py --fpr-threshold 15
-    python eval_simple.py recordings/eog/foo.npz
+    python scripts/eval_simple.py
+    python scripts/eval_simple.py --fpr-threshold 15
+    python scripts/eval_simple.py data/eog/foo.npz
 """
 
 import argparse
@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 
-RECORDINGS_DIR = Path(__file__).parent / "recordings" / "eog"
+RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "data" / "eog"
 
 LPF_HZ      = 100.0
 HPF_HZ      = 0.5
@@ -153,7 +153,7 @@ def eval_subject(rec, fpr_threshold_uv):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('files', nargs='*',
-                        help='.npz recordings (default: all in recordings/eog/)')
+                        help='.npz recordings (default: all in data/eog/)')
     parser.add_argument('--fpr-threshold', type=float, default=DEFAULT_FPR_THR,
                         help=f'µV threshold for REST false-positive check (default {DEFAULT_FPR_THR})')
     args = parser.parse_args()

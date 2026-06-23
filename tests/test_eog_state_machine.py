@@ -10,7 +10,7 @@ players' states are independent.
 import numpy as np
 import pytest
 
-from eog_core import (
+from brainpong.eog_core import (
     _run_eog_sm, _make_eog_state, _reset_eog_st,
     GLANCE_WINDOW_S, ARMED_MIN_WAIT_S, REFRACTORY_S, EOG_BASELINE_S,
 )

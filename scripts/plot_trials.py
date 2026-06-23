@@ -11,10 +11,10 @@ Per-segment filtering is applied independently to each channel window before
 computing the diff — avoids the full-session drift artifact that can flip sign.
 
 Usage:
-    python plot_trials.py                           # all recordings
-    python plot_trials.py recordings/eog/foo.npz    # specific file(s)
-    python plot_trials.py --cols 5                  # narrower grid (default 10)
-    python plot_trials.py --pre 0.5 --post 2.5      # time window around cue
+    python scripts/plot_trials.py                           # all recordings
+    python scripts/plot_trials.py data/eog/foo.npz    # specific file(s)
+    python scripts/plot_trials.py --cols 5                  # narrower grid (default 10)
+    python scripts/plot_trials.py --pre 0.5 --post 2.5      # time window around cue
 """
 
 import argparse
@@ -24,7 +24,7 @@ from pathlib import Path
 
 from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 
-RECORDINGS_DIR = Path(__file__).parent / "recordings" / "eog"
+RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "data" / "eog"
 
 LPF_HZ      = 100.0
 HPF_HZ      = 0.5
@@ -181,7 +181,7 @@ def plot_subject(path, n_cols=10, pre_s=DEFAULT_PRE_S, post_s=DEFAULT_POST_S,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('files', nargs='*',
-                        help='.npz recording(s) — default: all in recordings/eog/')
+                        help='.npz recording(s) — default: all in data/eog/')
     parser.add_argument('--cols', type=int, default=10,
                         help='Grid columns (default 10)')
     parser.add_argument('--pre',  type=float, default=DEFAULT_PRE_S,
@@ -197,7 +197,7 @@ def main():
     else:
         paths = sorted(RECORDINGS_DIR.glob("*.npz"))
         if not paths:
-            print("No recordings found in recordings/eog/")
+            print("No recordings found in data/eog/")
             return
 
     for path in paths:

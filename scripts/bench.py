@@ -3,11 +3,11 @@ bench.py — run (preprocessor × detector) combinations against all recordings.
 
 Usage:
     source .venv/bin/activate
-    python bench.py                          # all recordings, full grid
-    python bench.py recordings/eog/foo.npz  # specific file(s)
+    python scripts/bench.py                          # all recordings, full grid
+    python scripts/bench.py data/eog/foo.npz  # specific file(s)
 
 Prints a compact average-only summary table (one row per combination).
-Saves a timestamped JSON to results/ with full per-subject, per-trial detail.
+Saves a timestamped JSON to derivatives/results/ with full per-subject, per-trial detail.
 """
 
 import argparse
@@ -18,11 +18,11 @@ from pathlib import Path
 
 import numpy as np
 
-import preprocess
-import detect
+from brainpong import preprocess
+from brainpong import detect
 
-RECORDINGS_DIR = Path(__file__).parent / "recordings" / "eog"
-RESULTS_DIR    = Path(__file__).parent / "results"
+RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "data" / "eog"
+RESULTS_DIR    = Path(__file__).resolve().parent.parent / "derivatives" / "results"
 
 # ── Preprocessor × Detector grid ──────────────────────────────────────────────
 #
@@ -181,7 +181,7 @@ def _print_full(combo_results):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('files', nargs='*',
-                        help='.npz recordings (default: all in recordings/eog/)')
+                        help='.npz recordings (default: all in data/eog/)')
     parser.add_argument('--full', action='store_true',
                         help='show per-subject rows (default: avg-only summary)')
     args = parser.parse_args()

@@ -11,13 +11,14 @@ monitoring only. The stored array therefore also carries the board's own
 package counter (row 0) and per-sample unix timestamps (row 10), so dropped
 samples and the true wall-clock start are recoverable post-hoc.
 
-Saves to:  recordings/eog/<timestamp>-<subject_id>.npz
+Saves to:  data/eog/<timestamp>-<subject_id>.npz
 Protocol:  eog-v2-labeled   (eog-v1 = same raw data, fewer metadata fields)
 
 Schema (canonical in CLAUDE.md):
   Per-recording : unix_start, sample_rate, gain, signal_unit, board
                   (model + which physical unit, one str), subject_id,
-                  montage, notes, eog_ch_L/eog_ch_R (L/R board rows)
+                  montage, notes, tags (list[str], e.g. data-problem
+                  labels), eog_ch_L/eog_ch_R (L/R board rows)
   Per-sample    : raw signal, one value per board row (row 0 = running
                   package counter → honest timeline + drop detection;
                   row 10 = per-sample unix timestamp)
@@ -25,10 +26,10 @@ Schema (canonical in CLAUDE.md):
 
 Usage:
     source .venv/bin/activate
-    python record_eog.py --subject john
-    python record_eog.py --subject alice --trials 15
-    python record_eog.py --subject john --gain 24 --notes "battery, PD_BIAS off"
-    python record_eog.py --subject john --board second --notes "new unit, untested"
+    python scripts/record_eog.py --subject john
+    python scripts/record_eog.py --subject alice --trials 15
+    python scripts/record_eog.py --subject john --gain 24 --notes "battery, PD_BIAS off"
+    python scripts/record_eog.py --subject john --board second --notes "new unit, untested"
 """
 
 import time
@@ -82,7 +83,7 @@ LPF_HZ      = 100.0
 HPF_HZ      = 0.5
 NOTCH_BANDS = ((48.0, 52.0), (58.0, 62.0))
 
-OUT_DIR = Path(__file__).parent / "recordings" / "eog"
+OUT_DIR = Path(__file__).resolve().parent.parent / "data" / "eog"
 
 CUE_TEXT = {
     'BASELINE': 'BASELINE\nsit still — eyes forward',
@@ -157,6 +158,7 @@ def save_recording(buf, ev_samples, ev_labels, meta):
         board            = np.array([meta['board']]),
         montage          = np.array([meta['montage']]),
         notes            = np.array([meta['notes']]),
+        tags             = np.array(meta['tags'], dtype='U64'),
         # ── channel / row map (L/R semantic, not derivable — see electrode swap) ──
         eog_ch_L         = np.array([meta['ch_L']]),
         eog_ch_R         = np.array([meta['ch_R']]),
@@ -171,6 +173,8 @@ def save_recording(buf, ev_samples, ev_labels, meta):
     print(f"  events: {counts}")
     if meta['notes']:
         print(f"  notes: {meta['notes']}")
+    if meta['tags']:
+        print(f"  tags: {meta['tags']}")
 
 
 def main():
@@ -190,6 +194,10 @@ def main():
                         help='Electrode montage description (free text)')
     parser.add_argument('--notes', default='',
                         help='Free-text session notes (rig state, battery, PD_BIAS, etc.)')
+    parser.add_argument('--tags', nargs='*', default=[], metavar='TAG',
+                        help='Zero or more structured labels for filtering, esp. '
+                             'data problems (e.g. --tags flatline railing). '
+                             'notes is prose; tags are the machine-filterable axis.')
     args = parser.parse_args()
 
     subject_id = args.subject.strip().lower()
@@ -218,6 +226,7 @@ def main():
         'board':               f"{BOARD_NAME} unit:{args.board.strip()}",
         'montage':             args.montage,
         'notes':               args.notes,
+        'tags':                [t.strip() for t in args.tags if t.strip()],
         'ch_L':                ch_L,
         'ch_R':                ch_R,
         'timestamp_row':       ts_row,   # write-time only: derives unix_start, not stored

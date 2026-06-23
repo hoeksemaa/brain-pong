@@ -10,7 +10,7 @@ arithmetic.
 import numpy as np
 import pytest
 
-from eog_core import eog_diff
+from brainpong.eog_core import eog_diff
 
 
 def _data(n=64, n_ch=4, seed=0):

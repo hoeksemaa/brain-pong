@@ -50,7 +50,7 @@ None of these need much prep, and there's a 3D printer on-site so the trophy has
 
 You already have the tool: `record_eog.py` now stores genuinely raw signal (all board rows, volts) + `--notes`. Use it to capture the noise, then PSD it. **Per CLAUDE.md, compute PSD on the derived `n/fs` axis, NOT host arrival timestamps** (USB delivers in bursts → smeared PSD).
 
-- [ ] **Reproduce + record the noise.** Recreate whatever conditions produced the blow-out before; record a session with `--notes "noise-repro: <rig state, power source, PD_BIAS, electrode prep>"`. *Done when:* an npz visibly containing the oscillation exists in `recordings/eog/`.
+- [ ] **Reproduce + record the noise.** Recreate whatever conditions produced the blow-out before; record a session with `--notes "noise-repro: <rig state, power source, PD_BIAS, electrode prep>"`. *Done when:* an npz visibly containing the oscillation exists in `data/eog/`.
 - [ ] **Build a minimal offline PSD/inspect script** (`psd_inspect.py`, repo root). Load an npz → plot raw per-channel trace + Welch PSD per channel on the `n/fs` axis + a clip/rail marker (±4.5 V / gain ≈ ±187 mV @ ×24). Don't gold-plate. *Done when:* it renders a PSD for the noise recording.
 - [ ] **Classify the frequency** (CLAUDE.md decision tree): 60 Hz locked + harmonics → mains/CMRR collapse (#2, the leading hypothesis per `project_noise_60hz_cmrr`); odd non-mains peak → bias-loop self-oscillation (#1); sub-1 Hz / sawtooth → DC-rail (#3). *Done when:* you can name the culprit class with a labeled PSD plot.
 
@@ -81,8 +81,7 @@ Toggle **one variable at a time**. Start with the no-firmware-needed manipulatio
 
 Robust detection needs clean ground truth captured under the locked protocol.
 
-- [ ] **Record ≥3 fresh clean sessions** under the new prep protocol (yourself + dry-run subjects if available). *Done when:* npz in `recordings/eog/`, event→waveform alignment eyeballed.
-- [ ] **Rebuild the public viewer** (`python web/build.py`) and confirm new sessions render raw. *Done when:* manifest updated, page shows them.
+- [ ] **Record ≥3 fresh clean sessions** under the new prep protocol (yourself + dry-run subjects if available). *Done when:* npz in `data/eog/`, event→waveform alignment eyeballed.
 
 ---
 

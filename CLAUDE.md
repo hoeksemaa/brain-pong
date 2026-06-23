@@ -5,11 +5,19 @@ Cerelog X8 EEG/EOG project. **Active work is EOG-based eye-tracking** (2-electro
 ## Repository layout
 
 ```
-archive/   — all prior SSVEP pong work (scripts, recordings, plans, assets)
-recordings/eog/   — EOG session recordings (protocol_version: 'eog-v1')
+src/brainpong/    — importable library (eog_core, preprocess, detect); `pip install -e .`
+scripts/          — runnable entrypoints (record_eog, eog_display, bench, eval_*, plot_*)
+data/eog/         — EOG session recordings (.npz, protocol_version 'eog-v1'/'eog-v2')
+derivatives/      — regenerable outputs (derivatives/results/ = bench JSON)
+tests/            — pytest suite (imports brainpong from src/ via conftest)
+archive/          — all prior SSVEP pong work (scripts, recordings, plans, assets)
+docs/             — project documentation (roadmaps, protocols)
 ```
 
-New EOG scripts live at the repo root. Don't put EOG work inside `archive/`.
+Library code goes in `src/brainpong/`; new runnable scripts go in `scripts/` and
+import the library as `from brainpong.X import …` (run after `pip install -e .`).
+Don't put EOG work inside `archive/`. Root stays minimal (README, CLAUDE.md,
+pyproject.toml only).
 
 ## EOG diagnostic dashboard (active build)
 
@@ -30,7 +38,8 @@ Why live (not record→offline): every diagnostic test is an *interactive manipu
 | Board used | single `board` str = model + **which physical unit**, e.g. `"CERELOG_X8 unit:original"`. Model is constant; the unit label (user-asserted via `--board`, default "original") is the part that matters now that a 2nd, possibly-faulty board exists — every recording must pin to one unit. BrainFlow can't distinguish two same-model units over serial, hence asserted not detected. (Numeric board id 65 lives only in the hardcoded `BOARD_ID` constant — runtime needs it, but it's 1:1 with the name so not stored) |
 | Person recorded | subject |
 | Method / montage | e.g. "2 electrodes at outer canthi (differential) + active bias on ear clip, no ground" |
-| Free-text notes | catch-all; defaults to blank |
+| Free-text notes | catch-all prose; defaults to blank |
+| Tags | `list[str]`, defaults to empty. Structured, machine-filterable labels — esp. **data-problem markers** so a corpus of known-bad recordings stays queryable (e.g. `flatline`, `railing`, `loose-electrode`). `notes` is prose; `tags` is the filter axis. Stored as a 1-D string array (not a wrapped singleton) since it's multi-valued |
 
 **Per-sample (every tick):**
 
@@ -45,9 +54,13 @@ Sample time is **derived, not stored**: `start_time + count / fs`. Use that unif
 
 **Deliberately deferred** (flagged, not adopted in v1 — don't treat as oversights): structured per-segment instrument condition (`PD_BIAS`/`MUX` state per chunk — for now lives in free-text notes), structured electrode→channel→site map (cf. [[project_electrode_swap_john]]), lead-off / status-word ΔZ readout, and versioning (dashboard SHA / brainflow-fork / schema tag).
 
-### Static raw-waveform web viewer (built — `web/`)
+### Raw-waveform web viewer — REMOVED
 
-The **goal is a public, globally-accessible website** (not a local tool) — owner wants anyone to view the raw waveforms; data is public by policy. First shipped piece: a **static site** plotting RAW waveforms of `recordings/eog/` sessions (no filtering). `web/build.py` reads each `eog-v1-labeled` npz → min/max-decimated JSON (`web/data/*.json` + `manifest.json`, committed); `web/{index.html,app.js,style.css}` is a Plotly.js page (stacked per-channel, µV, **per-channel autoscale** so the raw DC offset doesn't flatten the trace; dashed LEFT/RIGHT cue lines). No server. **Deploy to Vercel**: root dir = `web/`, framework "Other", no build step (data pre-built). Rerun `python web/build.py` + redeploy after new recordings. Same page can later repoint from npz-JSON to the live SQLite store. Currently includes the 3 `recordings/eog/` sessions only.
+A static Plotly.js viewer (`web/`, npz→decimated-JSON, Vercel-deployed) was the
+first attempt at a public raw-waveform website. **Removed 2026-06-22 — it never
+worked.** The underlying *goal* (a public, globally-accessible site to view raw
+waveforms; data is public by policy) may be revisited, but any future viewer
+starts fresh, ideally reading the live SQLite store rather than pre-built JSON.
 
 ### Storage format + live architecture (decided, not yet built)
 
@@ -81,10 +94,11 @@ There is a project-local venv at `.venv/` (Python 3.13). **Always activate it be
 
 ```bash
 source .venv/bin/activate
-python <script>.py
+pip install -e .                 # once: makes `brainpong` importable (src/ layout)
+python scripts/<script>.py       # entrypoints live in scripts/
 ```
 
-If deps drift, `pip install -r archive/requirements.txt` from inside the activated venv. The venv is gitignored.
+The library lives in `src/brainpong/` and is imported as `from brainpong.X import …`. `pip install -e .` is editable, so source edits take effect without reinstall; `tests/conftest.py` also adds `src/` to the path so pytest runs even without the install. If deps drift, `pip install -r archive/requirements.txt` from inside the activated venv. The venv is gitignored.
 
 ### Cerelog brainflow (real-hardware mode)
 
@@ -102,7 +116,7 @@ The fork imports `pkg_resources`, which is why `requirements.txt` pins `setuptoo
 **All `.npz` recordings are committed to git.** Personal project; owner is fine with biosignal data being public. Don't gitignore any recordings dir.
 
 - SSVEP sessions: `archive/recordings/` — protocol_version `v1`, schema defined in `archive/plans/recording-protocol.md`. Read-only ground truth; never mutate.
-- EOG sessions: `recordings/eog/` — protocol_version `eog-v1`. Same immutability rules apply.
+- EOG sessions: `data/eog/` — protocol_version `eog-v1`/`eog-v2`. Same immutability rules apply.
 
 ### SSVEP recording mode (archived — for reference)
 
@@ -159,7 +173,7 @@ Concrete rules when handling recorded data:
 - **Filtering algorithms (DSP, CCA preprocessing, etc.) operate on copies, not the loaded arrays.** BrainFlow's `DataFilter.*` functions mutate their input *in place*. If a caller does `DataFilter.detrend(eeg[i], ...)` on a slice of the loaded npz array, it corrupts the source. Always copy first: `x = np.ascontiguousarray(eeg[i].astype(np.float64))`, then filter `x`.
 - **The mock-board adapter (step 6) returns copies** of the requested window, never views into the underlying recording array. Matches BrainFlow's real behavior.
 - **`np.savez` over an existing recording is forbidden** unless we're explicitly migrating a session to a new format (and even then, write to `<id>.npz.tmp` first, verify load round-trips, then atomic rename).
-- **Outputs (analysis results, baseline numbers, plots) live elsewhere** — `plans/` or derived files at repo root. Never write back into any `recordings/` directory.
+- **Outputs (analysis results, baseline numbers, plots) live elsewhere** — `derivatives/` or `docs/`. Never write back into any `data/` recordings directory.
 
 The reason: as algorithms change (HPF cutoff, freq pair, harmonics, classifier), we want to compare apples-to-apples against the same reference recordings. If we ever silently mutate the source data, comparisons across PRs become meaningless.
 
@@ -210,5 +224,5 @@ This applies even when the change feels obviously complete. The user is the only
 ## Working agreements
 
 - Don't add features beyond what the active task asks for; this is a small repo and accidental scope creep shows.
-- User-authored intent docs live in `archive/ROADMAP.md` and `archive/plans/`. Update them when relevant; don't fork parallel docs. New EOG planning docs go in a root-level `plans/` dir when needed.
+- User-authored intent docs live in `docs/` (active EOG) and `archive/ROADMAP.md` / `archive/plans/` (prior SSVEP). Update them when relevant; don't fork parallel docs. New EOG planning docs go in `docs/`.
 - Project owner is interning at Cerelog (the board vendor), so domain feedback on signal processing should be treated as authoritative — verify code-level claims, but defer on hardware/signal intuition.
