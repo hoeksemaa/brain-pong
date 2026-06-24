@@ -46,6 +46,11 @@ env/
 tmp/
 .cache/
 
+# Viewer DB — regenerable derivative (rebuild: python scripts/ingest_npz.py)
+derivatives/viewer.db
+derivatives/viewer.db-shm
+derivatives/viewer.db-wal
+
 # Test artifacts
 .coverage
 .pytest_cache/

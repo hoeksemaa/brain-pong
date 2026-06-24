@@ -2,8 +2,10 @@ brainflow
 dash
 plotly
 numpy
+scipy
 scikit-learn
 matplotlib
+flask
 # Cerelog's brainflow fork imports pkg_resources, which setuptools >=81
 # removed. Pin until the fork drops the import or we vendor pkg_resources.
 setuptools<81

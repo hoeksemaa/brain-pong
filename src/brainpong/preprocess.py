@@ -348,3 +348,41 @@ def z_normalized(path):
     _, sigma  = _fit_baseline(diff_raw, raw['ev_s'], raw['ev_l'], raw['sr'],
                                _apply_filter_narrow)
     return _make_result(raw, diff_raw / sigma, 0.0, 1.0, _apply_filter_narrow)
+
+
+# ── Viewer display filters (zero-phase) ──────────────────────────────────────
+# The web diagnostic viewer (brainpong.store / scripts/serve_viewer.py) shows
+# *recorded* data offline, so zero-phase (filtfilt) filtering is appropriate —
+# no lag, no phase distortion. This is deliberately distinct from the causal,
+# zi-settled realtime pipeline above (used by the detector/benchmark, which must
+# not peek at the future). Each entry maps name → fn(x_uv, sr) → ndarray, in µV
+# (µV/s for velocity). Additive: nothing above is modified.
+
+def _viewer_bandpass(lo_hz, hi_hz):
+    @functools.lru_cache(maxsize=8)
+    def _sos(sr):
+        return butter(4, [lo_hz, hi_hz], btype='band', fs=sr, output='sos')
+    def _fn(x_uv, sr):
+        y = np.asarray(x_uv, dtype=np.float64)
+        return sosfiltfilt(_sos(sr), y) if y.size >= 30 else y
+    return _fn
+
+
+def _viewer_velocity(x_uv, sr):
+    """Eye velocity (µV/s): 0.1–30 Hz band → Savitzky-Golay 1st derivative."""
+    y = _viewer_bandpass(0.1, 30.0)(x_uv, sr)
+    if y.size < 21:
+        return y
+    return savgol_filter(y, window_length=21, polyorder=2, deriv=1, delta=1.0 / sr)
+
+
+VIEWER_FILTERS = {
+    'raw':      lambda x_uv, sr: np.asarray(x_uv, dtype=np.float64),
+    'bp_0530':  _viewer_bandpass(0.5, 30.0),
+    'bp_0130':  _viewer_bandpass(0.1, 30.0),
+    'velocity': _viewer_velocity,
+}
+
+VIEWER_FILTER_LABELS = {
+    'raw': 'Raw', 'bp_0530': '0.5–30 Hz', 'bp_0130': '0.1–30 Hz', 'velocity': 'Velocity',
+}
