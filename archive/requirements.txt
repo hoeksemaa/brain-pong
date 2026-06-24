@@ -6,6 +6,9 @@ scipy
 scikit-learn
 matplotlib
 flask
+# Frontend E2E tests (tests/test_viewer_e2e.py) — optional; the suite auto-skips
+# them when absent. Enable with: pip install pytest-playwright && playwright install chromium
+pytest-playwright
 # Cerelog's brainflow fork imports pkg_resources, which setuptools >=81
 # removed. Pin until the fork drops the import or we vendor pkg_resources.
 setuptools<81
