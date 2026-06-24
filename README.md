@@ -43,7 +43,7 @@ signature rather than raw amplitude, which keeps it robust to drift.
 - `src/brainpong/store.py` — SQLite store: ingests the frozen npz (metadata, events, trims), serves min/max-decimated signal. The npz stay the source of truth; the DB (`derivatives/viewer.db`) is a regenerable derivative.
 - `scripts/ingest_npz.py` — build/refresh the viewer DB from `data/eog/`.
 - `scripts/serve_viewer.py` — Flask API + static host for `web/`.
-- `web/` — two-zone viewer: derived **L−R ribbon** over the **raw electrode channels**, per-filter overlay (`Raw` / `0.5–30` / `0.1–30` / velocity), a draggable **keep-window trim** (gates ribbon + FFT + stats; raw stays full), and a problems-first recording list. Trims persist as DB annotations — **never** written back to the npz.
+- `web/` — two-zone viewer: derived **L−R ribbon** over the **raw electrode channels**, per-filter overlay (`Raw` / `0.5–30` / `0.1–30` / velocity), a draggable **keep-window trim** (gates ribbon + FFT + stats; raw stays full), and a problems-first recording list. Trims persist as DB annotations — **never** written back to the npz. Verbose, leveled frontend logging traces lifecycle / interactions / API calls into an in-memory ring buffer at `window.__eoglog` (append `?debug=1` to surface the granular trace in the console).
 
 ## Running it
 
