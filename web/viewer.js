@@ -11,16 +11,17 @@
     rail:"#ff6b81", railFill:"rgba(255,107,129,0.08)", evL:"#5b8cff", evR:"#ff9d5c",
     trimDim:"rgba(8,10,16,0.70)", trimEdge:"#7ef0b0",
     status:{ok:"#34d399", railing:"#fb7185", flat:"#fbbf24"}, chFillA:0.13,
+    side:"#b388ff",   // uniform, status-neutral sidebar accent (dot + spark)
   };
   const FILTERS = [["raw","Raw","neutral"],["bp_0530","0.5–30 Hz","accent"],
                    ["bp_0130","0.1–30 Hz","accent2"],["velocity","Velocity","accent3"]];
   const FILTER_LABEL = Object.fromEntries(FILTERS.map(([id,l])=>[id,l]));
-  const WIDTH = 1600, MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const WIDTH = 1600;
   const PADL = 48, PADR = 8;
 
   const $ = (s, r=document) => r.querySelector(s);
   function el(tag, cls, html){ const e=document.createElement(tag); if(cls)e.className=cls; if(html!=null)e.innerHTML=html; return e; }
-  function fmtDate(id){ const m=id.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/); return m?`${MONTHS[+m[2]-1]} ${+m[3]} · ${m[4]}:${m[5]}`:id; }
+  function fmtYMD(id){ const m=id.match(/^(\d{4})(\d{2})(\d{2})/); return m?`${m[1]}-${m[2]}-${m[3]}`:id; }
   const lerp=(a,b,t)=>a+(b-a)*t;
   function median(a){const b=a.slice().sort((x,y)=>x-y);const n=b.length;if(!n)return 0;const m=n>>1;return n%2?b[m]:(b[m-1]+b[m])/2;}
   function pctl(a,p){const b=a.slice().sort((x,y)=>x-y);if(!b.length)return 0;return b[Math.min(b.length-1,Math.max(0,Math.floor(p/100*b.length)))];}
@@ -233,15 +234,15 @@
   function renderSidebar(){
     const list=$(".reclist"); list.innerHTML="";
     for(const r of state.recs){
-      const li=el("li","recitem"+(state.rec&&state.rec.id===r.id?" sel":"")), stColor=THEME.status[r.status]||THEME.muted;
-      const trimmed = state.trim[r.id] || r.trim;
-      const head=el("div","rihead"); head.appendChild(el("span","dot","")); head.lastChild.style.background=stColor;
-      head.appendChild(el("span","rsub",r.subject));
-      head.appendChild(el("span","rmeta",`${fmtDate(r.id)} · ${r.duration}s${trimmed?" ✂":""}`));
+      const li=el("li","recitem"+(state.rec&&state.rec.id===r.id?" sel":""));
+      const head=el("div","rihead");
+      head.appendChild(el("span","rsub",r.subject));            // name
+      head.appendChild(el("span","rdate",fmtYMD(r.id)));        // date  Y-M-D
+      head.appendChild(el("span","rlen",`${Math.round(r.duration)}s`));  // length, rounded
       li.appendChild(head);
       const spark=el("canvas","spark"); li.appendChild(spark);
       li.onclick=()=>selectRec(r); list.appendChild(li);
-      requestAnimationFrame(()=>drawSpark(spark,r.spark,stColor));
+      requestAnimationFrame(()=>drawSpark(spark,r.spark,THEME.side));
     }
   }
 
