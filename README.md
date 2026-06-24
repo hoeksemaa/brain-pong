@@ -17,10 +17,11 @@ signature rather than raw amplitude, which keeps it robust to drift.
 
 ## Layout
 
-- `src/brainpong/` — importable library: `eog_core` (realtime glance-pair detector), `preprocess`, `detect`.
-- `scripts/` — runnable entrypoints (game, recorder, eval, plots).
+- `src/brainpong/` — importable library: `eog_core` (realtime glance-pair detector), `preprocess`, `detect`, `store` (viewer SQLite + npz decimation).
+- `scripts/` — runnable entrypoints (game, recorder, eval, plots, viewer server + ingest).
+- `web/` — the EOG diagnostic viewer frontend (static HTML/CSS/canvas, talks to the viewer API).
 - `data/eog/` — labeled EOG sessions (`eog-v1`/`eog-v2`). Read-only ground truth; never mutated.
-- `derivatives/` — regenerable outputs (`derivatives/results/` = benchmark JSON).
+- `derivatives/` — regenerable outputs (`derivatives/results/` = benchmark JSON; `viewer.db` = viewer store, gitignored).
 - `archive/` — prior SSVEP pong work. Reference only; superseded by the EOG approach.
 
 ## Key files
@@ -38,6 +39,12 @@ signature rather than raw amplitude, which keeps it robust to drift.
 - `scripts/eval_simple.py`, `scripts/eval_classifier.py` — standalone classifier evals (peak-sign; leave-one-subject-out z-threshold).
 - `scripts/plot_recording.py`, `scripts/plot_trials.py`, `scripts/plot_subjects.py` — visualization.
 
+**Diagnostic web viewer**
+- `src/brainpong/store.py` — SQLite store: ingests the frozen npz (metadata, events, trims), serves min/max-decimated signal. The npz stay the source of truth; the DB (`derivatives/viewer.db`) is a regenerable derivative.
+- `scripts/ingest_npz.py` — build/refresh the viewer DB from `data/eog/`.
+- `scripts/serve_viewer.py` — Flask API + static host for `web/`.
+- `web/` — two-zone viewer: derived **L−R ribbon** over the **raw electrode channels**, per-filter overlay (`Raw` / `0.5–30` / `0.1–30` / velocity), a draggable **keep-window trim** (gates ribbon + FFT + stats; raw stays full), and a problems-first recording list. Trims persist as DB annotations — **never** written back to the npz.
+
 ## Running it
 
 ```bash
@@ -52,6 +59,16 @@ python scripts/pong_game_brainflow.py --no-board   # keyboard only, no hardware
 python scripts/pong_game_brainflow.py --eog        # 1-player EOG (needs board)
 python scripts/pong_game_brainflow.py --2player    # 2-player EOG (P1=ch1-2, P2=ch3-4)
 ```
+
+**Diagnostic web viewer** (no board needed — reads the committed recordings):
+
+```bash
+python scripts/ingest_npz.py       # build derivatives/viewer.db from data/eog/
+python scripts/serve_viewer.py     # http://localhost:8770
+```
+
+Re-run `ingest_npz.py` after adding recordings. The viewer needs only `flask`
+(+ numpy/scipy); no brainflow fork required.
 
 Hardware modes need Cerelog's BrainFlow fork (provides `CERELOG_X8_BOARD`), not upstream PyPI brainflow:
 
