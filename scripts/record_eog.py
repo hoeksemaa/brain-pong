@@ -408,30 +408,36 @@ def main():
 
     fig.canvas.mpl_connect('close_event', on_close)
 
-    # ── Auto full-screen the window (best-effort across mpl backends) ─────────
-    def _maximize_window():
-        try:
-            mgr = plt.get_current_fig_manager()
-        except Exception:
-            return
-        for attempt in (
-            lambda: mgr.window.showMaximized(),                     # Qt5/Qt6
-            lambda: mgr.window.state('zoomed'),                     # TkAgg (Windows)
-            lambda: mgr.window.wm_attributes('-fullscreen', True),  # TkAgg (X11)
-            lambda: mgr.full_screen_toggle(),                       # macosx + generic
-            lambda: mgr.resize(*mgr.window.maxsize()),              # last resort
-        ):
-            try:
-                attempt()
-                return
-            except Exception:
-                continue
+    # ── Auto full-screen the window on launch (tuned for macOS) ──────────────
+    # The green "expand" button is native fullscreen; on the macosx backend the
+    # only lever is FigureManagerMac.full_screen_toggle() — a raw, stateless
+    # [NSWindow toggleFullScreen:], so an even number of calls just lands you
+    # back in a window. The old code fired it from the FIRST draw_event, which
+    # runs *before* plt.show() orders the window front and before the Cocoa run
+    # loop is live, so the toggle was dropped ~4 runs in 5.
+    #
+    # Fix: fire it exactly once from a single-shot canvas timer. macosx timers
+    # don't tick until [NSApp run] (i.e. plt.show()) is running, so the callback
+    # is guaranteed to land a beat *into* the live loop with the window already
+    # realized and front — the one moment toggleFullScreen: reliably takes. We
+    # keep a strong ref (else the timer is GC'd before it fires), fire once (a
+    # second toggle would drop us back to windowed), and bail if the figure is
+    # already gone (never resurrect a phantom via get_current_fig_manager).
+    _fs = {'done': False, 'timer': None}
 
-    # run once, after the window is realized (most reliable timing per backend)
-    def _on_first_draw(_evt):
-        _maximize_window()
-        fig.canvas.mpl_disconnect(_draw_cid)
-    _draw_cid = fig.canvas.mpl_connect('draw_event', _on_first_draw)
+    def _go_fullscreen():
+        if _fs['done'] or not plt.fignum_exists(fig.number):
+            return
+        _fs['done'] = True
+        try:
+            fig.canvas.manager.full_screen_toggle()
+        except Exception:
+            pass
+
+    _fs['timer'] = fig.canvas.new_timer(interval=300)
+    _fs['timer'].single_shot = True
+    _fs['timer'].add_callback(_go_fullscreen)
+    _fs['timer'].start()
 
     def update(_frame):
         if st['saved']:          # auto-stop already fired: don't touch a closing fig
