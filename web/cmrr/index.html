@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CMRR Collapse — an interactive intuition</title>
+<style>
+  :root{
+    --bg:#0c0e14; --panel:#0d1019; --panel2:#141925; --line:#1e2330; --line2:#232a39;
+    --txt:#e6e9f0; --mut:#8b93a7; --mut2:#6b7387; --acc:#6e8bff; --accsoft:#aab6ff;
+    --sig:#4ade80; --hum:#ff6b6b; --trace:#cfd6e6;
+    --ok:#4ade80; --warn:#f2c14e; --bad:#ff8a5b; --crit:#ff5b6e;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.55 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+  a{color:var(--accsoft)}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 22px 60px}
+  header h1{font-size:22px;margin:0 0 4px;font-weight:800}
+  header h1 b{color:var(--acc)}
+  header p{margin:0;color:var(--mut);max-width:760px}
+  .grid{display:grid;grid-template-columns:340px 1fr;gap:20px;margin-top:22px}
+  @media (max-width:860px){.grid{grid-template-columns:1fr}}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 16px 18px}
+  .card h2{font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--mut2);margin:0 0 14px}
+
+  /* presets */
+  .presets{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px}
+  .preset{font-size:12px;padding:6px 11px;border:1px solid var(--line2);border-radius:999px;
+    color:var(--mut);background:transparent;cursor:pointer;font-family:inherit;transition:.12s}
+  .preset:hover{color:#c3cad8;border-color:#2c3548;background:#6e8bff10}
+
+  /* sliders */
+  .slider{margin:16px 0}
+  .slabel{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+  .slabel .name{font-weight:600}
+  .slabel .name small{color:var(--mut);font-weight:400;margin-left:6px}
+  .slabel .val{font-family:ui-monospace,Menlo,monospace;color:var(--accsoft);font-size:13.5px;font-weight:600}
+  input[type=range]{-webkit-appearance:none;width:100%;height:5px;border-radius:5px;
+    background:#212838;outline:none;margin:0}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;
+    background:var(--acc);cursor:pointer;border:2px solid #0c0e14;box-shadow:0 0 0 1px #6e8bff66}
+  input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--acc);
+    cursor:pointer;border:2px solid #0c0e14}
+  .hint{font-size:12px;color:var(--mut);margin-top:2px}
+
+  /* waveform */
+  .wavewrap{position:relative}
+  canvas{width:100%;display:block;border-radius:10px;background:#0a0c12;border:1px solid var(--line)}
+  .legend{display:flex;gap:16px;margin-top:9px;font-size:12px;color:var(--mut);flex-wrap:wrap}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .swatch{width:11px;height:3px;border-radius:2px;display:inline-block}
+  .toggles{display:flex;gap:14px;margin-left:auto}
+  .toggles label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:var(--mut)}
+
+  /* readouts */
+  .reads{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
+  @media (max-width:560px){.reads{grid-template-columns:repeat(2,1fr)}}
+  .read{background:var(--panel2);border:1px solid var(--line2);border-radius:11px;padding:11px 12px}
+  .read .k{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut2);font-weight:700}
+  .read .v{font-family:ui-monospace,Menlo,monospace;font-size:20px;font-weight:700;margin-top:3px}
+  .read .u{font-size:11px;color:var(--mut);font-weight:400}
+  .verdict{grid-column:span 1;display:flex;flex-direction:column;justify-content:center}
+  .verdict .v{font-size:15px}
+
+  /* amplitude bars */
+  .bars{margin-top:18px}
+  .bar{display:flex;align-items:center;gap:10px;margin:7px 0}
+  .bar .bl{width:64px;font-size:12px;color:var(--mut);text-align:right}
+  .bar .track{flex:1;height:16px;background:#11151f;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+  .bar .fill{height:100%;border-radius:8px;transition:width .12s}
+  .bar .bv{width:76px;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--txt)}
+
+  /* equation */
+  .eq{margin-top:18px;background:#0a0c12;border:1px solid var(--line);border-radius:11px;padding:14px 15px}
+  .eq .form{font-family:ui-monospace,Menlo,monospace;font-size:15px;color:var(--accsoft);text-align:center}
+  .eq .plug{font-family:ui-monospace,Menlo,monospace;font-size:13.5px;color:var(--txt);text-align:center;margin-top:9px}
+  .eq .plug b{color:var(--acc)}
+  .eq .note{font-size:11.5px;color:var(--mut2);text-align:center;margin-top:8px}
+
+  .insight{margin-top:16px;padding:13px 15px;border-radius:11px;border:1px solid;font-size:13.5px;line-height:1.5}
+
+  footer{margin-top:26px;color:var(--mut2);font-size:12px;line-height:1.6}
+  footer code{background:#141925;padding:1px 5px;border-radius:4px;color:#c3cad8}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>CMRR collapse — <b>play with the leak</b></h1>
+    <p>The enemy (60&nbsp;Hz mains) is <i>common-mode</i>: the same voltage <code style="color:#c3cad8">V<sub>cm</sub></code> on both canthi. A differential amp is supposed to subtract it away — but only if the two electrode paths are <b>identical</b>. Any impedance mismatch <code style="color:#c3cad8">ΔZ</code> converts that common-mode into a fake <i>differential</i> signal <i>before it reaches the chip</i>. Drag the sliders and watch it bury a saccade.</p>
+  </header>
+
+  <div class="grid">
+    <!-- CONTROLS -->
+    <div class="card">
+      <h2>Scenarios</h2>
+      <div class="presets" id="presets"></div>
+
+      <h2 style="margin-top:20px">Knobs</h2>
+      <div id="sliders"></div>
+    </div>
+
+    <!-- OUTPUT -->
+    <div>
+      <div class="card">
+        <div class="legend" style="margin:0 0 10px">
+          <span><i class="swatch" style="background:var(--trace)"></i>what the amp records (signal + hum)</span>
+          <span><i class="swatch" style="background:var(--sig)"></i>true eye signal</span>
+          <span><i class="swatch" style="background:var(--hum)"></i>leaked 60&nbsp;Hz</span>
+          <div class="toggles">
+            <label><input type="checkbox" id="tGhost" checked> ghost</label>
+            <label><input type="checkbox" id="tAnim" checked> animate</label>
+          </div>
+        </div>
+        <div class="wavewrap"><canvas id="wave"></canvas></div>
+
+        <div class="reads">
+          <div class="read"><div class="k">ΔZ mismatch</div><div class="v" id="rDz">0<span class="u"> kΩ</span></div></div>
+          <div class="read"><div class="k">Leaked 60&nbsp;Hz</div><div class="v" id="rErr">0<span class="u"> µV</span></div></div>
+          <div class="read"><div class="k">System CMRR</div><div class="v" id="rCmrr">0<span class="u"> dB</span></div></div>
+          <div class="read verdict" id="rVerdictCard"><div class="k">Verdict</div><div class="v" id="rVerdict">—</div></div>
+        </div>
+
+        <div class="bars">
+          <div class="bar"><div class="bl">eye signal</div><div class="track"><div class="fill" id="barSig" style="background:var(--sig)"></div></div><div class="bv" id="bvSig">—</div></div>
+          <div class="bar"><div class="bl">60 Hz hum</div><div class="track"><div class="fill" id="barHum" style="background:var(--hum)"></div></div><div class="bv" id="bvHum">—</div></div>
+        </div>
+
+        <div class="eq">
+          <div class="form">V<sub>error</sub> &nbsp;≈&nbsp; V<sub>cm</sub> &nbsp;×&nbsp; ΔZ &nbsp;/&nbsp; Z<sub>in</sub></div>
+          <div class="plug" id="eqPlug"></div>
+          <div class="note" id="eqNote"></div>
+        </div>
+
+        <div class="insight" id="insight"></div>
+      </div>
+
+      <footer>
+        <b>Reading the panel.</b> The equation is the small-mismatch approximation; the plot and readouts use the exact voltage-divider difference
+        <code>V<sub>+</sub>−V<sub>−</sub> = V<sub>cm</sub>·Z<sub>in</sub>·(Z<sub>R</sub>−Z<sub>L</sub>)/((Z<sub>in</sub>+Z<sub>L</sub>)(Z<sub>in</sub>+Z<sub>R</sub>))</code>,
+        floored by a fixed chip CMRR of 110&nbsp;dB (you can't reject better than the amplifier itself). Notch filters live <i>downstream</i> of this — they can't undo a conversion that already happened at the electrodes.
+      </footer>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const CHIP_CMRR_DB = 110;
+const CHIP_LEAK_FRAC = Math.pow(10, -CHIP_CMRR_DB/20); // fraction of Vcm the chip alone leaks
+
+// ---- slider config ----
+const CFG = [
+  {id:'Vcm', name:'V<sub>cm</sub>', sub:'common-mode on the body', unit:'mV', type:'log', min:1, max:2000, def:50,
+   fmt:v=> v>=1000 ? (v/1000).toFixed(2)+' V' : v.toFixed(0)+' mV'},
+  {id:'ZL',  name:'Z<sub>L</sub>', sub:'left electrode', unit:'kΩ', type:'lin', min:1, max:100, step:0.5, def:5,
+   fmt:v=> v.toFixed(1)+' kΩ'},
+  {id:'ZR',  name:'Z<sub>R</sub>', sub:'right electrode', unit:'kΩ', type:'lin', min:1, max:100, step:0.5, def:5,
+   fmt:v=> v.toFixed(1)+' kΩ'},
+  {id:'Zin', name:'Z<sub>in</sub>', sub:"amp's input impedance @60 Hz", unit:'MΩ', type:'log', min:1, max:1000, def:100,
+   fmt:v=> v.toFixed(0)+' MΩ'},
+  {id:'sig', name:'signal', sub:'true saccade amplitude', unit:'µV', type:'lin', min:50, max:1000, step:10, def:300,
+   fmt:v=> v.toFixed(0)+' µV'},
+];
+
+const PRESETS = [
+  {key:'matched',  label:'Matched pair',        Vcm:50,   ZL:5, ZR:5,  Zin:100, sig:300},
+  {key:'lifting',  label:'One electrode lifting',Vcm:300,  ZL:5, ZR:40, Zin:100, sig:300},
+  {key:'bench',    label:'Bench rig (matched R)',Vcm:1800, ZL:5, ZR:5,  Zin:100, sig:300},
+  {key:'badbias',  label:'Bad bias (Vₘ huge)',Vcm:1800,ZL:5, ZR:15, Zin:100, sig:300},
+  {key:'sweaty',   label:'Sweaty subject',       Vcm:600,  ZL:5, ZR:30, Zin:100, sig:250},
+  {key:'cheapamp', label:'Low-Zᵢₙ amp',Vcm:200,  ZL:5, ZR:25, Zin:5,   sig:300},
+];
+
+const state = {Vcm:50, ZL:5, ZR:5, Zin:100, sig:300};
+
+// ---- log-slider mapping (pos 0..1000) ----
+const logval = (pos,min,max)=> min*Math.pow(max/min, pos/1000);
+const logpos = (val,min,max)=> 1000*Math.log(val/min)/Math.log(max/min);
+
+// ---- build sliders ----
+const slidersEl = document.getElementById('sliders');
+const sliderInputs = {};
+const valEls = {};
+for(const c of CFG){
+  const wrap = document.createElement('div'); wrap.className='slider';
+  const lab = document.createElement('div'); lab.className='slabel';
+  lab.innerHTML = `<span class="name">${c.name}<small>${c.sub}</small></span><span class="val" id="v_${c.id}"></span>`;
+  const inp = document.createElement('input'); inp.type='range';
+  if(c.type==='log'){ inp.min=0; inp.max=1000; inp.step=1; inp.value=logpos(c.def,c.min,c.max); }
+  else { inp.min=c.min; inp.max=c.max; inp.step=c.step; inp.value=c.def; }
+  inp.addEventListener('input', ()=>{ readSlider(c); render(); });
+  wrap.appendChild(lab); wrap.appendChild(inp);
+  slidersEl.appendChild(wrap);
+  sliderInputs[c.id]=inp; valEls[c.id]=lab.querySelector('.val');
+}
+function readSlider(c){
+  const raw = parseFloat(sliderInputs[c.id].value);
+  state[c.id] = c.type==='log' ? logval(raw,c.min,c.max) : raw;
+}
+function setSliders(){
+  for(const c of CFG){
+    sliderInputs[c.id].value = c.type==='log' ? logpos(state[c.id],c.min,c.max) : state[c.id];
+  }
+}
+
+// ---- presets ----
+const presetsEl = document.getElementById('presets');
+for(const p of PRESETS){
+  const b = document.createElement('button'); b.className='preset'; b.textContent=p.label;
+  b.addEventListener('click', ()=>{ state.Vcm=p.Vcm; state.ZL=p.ZL; state.ZR=p.ZR; state.Zin=p.Zin; state.sig=p.sig; setSliders(); render(); });
+  presetsEl.appendChild(b);
+}
+
+// ---- physics ----
+function compute(){
+  const Zl=state.ZL*1e3, Zr=state.ZR*1e3, Zin=state.Zin*1e6, Vcm=state.Vcm*1e-3, sig=state.sig*1e-6;
+  const Vp = Vcm*Zin/(Zin+Zl);
+  const Vm = Vcm*Zin/(Zin+Zr);
+  const leakElec = Math.abs(Vp - Vm);
+  const leakChip = Vcm*CHIP_LEAK_FRAC;
+  const Verror = leakElec + leakChip;               // volts, differential
+  const approx  = Vcm*Math.abs(Zl-Zr)/Zin;          // small-mismatch approximation (electrode term)
+  const cmrrDb  = 20*Math.log10(Vcm/Verror);
+  const dZ = Math.abs(state.ZL-state.ZR);
+  const ratio = Verror/sig;
+  return {Verror, approx, cmrrDb, dZ, ratio, sig, Vcm, leakElec, leakChip};
+}
+
+// ---- verdict tiers ----
+function verdict(r){
+  if(r<0.1)  return {t:'Clean',       c:'var(--ok)'};
+  if(r<0.4)  return {t:'Contaminated',c:'var(--warn)'};
+  if(r<1.5)  return {t:'Buried',      c:'var(--bad)'};
+  return {t:'Swamped', c:'var(--crit)'};
+}
+
+// ---- waveform ----
+const canvas = document.getElementById('wave');
+const ctx = canvas.getContext('2d');
+const T = 0.5;                    // seconds shown
+const N = 1000;
+let phase = 0;
+let last = {Verror:0, sig:3e-4};
+
+// true saccade signal: right-hold, center, left-hold, center
+function sigAt(t, A){
+  const f = t/T;
+  if(f<0.10) return 0;
+  if(f<0.28) return  A;
+  if(f<0.42) return 0;
+  if(f<0.60) return -A;
+  return 0;
+}
+function resizeCanvas(){
+  const dpr = window.devicePixelRatio||1;
+  const w = canvas.clientWidth, h = 260;
+  canvas.width = w*dpr; canvas.height = h*dpr; canvas.style.height=h+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+function drawWave(){
+  const w = canvas.clientWidth, h = 260, pad=14;
+  ctx.clearRect(0,0,w,h);
+  const A = last.sig, err = last.Verror;
+  // y-scale: fit the trace (signal+hum), so big hum visibly dominates
+  let peak = A;
+  for(let i=0;i<=N;i++){ const t=i/N*T; const y=Math.abs(sigAt(t,A)+err*Math.sin(2*Math.PI*60*(t+phase))); if(y>peak)peak=y; }
+  peak = Math.max(peak, 1e-6)*1.12;
+  const mid = h/2, amp = (h/2-pad)/peak;
+  // grid midline
+  ctx.strokeStyle='#171c28'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(pad,mid); ctx.lineTo(w-pad,mid); ctx.stroke();
+  const X = t => pad + (t/T)*(w-2*pad);
+  const Y = v => mid - v*amp;
+  // ghost of the true signal
+  if(document.getElementById('tGhost').checked){
+    ctx.strokeStyle='rgba(74,222,128,.42)'; ctx.lineWidth=1.5; ctx.setLineDash([5,4]); ctx.beginPath();
+    for(let i=0;i<=N;i++){ const t=i/N*T; const v=sigAt(t,A); (i?ctx.lineTo:ctx.moveTo).call(ctx,X(t),Y(v)); }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  // recorded trace
+  ctx.strokeStyle='#cfd6e6'; ctx.lineWidth=1.7; ctx.beginPath();
+  for(let i=0;i<=N;i++){ const t=i/N*T; const v=sigAt(t,A)+err*Math.sin(2*Math.PI*60*(t+phase)); (i?ctx.lineTo:ctx.moveTo).call(ctx,X(t),Y(v)); }
+  ctx.stroke();
+}
+
+// ---- main render ----
+function fmtV(volts){ // volts -> readable µV/mV
+  const uv = volts*1e6;
+  if(uv<1) return {n:(uv).toFixed(2), u:'µV'};
+  if(uv<1000) return {n:uv.toFixed(uv<10?1:0), u:'µV'};
+  return {n:(uv/1000).toFixed(2), u:'mV'};
+}
+function render(){
+  // slider value labels
+  for(const c of CFG) valEls[c.id].innerHTML = c.fmt(state[c.id]);
+
+  const r = compute();
+  last = {Verror:r.Verror, sig:r.sig};
+
+  // readouts
+  document.getElementById('rDz').innerHTML = r.dZ.toFixed(1)+'<span class="u"> kΩ</span>';
+  const ev = fmtV(r.Verror);
+  document.getElementById('rErr').innerHTML = ev.n+'<span class="u"> '+ev.u+'</span>';
+  document.getElementById('rCmrr').innerHTML = r.cmrrDb.toFixed(0)+'<span class="u"> dB</span>';
+  const vd = verdict(r.ratio);
+  const vEl = document.getElementById('rVerdict'); vEl.textContent = vd.t; vEl.style.color = vd.c;
+  document.getElementById('rVerdictCard').style.borderColor = vd.c+'66';
+
+  // amplitude bars (shared scale)
+  const mx = Math.max(r.sig, r.Verror, 1e-9);
+  document.getElementById('barSig').style.width = (100*r.sig/mx)+'%';
+  document.getElementById('barHum').style.width = (100*r.Verror/mx)+'%';
+  const sv=fmtV(r.sig), hv=fmtV(r.Verror);
+  document.getElementById('bvSig').textContent = sv.n+' '+sv.u;
+  document.getElementById('bvHum').textContent = hv.n+' '+hv.u;
+
+  // equation plug-in
+  const vcmTxt = state.Vcm>=1000 ? (state.Vcm/1000).toFixed(2)+' V' : state.Vcm.toFixed(0)+' mV';
+  const ap = fmtV(r.approx);
+  document.getElementById('eqPlug').innerHTML =
+    `<b>${ap.n} ${ap.u}</b> &nbsp;≈&nbsp; ${vcmTxt} &nbsp;×&nbsp; ${r.dZ.toFixed(1)} kΩ &nbsp;/&nbsp; ${state.Zin.toFixed(0)} MΩ`;
+  const exactUv = r.Verror*1e6, apxUv = r.approx*1e6;
+  const gap = apxUv>0 ? Math.abs(exactUv-apxUv)/Math.max(apxUv,1e-9) : 0;
+  document.getElementById('eqNote').innerHTML = r.dZ<1e-6
+    ? 'ΔZ = 0 → the approximation gives 0; the exact leak is the chip’s 110 dB floor.'
+    : (gap>0.15
+        ? `approximation drifts from the exact ${ev.n} ${ev.u} once Z is not ≪ Z<sub>in</sub>`
+        : `matches the exact ${ev.n} ${ev.u} closely (Z ≪ Z<sub>in</sub>)`);
+
+  // insight
+  insight(r, vd);
+}
+
+function insight(r, vd){
+  const el = document.getElementById('insight');
+  let msg, col;
+  if(r.dZ < 1e-6){
+    col='var(--ok)';
+    msg = `<b>Bridge balanced.</b> Z<sub>L</sub> = Z<sub>R</sub>, so the two inputs sit at the <i>same</i> voltage (V<sub>+</sub> = V<sub>−</sub>) and the common-mode cancels perfectly. Rejection is now limited only by the amplifier chip (${CHIP_CMRR_DB} dB). <b>Try cranking V<sub>cm</sub> to the max — the trace stays clean.</b> That is exactly why a matched bench rig hides this whole failure: the fault is a property of the <i>mismatch</i>, and there is none here.`;
+  } else if(vd.t==='Clean'){
+    col='var(--ok)';
+    msg = `A mismatch exists, but the leak sits well below the saccade. Notice the two levers: with a small V<sub>cm</sub> (good bias), even a sizeable ΔZ barely leaks — and with a high Z<sub>in</sub>, the divider barely diverts. <b>Now raise V<sub>cm</sub></b> and watch the same ΔZ suddenly matter.`;
+  } else {
+    col = vd.c;
+    msg = `<b>Common-mode is leaking into your differential channel.</b> The ${r.dZ.toFixed(1)} kΩ imbalance makes V<sub>+</sub> and V<sub>−</sub> divide the ${state.Vcm>=1000?(state.Vcm/1000).toFixed(1)+' V':state.Vcm.toFixed(0)+' mV'} of 60 Hz by <i>different</i> amounts, so a difference appears that the amp can’t tell from a real saccade. The chip’s ${CHIP_CMRR_DB} dB is irrelevant — the conversion happened <i>at the electrodes</i>. <b>Match the two impedances</b> (set Z<sub>R</sub> = Z<sub>L</sub>) and it vanishes, no matter how big V<sub>cm</sub> is.`;
+  }
+  el.style.borderColor = col+'55'; el.style.background = col+'10'; el.innerHTML = msg;
+}
+
+// ---- animation ----
+function tick(){
+  if(document.getElementById('tAnim').checked){ phase += 1/60 * 0.12; }
+  drawWave();
+  requestAnimationFrame(tick);
+}
+document.getElementById('tGhost').addEventListener('change', drawWave);
+window.addEventListener('resize', ()=>{ resizeCanvas(); drawWave(); });
+
+// ---- boot ----
+setSliders();
+resizeCanvas();
+render();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
