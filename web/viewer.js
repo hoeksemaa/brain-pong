@@ -101,7 +101,9 @@
     })();
   }
 
-  const state = { recs:[], rec:null, detail:null, filt:"raw", chans:2, trim:{}, ribbon:null, channels:null, eegRows:null };
+  const state = { recs:[], rec:null, detail:null, filt:"raw", chans:2, trim:{}, ribbon:null, channels:null, eegRows:null,
+                  sortByDate:(localStorage.getItem("eog:sortByDate")==="1"),
+                  sortDir:(localStorage.getItem("eog:sortDir")==="asc"?"asc":"desc") };
   const RB = { cv:null, t:null, rid:null, draw:null, drag:null };
 
   // ── canvas drawing (shared) ─────────────────────────────────────────────────
@@ -277,9 +279,31 @@
     RB.drag=null; });
 
   // ── sidebar ─────────────────────────────────────────────────────────────────
+  // Date sort: when enabled, order the list by recording date. The id encodes
+  // YYYYMMDD-HHMMSS, so a plain string compare is chronological. Off → API order.
+  function applySort(recs){
+    if(!state.sortByDate) return recs;
+    const dir = state.sortDir==="asc" ? 1 : -1;
+    return recs.slice().sort((a,b)=> dir * a.id.localeCompare(b.id));
+  }
+  function persistSort(){ try{ localStorage.setItem("eog:sortByDate", state.sortByDate?"1":"0"); localStorage.setItem("eog:sortDir", state.sortDir); }catch(e){} }
+  function renderControls(){
+    const bar=$(".sortbar"); if(!bar) return; bar.innerHTML="";
+    bar.appendChild(el("span","sortlabel","Sort"));
+    const tog=el("button","schip"+(state.sortByDate?" on":""),"Date");
+    tog.title="Toggle sorting the list by recording date";
+    tog.onclick=()=>{ state.sortByDate=!state.sortByDate; persistSort(); LOG.info(`sort by date: ${state.sortByDate}`); renderControls(); renderSidebar(); };
+    bar.appendChild(tog);
+    if(state.sortByDate){
+      const dir=el("button","schip dir", state.sortDir==="asc"?"↑ Oldest first":"↓ Newest first");
+      dir.title="Toggle ascending / descending";
+      dir.onclick=()=>{ state.sortDir=state.sortDir==="asc"?"desc":"asc"; persistSort(); LOG.info(`sort dir: ${state.sortDir}`); renderControls(); renderSidebar(); };
+      bar.appendChild(dir);
+    }
+  }
   function renderSidebar(){
     const list=$(".reclist"); list.innerHTML="";
-    for(const r of state.recs){
+    for(const r of applySort(state.recs)){
       const li=el("li","recitem"+(state.rec&&state.rec.id===r.id?" sel":""));
       const head=el("div","rihead");
       head.appendChild(el("span","rsub",r.subject));            // name
@@ -300,6 +324,7 @@
     const nTrim=state.recs.filter(r=>r.trim).length;
     state.recs.forEach(r=>{ if(r.trim) state.trim[r.id]=r.trim; });
     LOG.info(`recordings loaded: ${state.recs.length} (${nTrim} trimmed)`);
+    renderControls();
     renderSidebar();
     const q=new URLSearchParams(location.search).get("rec");
     const def=state.recs.find(r=>r.id===q)||state.recs[0];

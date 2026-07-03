@@ -1,0 +1,268 @@
+{
+  "CLIPS": {
+    "name": "CLIPS",
+    "n_samples": 48847,
+    "duration_s": 195.388,
+    "dc": {
+      "CH1": {
+        "mean_mV": -178.32694029815733,
+        "min_mV": -180.37893623113632,
+        "max_mV": -174.7739464044571,
+        "abs_max_mV": 180.37893623113632,
+        "headroom_min_mV": 7.121063768863678,
+        "headroom_dc_mV": 9.173059701842675,
+        "rail_use_pct": 96.2020993232727,
+        "frac_within_5pct_rail": 0.5379859561487911
+      },
+      "CH2": {
+        "mean_mV": -179.38322811128467,
+        "min_mV": -181.53847754001617,
+        "max_mV": -175.74260383844376,
+        "abs_max_mV": 181.53847754001617,
+        "headroom_min_mV": 5.961522459983826,
+        "headroom_dc_mV": 8.116771888715334,
+        "rail_use_pct": 96.8205213546753,
+        "frac_within_5pct_rail": 0.807582860769341
+      },
+      "HEOG": {
+        "mean_mV": -1.0562878131273423,
+        "min_mV": -1.1871010065078735,
+        "max_mV": -0.9665340185165405,
+        "abs_max_mV": 1.1871010065078735,
+        "headroom_min_mV": 186.31289899349213,
+        "headroom_dc_mV": 186.44371218687266,
+        "rail_use_pct": 0.6331205368041992,
+        "frac_within_5pct_rail": 0.0
+      }
+    },
+    "drift": {
+      "CH1": {
+        "slope_mV_per_min": -0.3021088976880727,
+        "total_linear_change_mV": -0.9837874144314399,
+        "slow_p2p_mV_<0.1Hz": 3.8851081264026277,
+        "slow_std_mV_<0.1Hz": 0.4366715629773235
+      },
+      "CH2": {
+        "slope_mV_per_min": -0.36245906851985205,
+        "total_linear_change_mV": -1.180311710728046,
+        "slow_p2p_mV_<0.1Hz": 4.064583916493888,
+        "slow_std_mV_<0.1Hz": 0.47292286963691393
+      },
+      "HEOG": {
+        "slope_mV_per_min": -0.0603501708318249,
+        "total_linear_change_mV": -0.1965242962967546,
+        "slow_p2p_mV_<0.1Hz": 0.19309694944244493,
+        "slow_std_mV_<0.1Hz": 0.059007642751050575
+      }
+    },
+    "noise": {
+      "CH1": {
+        "sample_to_sample_uV_rms": 1112.9126973228472,
+        "rest_total_std_uV": 1149.49935006458,
+        "rest_band_1_40Hz_uV_rms": 102.03202269762942,
+        "rest_band_15_45Hz_uV_rms": 41.51603594765487,
+        "rest_band_above70Hz_uV_rms": 137.67724289046748
+      },
+      "CH2": {
+        "sample_to_sample_uV_rms": 1112.585354726251,
+        "rest_total_std_uV": 1149.1604890984968,
+        "rest_band_1_40Hz_uV_rms": 102.07594377980823,
+        "rest_band_15_45Hz_uV_rms": 41.484422971570325,
+        "rest_band_above70Hz_uV_rms": 137.6450159840844
+      },
+      "HEOG": {
+        "sample_to_sample_uV_rms": 0.6402204854904608,
+        "rest_total_std_uV": 3.880526945424078,
+        "rest_band_1_40Hz_uV_rms": 3.4253742386956607,
+        "rest_band_15_45Hz_uV_rms": 0.874070126790689,
+        "rest_band_above70Hz_uV_rms": 0.4014508904357411
+      }
+    },
+    "n_rest_windows": 50,
+    "mains": {
+      "CH1": {
+        "rms_60Hz_pm1_uV": 1149.3100165614119,
+        "rms_120Hz_pm1_uV": 2.1768042302252484,
+        "rms_50Hz_pm1_uV": 0.7014412177962013,
+        "rms_total_1_124Hz_uV": 1149.3602704033774
+      },
+      "CH2": {
+        "rms_60Hz_pm1_uV": 1148.9719387644668,
+        "rms_120Hz_pm1_uV": 2.1742312428724166,
+        "rms_50Hz_pm1_uV": 0.702420598560385,
+        "rms_total_1_124Hz_uV": 1149.0221436773716
+      },
+      "HEOG": {
+        "rms_60Hz_pm1_uV": 0.5890734254467219,
+        "rms_120Hz_pm1_uV": 0.013700523600619465,
+        "rms_50Hz_pm1_uV": 0.03071620020764167,
+        "rms_total_1_124Hz_uV": 3.2044958086977466
+      }
+    },
+    "task": {
+      "n_LEFT": 25,
+      "n_RIGHT": 25,
+      "LEFT_mean_uV": -23.542501777410507,
+      "LEFT_std_uV": 2.625402838986905,
+      "RIGHT_mean_uV": 17.660274356603622,
+      "RIGHT_std_uV": 2.983702946782268,
+      "separation_uV": 41.20277613401413,
+      "pooled_within_std_uV": 2.810268967696659,
+      "cohen_d": 14.661506285565462,
+      "auc": 1.0,
+      "best_threshold_acc": 1.0,
+      "mean_trial_baseline_noise_uV": 1.4988842919259602,
+      "snr_sep_over_noise": 27.488963861961274
+    },
+    "thirds_s2s_uV": {
+      "CH1": [
+        1111.6007178338953,
+        1112.3669243001152,
+        1114.8293946491824
+      ],
+      "CH2": [
+        1111.3674229521346,
+        1112.0248339082164,
+        1114.4229583862596
+      ],
+      "HEOG": [
+        0.5557671601380205,
+        0.6455740808650244,
+        0.7099486248129497
+      ]
+    }
+  },
+  "GOLD": {
+    "name": "GOLD",
+    "n_samples": 48713,
+    "duration_s": 194.852,
+    "dc": {
+      "CH1": {
+        "mean_mV": -28.312705515942767,
+        "min_mV": -29.863402247428894,
+        "max_mV": -26.64242684841156,
+        "abs_max_mV": 29.863402247428894,
+        "headroom_min_mV": 157.6365977525711,
+        "headroom_dc_mV": 159.18729448405725,
+        "rail_use_pct": 15.92714786529541,
+        "frac_within_5pct_rail": 0.0
+      },
+      "CH2": {
+        "mean_mV": -47.4815271340386,
+        "min_mV": -49.098215997219086,
+        "max_mV": -43.179698288440704,
+        "abs_max_mV": 49.098215997219086,
+        "headroom_min_mV": 138.40178400278091,
+        "headroom_dc_mV": 140.0184728659614,
+        "rail_use_pct": 26.185715198516846,
+        "frac_within_5pct_rail": 0.0
+      },
+      "HEOG": {
+        "mean_mV": -19.16882161809583,
+        "min_mV": -19.65051144361496,
+        "max_mV": -16.528241336345673,
+        "abs_max_mV": 19.65051144361496,
+        "headroom_min_mV": 167.84948855638504,
+        "headroom_dc_mV": 168.33117838190418,
+        "rail_use_pct": 10.480272769927979,
+        "frac_within_5pct_rail": 0.0
+      }
+    },
+    "drift": {
+      "CH1": {
+        "slope_mV_per_min": 0.8557489394219817,
+        "total_linear_change_mV": 2.7790161558082382,
+        "slow_p2p_mV_<0.1Hz": 2.789603469837246,
+        "slow_std_mV_<0.1Hz": 0.8023869411689126
+      },
+      "CH2": {
+        "slope_mV_per_min": 0.9539259213935734,
+        "total_linear_change_mV": 3.0978426321949164,
+        "slow_p2p_mV_<0.1Hz": 3.163836214743341,
+        "slow_std_mV_<0.1Hz": 0.8957369854988587
+      },
+      "HEOG": {
+        "slope_mV_per_min": 0.0981769819715795,
+        "total_linear_change_mV": 0.3188264763866387,
+        "slow_p2p_mV_<0.1Hz": 0.8255252177219106,
+        "slow_std_mV_<0.1Hz": 0.17478398886483534
+      }
+    },
+    "noise": {
+      "CH1": {
+        "sample_to_sample_uV_rms": 5.422784146617706,
+        "rest_total_std_uV": 30.41324210261177,
+        "rest_band_1_40Hz_uV_rms": 26.116983890455327,
+        "rest_band_15_45Hz_uV_rms": 5.602967366578675,
+        "rest_band_above70Hz_uV_rms": 2.901803478019654
+      },
+      "CH2": {
+        "sample_to_sample_uV_rms": 6.765700172919927,
+        "rest_total_std_uV": 68.07799490319572,
+        "rest_band_1_40Hz_uV_rms": 59.418371754867024,
+        "rest_band_15_45Hz_uV_rms": 6.959096238838399,
+        "rest_band_above70Hz_uV_rms": 3.0166619442729306
+      },
+      "HEOG": {
+        "sample_to_sample_uV_rms": 5.712402828472267,
+        "rest_total_std_uV": 68.85743950145095,
+        "rest_band_1_40Hz_uV_rms": 59.173252042176706,
+        "rest_band_15_45Hz_uV_rms": 10.461947381611104,
+        "rest_band_above70Hz_uV_rms": 4.8305081871185305
+      }
+    },
+    "n_rest_windows": 50,
+    "mains": {
+      "CH1": {
+        "rms_60Hz_pm1_uV": 3.2468310805385863,
+        "rms_120Hz_pm1_uV": 0.30872933317215684,
+        "rms_50Hz_pm1_uV": 0.7102148105419719,
+        "rms_total_1_124Hz_uV": 22.247263759906843
+      },
+      "CH2": {
+        "rms_60Hz_pm1_uV": 3.5181694067280045,
+        "rms_120Hz_pm1_uV": 0.15657175664907325,
+        "rms_50Hz_pm1_uV": 0.5612068032159213,
+        "rms_total_1_124Hz_uV": 52.3855185273253
+      },
+      "HEOG": {
+        "rms_60Hz_pm1_uV": 0.6454803835174965,
+        "rms_120Hz_pm1_uV": 0.27264981673752564,
+        "rms_50Hz_pm1_uV": 0.6088989625138187,
+        "rms_total_1_124Hz_uV": 50.85700458536523
+      }
+    },
+    "task": {
+      "n_LEFT": 25,
+      "n_RIGHT": 25,
+      "LEFT_mean_uV": -240.34032672643661,
+      "LEFT_std_uV": 97.95022200609377,
+      "RIGHT_mean_uV": 212.15884611010551,
+      "RIGHT_std_uV": 47.842189132855836,
+      "separation_uV": 452.49917283654213,
+      "pooled_within_std_uV": 77.08151870606535,
+      "cohen_d": 5.870397735182871,
+      "auc": 0.9984,
+      "best_threshold_acc": 0.98,
+      "mean_trial_baseline_noise_uV": 28.768285163648393,
+      "snr_sep_over_noise": 15.72909786810373
+    },
+    "thirds_s2s_uV": {
+      "CH1": [
+        4.075459060169017,
+        6.657530634182149,
+        5.2237308890299925
+      ],
+      "CH2": [
+        4.31833861366708,
+        5.974269279210636,
+        9.109720993229658
+      ],
+      "HEOG": [
+        2.8356122535033665,
+        6.298438381012848,
+        7.084174973120751
+      ]
+    }
+  }
+}

@@ -11,6 +11,13 @@ html,body{margin:0;height:100%;background:var(--bg);color:#e6e9f0;
 .filters{display:flex;gap:7px;padding:0 14px 14px;flex-wrap:wrap}
 .fchip{font-size:11px;padding:4px 10px;border:1px solid #232a39;border-radius:999px;color:#8b93a7;cursor:default}
 .fchip.on{color:#aab6ff;border-color:#6e8bff55;background:#6e8bff14}
+.sortbar{display:flex;align-items:center;gap:7px;padding:0 14px 12px;flex-wrap:wrap}
+.sortlabel{font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:#6b7387}
+.schip{font-size:11px;padding:4px 10px;border:1px solid #232a39;border-radius:999px;color:#8b93a7;background:transparent;cursor:pointer;font-family:inherit;transition:background .12s,color .12s,border-color .12s}
+.schip:hover{color:#c3cad8;border-color:#2c3548}
+.schip.on{color:#aab6ff;border-color:#6e8bff55;background:#6e8bff14}
+.schip.dir{color:#9db0ff;border-color:#6e8bff40}
+.schip.dir:hover{background:#6e8bff12}
 .reclist{list-style:none;margin:0;padding:8px 10px;overflow:auto;flex:1}
 .recitem{padding:11px 12px;border:1px solid transparent;border-radius:11px;margin-bottom:7px;cursor:pointer;transition:background .12s}
 .recitem:hover{background:#161b26}
