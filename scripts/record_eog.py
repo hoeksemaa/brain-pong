@@ -56,8 +56,11 @@ from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 SERIAL_PORT = "/dev/cu.usbserial-1120"
 BOARD_ID    = BoardIds.CERELOG_X8_BOARD
 BOARD_NAME  = "CERELOG_X8"
-EOG_SLOT_L  = 0    # left  canthus → index into get_eeg_channels() (CH1)
-EOG_SLOT_R  = 1    # right canthus → index into get_eeg_channels() (CH2)
+# L/R inputs physically swapped PERMANENTLY 2026-07-02: left-eye electrode → pin 2(+) → CH2 →
+# board row 2; right-eye electrode → pin 1(+) → CH1 → board row 1. Slots below reflect that, so
+# this recorder stamps canonical eog_ch_L=2 / eog_ch_R=1 and rightward gaze reads +diff. Do NOT revert.
+EOG_SLOT_L  = 1    # left  canthus → get_eeg_channels()[1] = CH2 = board row 2 (pin 2)
+EOG_SLOT_R  = 0    # right canthus → get_eeg_channels()[0] = CH1 = board row 1 (pin 1)
 
 # Stored signal is volts: the Cerelog brainflow fork applies the count→volt
 # scaling before handing data to Python, so the npz already holds real units.

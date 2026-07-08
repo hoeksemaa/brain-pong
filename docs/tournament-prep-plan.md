@@ -40,6 +40,7 @@ Clean saccade signal on an **arbitrary person**; cross-person noise/variance mus
 
 Fires on real saccades, not noise, across people.
 - [ ] (J13) Lock scheme = **single-saccade** (bench ~94% vs glance-pair 8%); wire `detect.sustained_crossing`/`peak_sign` into the game path; verify via `replay_eog`. `[claude]`
+- [ ] (J13) **Flip L/R polarity**: primary hardware montage now collects left/right inverted → switch the sign convention in both the data (`eog_ch_L`/`eog_ch_R` map + saccade labels; via load-time convention, don't mutate existing `.npz`) and the detector's direction mapping (`peak_sign`), so a saccade drives the correct paddle. `[claude/john]` [[project_4subject_jul2_polarity]]
 - [ ] (J13) **Robust auto-calibration**: `max(k·σ, abs_floor)` + reject dead-flat/railing baselines. `[claude]`
 - [ ] (J13) **Oscillation/false-fire gate**: amplitude-consistency + quiet-interval; test on railing/flat recordings. `[claude]`
 - [ ] (J13) Cross-subject sanity now: replay `aaron` + `german`. `[claude]`
@@ -59,6 +60,8 @@ Fires on real saccades, not noise, across people.
 
 One public site merging portal + game: view data · capture data · play the game.
 - [ ] (J13) **Minimum**: game tournament-ready — 2-player calibration flow + port SSVEP smell fixes + basic feel/scoring. `[claude]`
+- [ ] (J13) **Design critique — Connor**: friend (strong at design) critiques the game design; can land any time before Jul 13. `[john]`
+- [ ] (J13) **Game polish — split-ball power-up**: `multi` forces every split ball upward (`vy = -abs(...)`), so a descending ball snaps direction on split — unintuitive. Preserve each ball's vertical direction (keep the sign of the original `vy`) under the fan-out spread. `[claude]`
 - [ ] (post) **Unify + deploy**: single public site = view (viewer, reads SQLite) + capture (recorder over the SQLite-WAL bus) + play. Public by policy. `[claude]`
 - Note: prior static viewer died of deploy friction, not perf → new site reads the live store; capture needs a host-side board owner (browser can't drive BrainFlow serial). See [[project_eog_viewer]].
 

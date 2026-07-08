@@ -1,5 +1,6 @@
 import argparse
 import math
+import os
 import random
 import sys
 import time
@@ -10,13 +11,39 @@ from dash.exceptions import PreventUpdate
 import logging
 
 # --- CLI ---
-_cli_parser = argparse.ArgumentParser(add_help=False)
+_cli_parser = argparse.ArgumentParser(
+    prog='pong_game_brainflow.py',
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    description=(
+        'BrainPong — EOG eye-tracking pong on the Cerelog X8.\n'
+        'Glance left/right to move your paddle (or use the keyboard), then open\n'
+        'the local web UI at http://127.0.0.1:8050/.\n'
+        '\n'
+        'Modes:\n'
+        '  (default)    Single-player on a connected board; keyboard control (P1: ←/→).\n'
+        '  --eog        Single-player EOG glance-pair detector (needs board).\n'
+        '  --2player    Two-player EOG.  P1 = ch1-2 (←/→)   |   P2 = ch3-4 (A/D)\n'
+        '  --no-board   Skip hardware; keyboard only. Combine with --2player for\n'
+        '               keyboard two-player (P1: ←/→, P2: A/D).\n'
+        '\n'
+        'Note: --eog cannot be combined with --no-board or --2player.'
+    ),
+    epilog=(
+        'examples:\n'
+        '  python scripts/pong_game_brainflow.py --no-board             # keyboard only, no hardware\n'
+        '  python scripts/pong_game_brainflow.py --no-board --2player   # keyboard two-player\n'
+        '  python scripts/pong_game_brainflow.py --eog                  # single-player EOG (board)\n'
+        '  python scripts/pong_game_brainflow.py --2player              # two-player EOG (board)'
+    ),
+)
 _cli_parser.add_argument('--no-board', action='store_true',
-                         help='Run without BrainFlow hardware (keyboard-only).')
+                         help='Run without BrainFlow hardware; keyboard only (P1: ←/→).')
 _cli_parser.add_argument('--eog', action='store_true',
                          help='Single-player EOG glance-pair detector (requires hardware).')
 _cli_parser.add_argument('--2player', dest='two_player', action='store_true',
-                         help='Two-player EOG: P1=ch1-2, P2=ch3-4. Exclusive with --eog.')
+                         help='Two-player EOG: P1=ch1-2 (←/→), P2=ch3-4 (A/D). Exclusive with --eog.')
+# parse_known_args (not parse_args) keeps the historically lenient behavior of
+# ignoring unrecognized args; add_help defaults to True so -h/--help now works.
 _cli_args, _ = _cli_parser.parse_known_args()
 NO_BOARD_MODE   = _cli_args.no_board
 EOG_MODE        = _cli_args.eog
@@ -49,8 +76,15 @@ INITIAL_BALL_SPEED_Y = -4
 GAME_INTERVAL_MS     = 16
 GAME_WIDTH           = 800
 GAME_HEIGHT          = 600
-PADDLE_WIDTH         = GAME_WIDTH // 3 - 2
-PADDLE_POSITIONS     = [GAME_WIDTH // 6, GAME_WIDTH // 2, 5 * GAME_WIDTH // 6]
+# Each side has N_PANELS discrete paddle slots that tile the width evenly:
+# the paddle is one panel wide and snaps to panel centers. Bump N_PANELS to
+# re-tile everything (width, slot centers, clamps) — keep assets/render.js's
+# ghost-slot loop in sync (it mirrors this formula).
+N_PANELS             = 5
+PADDLE_WIDTH         = GAME_WIDTH // N_PANELS - 2
+PADDLE_POSITIONS     = [GAME_WIDTH * (2 * i + 1) // (2 * N_PANELS) for i in range(N_PANELS)]
+CENTER_ZONE          = N_PANELS // 2   # starting / reset slot index
+MAX_ZONE             = N_PANELS - 1    # clamp ceiling for rightward moves
 PADDLE_HEIGHT        = 20
 BALL_RADIUS          = 10
 POWERUP_RADIUS       = 14
@@ -60,10 +94,13 @@ AI_REACTION_FRAMES   = 31
 BCI_UPDATE_INTERVAL_MS = 100
 
 # EOG electrode slot indices into get_eeg_channels()
-EOG_SLOT_L  = 0   # P1 left
-EOG_SLOT_R  = 1   # P1 right
-EOG_SLOT_L2 = 2   # P2 left
-EOG_SLOT_R2 = 3   # P2 right
+# L/R inputs physically swapped PERMANENTLY 2026-07-02 (left-eye → pin2/CH2/row2, right-eye →
+# pin1/CH1/row1). Slots reflect that so diff = data[ch_R]-data[ch_L] is canonical (rightward → +).
+# Do NOT revert. P2 pair is NOT yet physically wired — its swap is by-convention & UNVALIDATED.
+EOG_SLOT_L  = 1   # P1 left  → CH2/row2
+EOG_SLOT_R  = 0   # P1 right → CH1/row1
+EOG_SLOT_L2 = 3   # P2 left  → CH4/row4  (unvalidated: no 2nd pair wired)
+EOG_SLOT_R2 = 2   # P2 right → CH3/row3  (unvalidated)
 
 # Detection constants (EOG_LPF/HPF_HZ, EOG_SIGMA_THR, EOG_MIN_DUR_MS,
 # GLANCE_WINDOW_S, ARMED_MIN_WAIT_S, REFRACTORY_S, EOG_BASELINE_S) now live in
@@ -105,7 +142,14 @@ def _poll_eog(eog_st):
 # ==============================================================================
 # === 3. APP LAYOUT ============================================================
 # ==============================================================================
-app = Dash(__name__, assets_folder='assets')
+# assets/ lives at the repo root (next to the README demo media), not beside
+# this script under scripts/. Dash resolves a relative assets_folder against
+# the script's own dir, so 'assets' would point at the nonexistent
+# scripts/assets and the clientside renderer (assets/render.js) would 404 —
+# leaving a blank canvas. Pin the real absolute path instead. (Regression from
+# the src/scripts restructure in #25, which moved the script but not assets/.)
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assets')
+app = Dash(__name__, assets_folder=_ASSETS_DIR)
 app.title = "BrainPong — 2-Player EOG" if TWO_PLAYER_MODE else "BrainPong — EOG"
 
 POINTS_TO_WIN = 10
@@ -121,9 +165,9 @@ def get_initial_game_state():
                    'vx': 0, 'vy': INITIAL_BALL_SPEED_Y}],
         'powerups': [],
         'speed_mult': 1.0,
-        'ai_zone_idx': 1, 'ai_move_timer': 0,
-        'zone_idx': 1,    'prev_key': 'None',    'last_bci_seq': 0,
-        'zone_idx_p2': 1, 'prev_key_p2': 'None', 'last_bci_seq_p2': 0,
+        'ai_zone_idx': CENTER_ZONE, 'ai_move_timer': 0,
+        'zone_idx': CENTER_ZONE,    'prev_key': 'None',    'last_bci_seq': 0,
+        'zone_idx_p2': CENTER_ZONE, 'prev_key_p2': 'None', 'last_bci_seq_p2': 0,
         'player_score': 0, 'ai_score': 0, 'winner': None,
     }
 
@@ -232,19 +276,19 @@ clientside_callback(
             window.dash_clientside.current_key    = 'None';
             window.dash_clientside.current_key_p2 = 'None';
             document.addEventListener('keydown', function(e) {
-                if (e.key === 'a' || e.key === 'd') {
-                    window.dash_clientside.current_key = e.key;
-                }
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                     e.preventDefault();
-                    window.dash_clientside.current_key_p2 = e.key;
+                    window.dash_clientside.current_key = e.key;      // P1 = arrows
+                }
+                if (e.key === 'a' || e.key === 'd') {
+                    window.dash_clientside.current_key_p2 = e.key;   // P2 = A/D
                 }
             });
             document.addEventListener('keyup', function(e) {
-                if (e.key === 'a' || e.key === 'd') {
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                     window.dash_clientside.current_key = 'None';
                 }
-                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                if (e.key === 'a' || e.key === 'd') {
                     window.dash_clientside.current_key_p2 = 'None';
                 }
             });
@@ -412,15 +456,15 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
     ball_speed  = settings.get('ball_speed', abs(INITIAL_BALL_SPEED_Y))
     key_command = key_data.get('key', 'None')
     prev_key    = state.get('prev_key', 'None')
-    zone_idx    = state.get('zone_idx', 1)
+    zone_idx    = state.get('zone_idx', CENTER_ZONE)
     speed_mult  = state.get('speed_mult', 1.0)
     balls       = state.get('balls', [])
     powerups    = state.get('powerups', [])
 
-    # --- P1 keyboard ---
+    # --- P1 keyboard (← / →) ---
     if key_command != prev_key:
-        if key_command == 'a':   zone_idx = max(0, zone_idx - 1)
-        elif key_command == 'd': zone_idx = min(2, zone_idx + 1)
+        if key_command == 'ArrowLeft':    zone_idx = max(0, zone_idx - 1)
+        elif key_command == 'ArrowRight': zone_idx = min(MAX_ZONE, zone_idx + 1)
     state['prev_key'] = key_command
 
     # --- P1 EOG ---
@@ -429,20 +473,20 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
         state['last_bci_seq'] = bci_seq
         bci_move = (bci_command or {}).get('command', 'NEUTRAL')
         if bci_move == 'LEFT':    zone_idx = max(0, zone_idx - 1)
-        elif bci_move == 'RIGHT': zone_idx = min(2, zone_idx + 1)
+        elif bci_move == 'RIGHT': zone_idx = min(MAX_ZONE, zone_idx + 1)
 
     state['zone_idx'] = zone_idx
     state['player_x'] = PADDLE_POSITIONS[zone_idx]
 
     # --- Top paddle: P2 (2-player) or AI (single-player) ---
     if TWO_PLAYER_MODE:
-        zone_idx_p2 = state.get('zone_idx_p2', 1)
+        zone_idx_p2 = state.get('zone_idx_p2', CENTER_ZONE)
         prev_key_p2 = state.get('prev_key_p2', 'None')
         key_p2      = key_data.get('key_p2', 'None')
 
         if key_p2 != prev_key_p2:
-            if key_p2 == 'ArrowLeft':  zone_idx_p2 = max(0, zone_idx_p2 - 1)
-            elif key_p2 == 'ArrowRight': zone_idx_p2 = min(2, zone_idx_p2 + 1)
+            if key_p2 == 'a':  zone_idx_p2 = max(0, zone_idx_p2 - 1)
+            elif key_p2 == 'd': zone_idx_p2 = min(MAX_ZONE, zone_idx_p2 + 1)
         state['prev_key_p2'] = key_p2
 
         bci_seq_p2 = (bci_command_p2 or {}).get('seq', 0)
@@ -450,13 +494,13 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
             state['last_bci_seq_p2'] = bci_seq_p2
             bci_move_p2 = (bci_command_p2 or {}).get('command', 'NEUTRAL')
             if bci_move_p2 == 'LEFT':  zone_idx_p2 = max(0, zone_idx_p2 - 1)
-            elif bci_move_p2 == 'RIGHT': zone_idx_p2 = min(2, zone_idx_p2 + 1)
+            elif bci_move_p2 == 'RIGHT': zone_idx_p2 = min(MAX_ZONE, zone_idx_p2 + 1)
 
         state['zone_idx_p2'] = zone_idx_p2
         state['ai_x']        = PADDLE_POSITIONS[zone_idx_p2]
 
     else:
-        ai_zone_idx   = state.get('ai_zone_idx', 1)
+        ai_zone_idx   = state.get('ai_zone_idx', CENTER_ZONE)
         ai_move_timer = state.get('ai_move_timer', 0)
         if ai_move_timer <= 0:
             target_ball = next(
@@ -465,9 +509,7 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
             )
             if target_ball:
                 bx = target_ball['x']
-                if bx < GAME_WIDTH / 3:       ai_zone_idx = 0
-                elif bx < 2 * GAME_WIDTH / 3: ai_zone_idx = 1
-                else:                          ai_zone_idx = 2
+                ai_zone_idx = max(0, min(MAX_ZONE, int(bx / GAME_WIDTH * N_PANELS)))
             ai_move_timer = AI_REACTION_FRAMES
         else:
             ai_move_timer -= 1
@@ -716,15 +758,15 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
         msg = f"Calibrating — {who}hold still, eyes forward...  {max(0, int(countdown))}s"
     elif new_status == 'PLAYING':
         if TWO_PLAYER_MODE and NO_BOARD_MODE:
-            msg = "2-PLAYER — P1: A/D  |  P2: ←/→"
+            msg = "2-PLAYER — P1: ←/→  |  P2: A/D"
         elif TWO_PLAYER_MODE:
-            msg = "2-PLAYER EOG — glance to move  |  P1: A/D override  |  P2: ←/→ override"
+            msg = "2-PLAYER EOG — glance to move  |  P1: ←/→ override  |  P2: A/D override"
         elif NO_BOARD_MODE:
-            msg = "NO BOARD — keyboard only (A/D)"
+            msg = "NO BOARD — keyboard only (←/→)"
         elif EOG_MODE:
-            msg = "PLAYING — glance left/right to move  |  A/D to override"
+            msg = "PLAYING — glance left/right to move  |  ←/→ to override"
         else:
-            msg = "PLAYING — A/D keys"
+            msg = "PLAYING — ←/→ keys"
     elif new_status == 'PAUSED':
         msg = "PAUSED"
     else:
@@ -747,8 +789,8 @@ def main():
     global board, sampling_rate
 
     if NO_BOARD_MODE:
-        mode_msg = ("2-PLAYER NO-BOARD: P1=A/D, P2=←/→." if TWO_PLAYER_MODE
-                    else "NO-BOARD MODE: keyboard only (A/D).")
+        mode_msg = ("2-PLAYER NO-BOARD: P1=←/→, P2=A/D." if TWO_PLAYER_MODE
+                    else "NO-BOARD MODE: keyboard only (←/→).")
         print(mode_msg)
         logging.getLogger('werkzeug').setLevel(logging.ERROR)
         print("Open http://127.0.0.1:8050/ in your browser.")
