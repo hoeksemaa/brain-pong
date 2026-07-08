@@ -116,10 +116,13 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         const gs = dashState.gameState;
         if (!gs) return;
 
-        const paddleW = (dashState.settings && dashState.settings.paddle_width) || 264;
+        const paddleW = (dashState.settings && dashState.settings.paddle_width) || 158;
 
-        // Ghost outlines at all three zone positions
-        const ghostX = [W / 6, W / 2, 5 * W / 6];
+        // Ghost outlines at every zone position. N_PANELS and the slot-center
+        // formula mirror PADDLE_POSITIONS in pong_game_brainflow.py — keep in sync.
+        const N_PANELS = 5;
+        const ghostX = [];
+        for (let i = 0; i < N_PANELS; i++) { ghostX.push(W * (2 * i + 1) / (2 * N_PANELS)); }
         ctx.fillStyle = 'rgba(180, 180, 180, 0.12)';
         for (const gx of ghostX) {
             ctx.fillRect(gx - paddleW / 2, 0,               paddleW, PADDLE_HEIGHT);
