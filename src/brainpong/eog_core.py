@@ -42,12 +42,11 @@ from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 EOG_LPF_HZ       = 100.0
 EOG_HPF_HZ       = 0.5
 NOTCH_BANDS      = ((48.0, 52.0), (58.0, 62.0))
-EOG_SIGMA_THR    = 2.5     # crossing threshold in units of baseline σ (dropped 5→2.5:
-                           # the glance-PAIR debounce rejects stray singles, so we run the
-                           # primitive more sensitive to miss fewer real glances — esp. on
-                           # noisy-baseline players where 5σ was unreachable)
+EOG_SIGMA_THR    = 4.0     # crossing threshold in units of baseline σ. Lower than the
+                           # original 5σ: the glance-PAIR debounce rejects stray singles,
+                           # so a more sensitive primitive misses fewer real glances.
 EOG_MIN_DUR_MS   = 12.0    # a crossing must persist this long (kills single spikes)
-GLANCE_WINDOW_S  = 0.7     # max time between the two glances of a pair
+GLANCE_WINDOW_S  = 0.5     # max time between the two glances of a pair
 ARMED_MIN_WAIT_S = 0.05    # min time before the opposite glance counts
 REFRACTORY_S     = 0.8     # dead time after a fired command
 EOG_BASELINE_S   = 5.0     # baseline collected before σ is fixed
