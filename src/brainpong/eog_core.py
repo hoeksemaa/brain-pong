@@ -39,12 +39,12 @@ from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 # These are the *defaults*. Where a function exposes a matching keyword arg, the
 # default is sourced from here so production behaviour is defined in one place
 # while tests can pin behaviour at explicit values independent of these defaults.
-EOG_LPF_HZ       = 100.0
-EOG_HPF_HZ       = 0.1     # high-pass corner. Kept low: a 0.5 Hz corner (τ≈0.32 s) manufactures
-                           # an opposite-sign recovery-tail artifact that decays inside the glance
-                           # window and false-triggers the pair (ISCEV; Tanner et al. 2015). 0.1 Hz
-                           # (τ≈1.6 s) flattens it — verified on real data (tail 79µV→~0, saccade
-                           # preserved; baseline σ rises ~35% as more slow drift passes through).
+EOG_LPF_HZ       = 50.0    # low-pass corner. At 50 Hz the 58–62 Hz notch sits above the cutoff (60 Hz
+                           # mains already attenuated by the LPF); the 48–52 Hz notch straddles the corner.
+EOG_HPF_HZ       = 0.1     # high-pass corner. 0.1 Hz (τ≈1.6 s) keeps more low-frequency signal than
+                           # 0.5 Hz but its recovery tail does NOT fully settle inside the ~0.4 s per-poll
+                           # window; acceptable because the VELOCITY detector rejects the slow tail (a
+                           # slow tail is low-velocity). Offline whole-window filtering favoured 0.1 Hz on hit-rate.
 NOTCH_BANDS      = ((48.0, 52.0), (58.0, 62.0))
 EOG_SIGMA_THR    = 4.0     # crossing threshold in units of baseline σ. Lower than the
                            # original 5σ: the glance-PAIR debounce rejects stray singles,
@@ -60,8 +60,8 @@ EOG_BASELINE_S   = 5.0     # baseline collected before σ is fixed
 
 def _make_eog_state():
     """Fresh per-player EOG state dict. ch_L/ch_R/sr are filled in at board setup;
-    the two runtime knobs (sigma_thr, glance_window_s) default here and are updated
-    live from the in-game browser sliders."""
+    the runtime knobs (sigma_thr, glance_window_s, lpf_hz, hpf_hz) default here and
+    are updated live from the in-game browser sliders."""
     return {
         'ch_L': None, 'ch_R': None, 'sr': None,
         'sm': 'CALIBRATING',
@@ -74,6 +74,8 @@ def _make_eog_state():
         # ── tunable config (set at board setup; survive recalibration) ──────────
         'sigma_thr': EOG_SIGMA_THR,          # ×; a glance must exceed this MULTIPLE of baseline σ
         'glance_window_s': GLANCE_WINDOW_S,  # s; max gap between the two glances of a pair
+        'lpf_hz': EOG_LPF_HZ,                # Hz; low-pass corner of the filter chain
+        'hpf_hz': EOG_HPF_HZ,                # Hz; high-pass corner of the filter chain
     }
 
 

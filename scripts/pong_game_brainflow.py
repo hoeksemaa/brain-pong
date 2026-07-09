@@ -22,7 +22,7 @@ _cli_parser = argparse.ArgumentParser(
         'Modes:\n'
         '  (default)    Single-player on a connected board; keyboard control (P1: ←/→).\n'
         '  --eog        Single-player EOG glance-pair detector (needs board).\n'
-        '  --2player    Two-player EOG.  P1 = ch1-2 (←/→)   |   P2 = ch3-4 (A/D)\n'
+        '  --2player    Two-player EOG.  Two boards, one per player  (P1 ←/→ | P2 A/D)\n'
         '  --no-board   Skip hardware; keyboard only. Combine with --2player for\n'
         '               keyboard two-player (P1: ←/→, P2: A/D).\n'
         '\n'
@@ -41,7 +41,7 @@ _cli_parser.add_argument('--no-board', action='store_true',
 _cli_parser.add_argument('--eog', action='store_true',
                          help='Single-player EOG glance-pair detector (requires hardware).')
 _cli_parser.add_argument('--2player', dest='two_player', action='store_true',
-                         help='Two-player EOG: P1=ch1-2 (←/→), P2=ch3-4 (A/D). Exclusive with --eog.')
+                         help='Two-player EOG: two boards, one per player (P1 ←/→, P2 A/D). Exclusive with --eog.')
 # NOTE: detector tuning (σ-threshold, glance-window) is done LIVE via in-game
 # sliders in the browser, not CLI flags — see the 'EOG detector tuning' layout block.
 # parse_known_args (not parse_args) keeps the historically lenient behavior of
@@ -65,7 +65,7 @@ from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 # Detection logic + its constants live in eog_core.py so they're testable
 # without standing up Dash/the board; don't re-inline them here.
 from brainpong.eog_core import (
-    EOG_SIGMA_THR, GLANCE_WINDOW_S, EOG_BASELINE_S,
+    EOG_SIGMA_THR, GLANCE_WINDOW_S, EOG_BASELINE_S, EOG_LPF_HZ, EOG_HPF_HZ,
     eog_diff, _make_eog_state, _eog_filter, _eog_velocity, _sustained_crossing,
     _run_eog_sm, _reset_eog_st,
 )
@@ -74,6 +74,13 @@ from brainpong.eog_core import (
 # === 1. CONFIGURATION =========================================================
 # ==============================================================================
 BOARD_ID             = BoardIds.CERELOG_X8_BOARD
+
+# Two boards — one per player — on separate serial ports. Hardcoded for now: the
+# two X8s are the same model, so BrainFlow can't tell them apart over serial and
+# board identity == which port. Find the live paths with:  ls /dev/cu.usbserial-*
+# (they only appear while a board is plugged in). Single-player modes use P1 only.
+P1_SERIAL_PORT       = "/dev/cu.usbserial-1120"   # Player 1 board (v1.2 / original)
+P2_SERIAL_PORT       = "/dev/cu.usbserial-1110"   # Player 2 board — 2nd port on the hub (confirm which physical board at the paddle)
 INITIAL_BALL_SPEED_Y = -4
 GAME_INTERVAL_MS     = 16
 GAME_WIDTH           = 800
@@ -95,14 +102,15 @@ AI_REACTION_FRAMES   = 31
 
 BCI_UPDATE_INTERVAL_MS = 100
 
-# EOG electrode slot indices into get_eeg_channels()
+# EOG electrode slot indices into get_eeg_channels().
 # L/R inputs physically swapped PERMANENTLY 2026-07-02 (left-eye → pin2/CH2/row2, right-eye →
 # pin1/CH1/row1). Slots reflect that so diff = data[ch_R]-data[ch_L] is canonical (rightward → +).
-# Do NOT revert. P2 pair is NOT yet physically wired — its swap is by-convention & UNVALIDATED.
-EOG_SLOT_L  = 1   # P1 left  → CH2/row2
-EOG_SLOT_R  = 0   # P1 right → CH1/row1
-EOG_SLOT_L2 = 3   # P2 left  → CH4/row4  (unvalidated: no 2nd pair wired)
-EOG_SLOT_R2 = 2   # P2 right → CH3/row3  (unvalidated)
+# Do NOT revert. Each player now has their OWN board with the SAME canthi montage, so P2 reads the
+# SAME slots as P1 — just from board_p2. Both boards must be wired identically or P2's L/R inverts.
+EOG_SLOT_L  = 1   # left  → CH2/row2  (both players, each on their own board)
+EOG_SLOT_R  = 0   # right → CH1/row1
+EOG_SLOT_L2 = EOG_SLOT_L   # P2: identical montage on its own board
+EOG_SLOT_R2 = EOG_SLOT_R
 
 # Detection constants (EOG_LPF/HPF_HZ, EOG_SIGMA_THR, EOG_MIN_DUR_MS,
 # GLANCE_WINDOW_S, ARMED_MIN_WAIT_S, REFRACTORY_S, EOG_BASELINE_S) now live in
@@ -114,35 +122,38 @@ EOG_SETTLE_S     = 0.4
 # ==============================================================================
 # === 2. RUNTIME STATE =========================================================
 # ==============================================================================
-board         = None
-sampling_rate = 0
+board_p1      = None   # Player 1's board (also the sole board in --eog / default single-player)
+board_p2      = None   # Player 2's board — only opened in --2player
+sampling_rate = 0      # model-level; both X8s report the same rate
 
 
 eog_state    = _make_eog_state()
 eog_state_p2 = _make_eog_state()
 
 
-def _poll_eog(eog_st):
-    """Pull latest window from board, filter → velocity, return new_sig slice or None.
+def _poll_eog(eog_st, brd):
+    """Pull latest window from board `brd`, filter → velocity, return new_sig slice or None.
 
     Detection runs on VELOCITY (the derivative), not amplitude: velocity is a
     high-pass, so slow drift and the high-pass filter's recovery tail self-reject
     while saccades' steep edges fire (Engbert & Kliegl). The velocity is computed
     on the full settled window (so the returned new samples have context) and only
     the last n_new are handed to the state machine. Hardware-bound (reads the
-    global `board`); the pure parts (eog_diff, _eog_filter, _eog_velocity) live in
-    eog_core and are tested there.
+    passed-in board `brd` — one per player); the pure parts (eog_diff, _eog_filter,
+    _eog_velocity) live in eog_core and are tested there.
     """
-    if board is None or eog_st['ch_L'] is None or eog_st['sr'] is None:
+    if brd is None or eog_st['ch_L'] is None or eog_st['sr'] is None:
         return None
     sr       = eog_st['sr']
     n_settle = int(EOG_SETTLE_S * sr)
     n_new    = max(1, int(EOG_POLL_S * sr))
-    data = board.get_current_board_data(n_settle + n_new)
+    data = brd.get_current_board_data(n_settle + n_new)
     if data.shape[1] < n_settle + n_new:
         return None
     diff_raw = eog_diff(data, eog_st['ch_R'], eog_st['ch_L'])
-    filtered = _eog_filter(diff_raw.copy(), sr)
+    filtered = _eog_filter(diff_raw.copy(), sr,
+                           lpf_hz=eog_st.get('lpf_hz', EOG_LPF_HZ),
+                           hpf_hz=eog_st.get('hpf_hz', EOG_HPF_HZ))
     vel      = _eog_velocity(filtered, sr)
     return vel[-n_new:]
 
@@ -273,6 +284,34 @@ app.layout = html.Div(
                         style={'display': 'inline-block', 'width': '590px', 'verticalAlign': 'middle'},
                     ),
                 ]),
+                html.Div(style={'height': '8px'}),
+                html.Div([
+                    html.Label('High-pass (Hz)',
+                               style={'display': 'inline-block', 'width': '170px'}),
+                    html.Div(
+                        dcc.Slider(
+                            id='hpf-slider', min=0.1, max=2.0, step=0.1,
+                            value=EOG_HPF_HZ,
+                            marks={v: {'label': str(v), 'style': {'color': 'black', 'fontWeight': 'bold'}}
+                                   for v in (0.1, 0.5, 1.0, 1.5, 2.0)},
+                        ),
+                        style={'display': 'inline-block', 'width': '590px', 'verticalAlign': 'middle'},
+                    ),
+                ]),
+                html.Div(style={'height': '8px'}),
+                html.Div([
+                    html.Label('Low-pass (Hz)',
+                               style={'display': 'inline-block', 'width': '170px'}),
+                    html.Div(
+                        dcc.Slider(
+                            id='lpf-slider', min=10, max=100, step=5,
+                            value=EOG_LPF_HZ,
+                            marks={v: {'label': str(v), 'style': {'color': 'black', 'fontWeight': 'bold'}}
+                                   for v in (10, 30, 50, 70, 100)},
+                        ),
+                        style={'display': 'inline-block', 'width': '590px', 'verticalAlign': 'middle'},
+                    ),
+                ]),
             ],
         ),
         # P1 EOG live plot
@@ -296,7 +335,8 @@ app.layout = html.Div(
                    'display': 'block' if TWO_PLAYER_MODE else 'none'},
         ),
         dcc.Store(id='settings-store',       data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH}),
-        dcc.Store(id='eog-tuning-store',      data={'sigma_thr': EOG_SIGMA_THR, 'glance_window_s': GLANCE_WINDOW_S}),
+        dcc.Store(id='eog-tuning-store',      data={'sigma_thr': EOG_SIGMA_THR, 'glance_window_s': GLANCE_WINDOW_S,
+                                                    'lpf_hz': EOG_LPF_HZ, 'hpf_hz': EOG_HPF_HZ}),
         dcc.Store(id='game-state-store',     data=get_initial_game_state()),
         dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0}),
         dcc.Store(id='bci-command-store',    data={'command': 'NEUTRAL', 'seq': 0}),
@@ -370,11 +410,11 @@ clientside_callback(
     prevent_initial_call=True,
 )
 def update_bci_command(_, app_status):
-    if board is None or eog_state['ch_L'] is None:
+    if board_p1 is None or eog_state['ch_L'] is None:
         return no_update
     if app_status.get('status') not in ('PLAYING', 'CALIBRATING'):
         return no_update
-    new_sig = _poll_eog(eog_state)
+    new_sig = _poll_eog(eog_state, board_p1)
     if new_sig is None:
         return no_update
     result = _run_eog_sm(eog_state, new_sig, time.time(), label='P1')
@@ -390,11 +430,11 @@ def update_bci_command(_, app_status):
 def update_bci_command_p2(_, app_status):
     if not TWO_PLAYER_MODE:
         return no_update
-    if board is None or eog_state_p2['ch_L'] is None:
+    if board_p2 is None or eog_state_p2['ch_L'] is None:
         return no_update
     if app_status.get('status') not in ('PLAYING', 'CALIBRATING'):
         return no_update
-    new_sig = _poll_eog(eog_state_p2)
+    new_sig = _poll_eog(eog_state_p2, board_p2)
     if new_sig is None:
         return no_update
     result = _run_eog_sm(eog_state_p2, new_sig, time.time(), label='P2')
@@ -404,16 +444,18 @@ def update_bci_command_p2(_, app_status):
 EOG_DISPLAY_SECS = 8.0
 
 
-def _make_eog_figure(eog_st, title, line_color, thr_color):
+def _make_eog_figure(eog_st, brd, title, line_color, thr_color):
     sr = eog_st['sr']
-    if sr is None:
+    if sr is None or brd is None:
         return None
     n_req = int(EOG_DISPLAY_SECS * sr)
-    data  = board.get_current_board_data(n_req)
+    data  = brd.get_current_board_data(n_req)
     if data.shape[1] < 20:
         return None
     diff_raw = eog_diff(data, eog_st['ch_R'], eog_st['ch_L'])
-    filtered = _eog_filter(diff_raw.copy(), sr)
+    filtered = _eog_filter(diff_raw.copy(), sr,
+                           lpf_hz=eog_st.get('lpf_hz', EOG_LPF_HZ),
+                           hpf_hz=eog_st.get('hpf_hz', EOG_HPF_HZ))
     vel      = _eog_velocity(filtered, sr)      # detector runs on velocity → plot velocity
     n_pts    = len(vel)
     t        = np.linspace(-n_pts / sr, 0, n_pts)
@@ -448,11 +490,11 @@ def _make_eog_figure(eog_st, title, line_color, thr_color):
     prevent_initial_call=True,
 )
 def update_eog_plot(_, app_status):
-    if not (EOG_MODE or TWO_PLAYER_MODE) or board is None or eog_state['ch_L'] is None:
+    if not (EOG_MODE or TWO_PLAYER_MODE) or board_p1 is None or eog_state['ch_L'] is None:
         raise PreventUpdate
     if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING', 'PAUSED'):
         raise PreventUpdate
-    fig = _make_eog_figure(eog_state, 'P1 HEOG  (R − L, filtered)', '#aaffaa', 'orange')
+    fig = _make_eog_figure(eog_state, board_p1, 'P1 HEOG  (R − L, filtered)', '#aaffaa', 'orange')
     if fig is None:
         raise PreventUpdate
     return fig
@@ -465,11 +507,11 @@ def update_eog_plot(_, app_status):
     prevent_initial_call=True,
 )
 def update_eog_plot_p2(_, app_status):
-    if not TWO_PLAYER_MODE or board is None or eog_state_p2['ch_L'] is None:
+    if not TWO_PLAYER_MODE or board_p2 is None or eog_state_p2['ch_L'] is None:
         raise PreventUpdate
     if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING', 'PAUSED'):
         raise PreventUpdate
-    fig = _make_eog_figure(eog_state_p2, 'P2 HEOG  (R − L, filtered)', '#ffaaaa', 'cyan')
+    fig = _make_eog_figure(eog_state_p2, board_p2, 'P2 HEOG  (R − L, filtered)', '#ffaaaa', 'cyan')
     if fig is None:
         raise PreventUpdate
     return fig
@@ -487,18 +529,26 @@ def update_settings(ball_speed):
     Output('eog-tuning-store', 'data'),
     Input('sigma-thr-slider', 'value'),
     Input('glance-window-slider', 'value'),
+    Input('hpf-slider', 'value'),
+    Input('lpf-slider', 'value'),
 )
-def update_eog_tuning(sigma_thr, glance_window):
+def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz):
     """Live-apply the detector knobs from the browser sliders.
 
-    Writes straight into both players' state dicts (mutated in place; _run_eog_sm
-    reads sigma_thr / glance_window_s each tick), so changes take effect on the
-    next detector poll without a restart. Harmless in keyboard-only mode.
+    Writes straight into both players' state dicts (mutated in place). _run_eog_sm
+    reads sigma_thr / glance_window_s each tick, and _poll_eog / _make_eog_figure
+    read hpf_hz / lpf_hz each poll when they build the filter — so every knob takes
+    effect on the next detector poll without a restart, and the knobs survive
+    recalibration (_reset_eog_st keeps them), so a New Game locks in whatever the
+    sliders currently read. Harmless in keyboard-only mode.
     """
     for st in (eog_state, eog_state_p2):
         st['sigma_thr']       = sigma_thr
         st['glance_window_s'] = glance_window
-    return {'sigma_thr': sigma_thr, 'glance_window_s': glance_window}
+        st['hpf_hz']          = hpf_hz
+        st['lpf_hz']          = lpf_hz
+    return {'sigma_thr': sigma_thr, 'glance_window_s': glance_window,
+            'hpf_hz': hpf_hz, 'lpf_hz': lpf_hz}
 
 
 @app.callback(
@@ -850,7 +900,7 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
 # === 6. MAIN ==================================================================
 # ==============================================================================
 def main():
-    global board, sampling_rate
+    global board_p1, board_p2, sampling_rate
 
     if NO_BOARD_MODE:
         mode_msg = ("2-PLAYER NO-BOARD: P1=←/→, P2=A/D." if TWO_PLAYER_MODE
@@ -863,11 +913,14 @@ def main():
 
     if TWO_PLAYER_MODE:
         print("=" * 60)
-        print("2-PLAYER EOG MODE")
-        print("P1 (bottom, green): ch1–2. Glance left→center / right→center.")
-        print("P2 (top,    red  ): ch3–4. Same gestures.")
-        print("Players hold hands — shared bias electrode is fine.")
-        print("Both sit still during baseline calibration.")
+        print("2-PLAYER EOG MODE — two independent boards, one per player")
+        print(f"P1 (bottom, green): board {P1_SERIAL_PORT}, canthi → ch1–2.")
+        print(f"P2 (top,    red  ): board {P2_SERIAL_PORT}, canthi → ch1–2 (own board).")
+        print("Each board is fully independent: its own 2 canthi electrodes, its own")
+        print("SRB1 reference, its own active bias electrode. Do NOT share electrodes.")
+        print("Tip: run the laptop on BATTERY so the two boards don't couple via mains ground.")
+        print("Both players sit still together for the calibration countdown — each")
+        print("board measures its OWN baseline σ separately.")
         print("=" * 60)
     elif EOG_MODE:
         print("=" * 60)
@@ -876,16 +929,21 @@ def main():
         print("Sit still for the first 3 s (baseline calibration).")
         print("=" * 60)
 
-    params             = BrainFlowInputParams()
-    params.timeout     = 15
-    params.serial_port = "/dev/cu.usbserial-1120"
-    board = BoardShim(BOARD_ID, params)
+    def _open_board(port, label):
+        p             = BrainFlowInputParams()
+        p.timeout     = 15
+        p.serial_port = port
+        b = BoardShim(BOARD_ID, p)
+        print(f"Connecting to {label} board on {port} ...")
+        b.prepare_session()
+        return b
+
     try:
-        print("Connecting to board...")
-        board.prepare_session()
+        # Player 1 board — also the only board in --eog / default single-player.
+        board_p1 = _open_board(P1_SERIAL_PORT, "P1")
         sampling_rate    = BoardShim.get_sampling_rate(BOARD_ID)
         all_eeg_channels = BoardShim.get_eeg_channels(BOARD_ID)
-        print(f"Board connected. Sampling rate: {sampling_rate} Hz")
+        print(f"P1 board connected. Sampling rate: {sampling_rate} Hz")
 
         if EOG_MODE or TWO_PLAYER_MODE:
             eog_state['sr']   = sampling_rate
@@ -896,14 +954,21 @@ def main():
                   f"(adjust live via the browser sliders)")
 
         if TWO_PLAYER_MODE:
-            eog_state_p2['sr']   = sampling_rate
+            # Player 2's board: a SECOND, independent X8 on its own serial port. Two
+            # same-model BoardShim coexist in ONE process because BrainFlow keys its
+            # session registry on (board_id, serial_port), not board_id alone.
+            board_p2 = _open_board(P2_SERIAL_PORT, "P2")
+            eog_state_p2['sr']   = sampling_rate            # same model → same rate
             eog_state_p2['ch_L'] = all_eeg_channels[EOG_SLOT_L2]
             eog_state_p2['ch_R'] = all_eeg_channels[EOG_SLOT_R2]
-            print(f"P2 EOG channels: ch_L={eog_state_p2['ch_L']}  ch_R={eog_state_p2['ch_R']}  "
-                  f"σ_thr={eog_state_p2['sigma_thr']:.2f}×  glance_window={eog_state_p2['glance_window_s']:.2f}s")
+            print(f"P2 board connected. EOG channels: ch_L={eog_state_p2['ch_L']}  "
+                  f"ch_R={eog_state_p2['ch_R']}  σ_thr={eog_state_p2['sigma_thr']:.2f}×  "
+                  f"glance_window={eog_state_p2['glance_window_s']:.2f}s")
 
-        print("Starting data stream...")
-        board.start_stream(450000)
+        print("Starting data stream(s)...")
+        board_p1.start_stream(450000)
+        if board_p2 is not None:
+            board_p2.start_stream(450000)
         time.sleep(1.0)
 
         logging.getLogger('werkzeug').setLevel(logging.ERROR)
@@ -916,10 +981,14 @@ def main():
     except Exception as e:
         print(f"Error: {e}")
     finally:
-        if board and board.is_prepared():
-            print("Stopping stream and releasing session.")
-            board.stop_stream()
-            board.release_session()
+        for _lbl, _b in (("P1", board_p1), ("P2", board_p2)):
+            if _b is not None and _b.is_prepared():
+                print(f"Stopping {_lbl} stream and releasing session.")
+                try:
+                    _b.stop_stream()
+                except Exception:
+                    pass
+                _b.release_session()
 
 
 if __name__ == "__main__":
