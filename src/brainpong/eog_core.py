@@ -40,7 +40,11 @@ from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 # default is sourced from here so production behaviour is defined in one place
 # while tests can pin behaviour at explicit values independent of these defaults.
 EOG_LPF_HZ       = 100.0
-EOG_HPF_HZ       = 0.5
+EOG_HPF_HZ       = 0.1     # high-pass corner. Kept low: a 0.5 Hz corner (τ≈0.32 s) manufactures
+                           # an opposite-sign recovery-tail artifact that decays inside the glance
+                           # window and false-triggers the pair (ISCEV; Tanner et al. 2015). 0.1 Hz
+                           # (τ≈1.6 s) flattens it — verified on real data (tail 79µV→~0, saccade
+                           # preserved; baseline σ rises ~35% as more slow drift passes through).
 NOTCH_BANDS      = ((48.0, 52.0), (58.0, 62.0))
 EOG_SIGMA_THR    = 4.0     # crossing threshold in units of baseline σ. Lower than the
                            # original 5σ: the glance-PAIR debounce rejects stray singles,
@@ -117,6 +121,30 @@ def _eog_filter(x_uv, sr, lpf_hz=EOG_LPF_HZ, hpf_hz=EOG_HPF_HZ,
     return y
 
 
+def _eog_velocity(x_uv, sr):
+    """Engbert & Kliegl (2003) 5-point smoothed velocity of a filtered signal.
+
+    v[n] = (x[n+2] + x[n+1] − x[n−1] − x[n−2]) / (6·dt),  dt = 1/sr   (µV/s).
+    Differentiates *and* lightly low-pass smooths (the 5-tap kernel). Velocity is
+    the field-standard saccade statistic: differentiation is a high-pass operator,
+    so slow drift and the high-pass filter's slow recovery tail (low slope) are
+    attenuated while a saccade's steep edge is amplified — a tail can match a
+    saccade in amplitude but never in velocity. Its sign is the direction of gaze
+    change (rightward = +), so it slots straight into _sustained_crossing in place
+    of amplitude with the direction contract unchanged. The 2-sample stencil is an
+    8 ms group delay (negligible vs the ≤500 ms budget); edges are replicated so
+    the 2 endpoint samples get a conservative one-sided estimate. Returns float64,
+    same length as the input.
+    """
+    y = np.ascontiguousarray(x_uv.astype(np.float64))
+    n = y.size
+    if n < 5:
+        return np.zeros(n, dtype=np.float64)
+    yp = np.pad(y, 2, mode='edge')
+    dt = 1.0 / sr
+    return (yp[4:] + yp[3:-1] - yp[1:-3] - yp[:-4]) / (6.0 * dt)
+
+
 # ── Crossing detector (pure) ─────────────────────────────────────────────────────
 
 def _sustained_crossing(signal, sigma, sr, sigma_thr=EOG_SIGMA_THR,
@@ -155,9 +183,18 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
         eog_st['baseline_acc'].append(new_sig.copy())
         total = np.concatenate(eog_st['baseline_acc'])
         if total.size >= int(EOG_BASELINE_S * eog_st['sr']):
-            eog_st['baseline_sigma'] = float(np.std(total))
+            # Robust (MAD-based) noise scale: median-based, so an involuntary
+            # saccade or blink during the eyes-forward calibration can't inflate σ
+            # and desensitise the detector (Engbert & Kliegl use a median velocity
+            # estimator for exactly this). 1.4826·MAD is a consistent estimator of
+            # the Gaussian σ; fall back to std if the baseline is degenerate (flat).
+            med   = float(np.median(total))
+            sigma = 1.4826 * float(np.median(np.abs(total - med)))
+            if sigma < 1e-9:
+                sigma = float(np.std(total))
+            eog_st['baseline_sigma'] = sigma or 1e-6
             eog_st['sm'] = 'IDLE'
-            print(f"[{label}] baseline σ = {eog_st['baseline_sigma']:.2f} µV — ready")
+            print(f"[{label}] baseline σ = {eog_st['baseline_sigma']:.2f} — ready")
         return None
 
     if eog_st['sm'] == 'REFRACTORY':

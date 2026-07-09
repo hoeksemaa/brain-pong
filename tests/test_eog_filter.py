@@ -62,8 +62,9 @@ def test_passes_heog_band():
 
 
 def test_attenuates_below_highpass():
-    # 0.2 Hz is below the 0.5 Hz HPF → strongly attenuated relative to passband.
-    assert _rms_ratio(0.2) < 0.3
+    # A tone below the HP corner is strongly attenuated. Corner passed explicitly
+    # so the assertion is independent of the production default (now 0.1 Hz).
+    assert _rms_ratio(0.2, hpf_hz=0.5) < 0.3
 
 
 def test_attenuates_above_lowpass():

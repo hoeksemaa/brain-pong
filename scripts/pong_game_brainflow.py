@@ -66,7 +66,7 @@ from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 # without standing up Dash/the board; don't re-inline them here.
 from brainpong.eog_core import (
     EOG_SIGMA_THR, GLANCE_WINDOW_S, EOG_BASELINE_S,
-    eog_diff, _make_eog_state, _eog_filter, _sustained_crossing,
+    eog_diff, _make_eog_state, _eog_filter, _eog_velocity, _sustained_crossing,
     _run_eog_sm, _reset_eog_st,
 )
 
@@ -123,10 +123,15 @@ eog_state_p2 = _make_eog_state()
 
 
 def _poll_eog(eog_st):
-    """Pull latest window from board, filter, return new_sig slice or None.
+    """Pull latest window from board, filter → velocity, return new_sig slice or None.
 
-    Hardware-bound (reads the global `board`), so it stays here; the pure parts
-    (eog_diff, _eog_filter) live in eog_core and are tested there.
+    Detection runs on VELOCITY (the derivative), not amplitude: velocity is a
+    high-pass, so slow drift and the high-pass filter's recovery tail self-reject
+    while saccades' steep edges fire (Engbert & Kliegl). The velocity is computed
+    on the full settled window (so the returned new samples have context) and only
+    the last n_new are handed to the state machine. Hardware-bound (reads the
+    global `board`); the pure parts (eog_diff, _eog_filter, _eog_velocity) live in
+    eog_core and are tested there.
     """
     if board is None or eog_st['ch_L'] is None or eog_st['sr'] is None:
         return None
@@ -138,7 +143,8 @@ def _poll_eog(eog_st):
         return None
     diff_raw = eog_diff(data, eog_st['ch_R'], eog_st['ch_L'])
     filtered = _eog_filter(diff_raw.copy(), sr)
-    return filtered[-n_new:]
+    vel      = _eog_velocity(filtered, sr)
+    return vel[-n_new:]
 
 
 # ==============================================================================
@@ -408,13 +414,14 @@ def _make_eog_figure(eog_st, title, line_color, thr_color):
         return None
     diff_raw = eog_diff(data, eog_st['ch_R'], eog_st['ch_L'])
     filtered = _eog_filter(diff_raw.copy(), sr)
-    n_pts    = len(filtered)
+    vel      = _eog_velocity(filtered, sr)      # detector runs on velocity → plot velocity
+    n_pts    = len(vel)
     t        = np.linspace(-n_pts / sr, 0, n_pts)
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=t, y=filtered, mode='lines', name='R−L',
+    fig.add_trace(go.Scatter(x=t, y=vel, mode='lines', name='velocity',
                              line=dict(color=line_color, width=1)))
-    sigma = eog_st['baseline_sigma']
+    sigma = eog_st['baseline_sigma']            # velocity noise floor (µV/s) from calibration
     if sigma is not None:
         sig_thr = eog_st.get('sigma_thr', EOG_SIGMA_THR)   # live value from the slider
         thr = sig_thr * sigma
@@ -422,13 +429,13 @@ def _make_eog_figure(eog_st, title, line_color, thr_color):
                       annotation_text=f'+{sig_thr:.1f}σ', annotation_font_color=thr_color)
         fig.add_hline(y=-thr, line_dash='dash', line_color=thr_color,
                       annotation_text=f'-{sig_thr:.1f}σ', annotation_font_color=thr_color)
-    peak = max(float(np.abs(filtered).max()) * 1.3, 50.0) if filtered.size else 50.0
+    peak = max(float(np.abs(vel).max()) * 1.3, 500.0) if vel.size else 500.0
     fig.update_layout(
         template='plotly_dark', paper_bgcolor='#111111', plot_bgcolor='#111111',
         margin=dict(l=50, r=30, t=30, b=40), height=200,
         title=dict(text=title, font=dict(size=12, color='#aaa'), x=0.5),
         xaxis=dict(title='time (s)', range=[-EOG_DISPLAY_SECS, 0], color='#666'),
-        yaxis=dict(title='µV', range=[-peak, peak], color='#666'),
+        yaxis=dict(title='µV/s (velocity)', range=[-peak, peak], color='#666'),
         showlegend=False,
     )
     return fig
