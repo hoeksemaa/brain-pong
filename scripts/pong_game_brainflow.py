@@ -42,6 +42,8 @@ _cli_parser.add_argument('--eog', action='store_true',
                          help='Single-player EOG glance-pair detector (requires hardware).')
 _cli_parser.add_argument('--2player', dest='two_player', action='store_true',
                          help='Two-player EOG: P1=ch1-2 (←/→), P2=ch3-4 (A/D). Exclusive with --eog.')
+# NOTE: detector tuning (σ-threshold, glance-window) is done LIVE via in-game
+# sliders in the browser, not CLI flags — see the 'EOG detector tuning' layout block.
 # parse_known_args (not parse_args) keeps the historically lenient behavior of
 # ignoring unrecognized args; add_help defaults to True so -h/--help now works.
 _cli_args, _ = _cli_parser.parse_known_args()
@@ -63,7 +65,7 @@ from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 # Detection logic + its constants live in eog_core.py so they're testable
 # without standing up Dash/the board; don't re-inline them here.
 from brainpong.eog_core import (
-    EOG_SIGMA_THR, EOG_BASELINE_S,
+    EOG_SIGMA_THR, GLANCE_WINDOW_S, EOG_BASELINE_S,
     eog_diff, _make_eog_state, _eog_filter, _sustained_crossing,
     _run_eog_sm, _reset_eog_st,
 )
@@ -232,6 +234,41 @@ app.layout = html.Div(
                 ),
             ])],
         ),
+        # EOG detector tuning — live sliders (shown only when the detector runs)
+        html.Div(
+            style={'width': '800px', 'margin': '15px auto', 'textAlign': 'left',
+                   'padding': '10px', 'border': '1px solid #333', 'borderRadius': '6px',
+                   'display': 'block' if (EOG_MODE or TWO_PLAYER_MODE) else 'none'},
+            children=[
+                html.Div([
+                    html.Label('Sigma Threshold (×σ)',
+                               style={'display': 'inline-block', 'width': '170px'}),
+                    html.Div(
+                        dcc.Slider(
+                            id='sigma-thr-slider', min=1, max=10, step=0.5,
+                            value=EOG_SIGMA_THR,
+                            marks={i: {'label': str(i), 'style': {'color': 'black', 'fontWeight': 'bold'}}
+                                   for i in range(1, 11)},
+                        ),
+                        style={'display': 'inline-block', 'width': '590px', 'verticalAlign': 'middle'},
+                    ),
+                ]),
+                html.Div(style={'height': '8px'}),
+                html.Div([
+                    html.Label('Glance Window (s)',
+                               style={'display': 'inline-block', 'width': '170px'}),
+                    html.Div(
+                        dcc.Slider(
+                            id='glance-window-slider', min=0.1, max=2.0, step=0.1,
+                            value=GLANCE_WINDOW_S,
+                            marks={v: {'label': str(v), 'style': {'color': 'black', 'fontWeight': 'bold'}}
+                                   for v in (0.1, 0.5, 1.0, 1.5, 2.0)},
+                        ),
+                        style={'display': 'inline-block', 'width': '590px', 'verticalAlign': 'middle'},
+                    ),
+                ]),
+            ],
+        ),
         # P1 EOG live plot
         html.Div(
             [
@@ -253,6 +290,7 @@ app.layout = html.Div(
                    'display': 'block' if TWO_PLAYER_MODE else 'none'},
         ),
         dcc.Store(id='settings-store',       data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH}),
+        dcc.Store(id='eog-tuning-store',      data={'sigma_thr': EOG_SIGMA_THR, 'glance_window_s': GLANCE_WINDOW_S}),
         dcc.Store(id='game-state-store',     data=get_initial_game_state()),
         dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0}),
         dcc.Store(id='bci-command-store',    data={'command': 'NEUTRAL', 'seq': 0}),
@@ -378,11 +416,12 @@ def _make_eog_figure(eog_st, title, line_color, thr_color):
                              line=dict(color=line_color, width=1)))
     sigma = eog_st['baseline_sigma']
     if sigma is not None:
-        thr = EOG_SIGMA_THR * sigma
+        sig_thr = eog_st.get('sigma_thr', EOG_SIGMA_THR)   # live value from the slider
+        thr = sig_thr * sigma
         fig.add_hline(y= thr, line_dash='dash', line_color=thr_color,
-                      annotation_text=f'+{EOG_SIGMA_THR:.0f}σ', annotation_font_color=thr_color)
+                      annotation_text=f'+{sig_thr:.1f}σ', annotation_font_color=thr_color)
         fig.add_hline(y=-thr, line_dash='dash', line_color=thr_color,
-                      annotation_text=f'-{EOG_SIGMA_THR:.0f}σ', annotation_font_color=thr_color)
+                      annotation_text=f'-{sig_thr:.1f}σ', annotation_font_color=thr_color)
     peak = max(float(np.abs(filtered).max()) * 1.3, 50.0) if filtered.size else 50.0
     fig.update_layout(
         template='plotly_dark', paper_bgcolor='#111111', plot_bgcolor='#111111',
@@ -435,6 +474,24 @@ def update_eog_plot_p2(_, app_status):
 )
 def update_settings(ball_speed):
     return {'ball_speed': ball_speed, 'paddle_width': PADDLE_WIDTH}
+
+
+@app.callback(
+    Output('eog-tuning-store', 'data'),
+    Input('sigma-thr-slider', 'value'),
+    Input('glance-window-slider', 'value'),
+)
+def update_eog_tuning(sigma_thr, glance_window):
+    """Live-apply the detector knobs from the browser sliders.
+
+    Writes straight into both players' state dicts (mutated in place; _run_eog_sm
+    reads sigma_thr / glance_window_s each tick), so changes take effect on the
+    next detector poll without a restart. Harmless in keyboard-only mode.
+    """
+    for st in (eog_state, eog_state_p2):
+        st['sigma_thr']       = sigma_thr
+        st['glance_window_s'] = glance_window
+    return {'sigma_thr': sigma_thr, 'glance_window_s': glance_window}
 
 
 @app.callback(
@@ -827,13 +884,16 @@ def main():
             eog_state['sr']   = sampling_rate
             eog_state['ch_L'] = all_eeg_channels[EOG_SLOT_L]
             eog_state['ch_R'] = all_eeg_channels[EOG_SLOT_R]
-            print(f"P1 EOG channels: ch_L={eog_state['ch_L']}  ch_R={eog_state['ch_R']}")
+            print(f"P1 EOG channels: ch_L={eog_state['ch_L']}  ch_R={eog_state['ch_R']}  "
+                  f"σ_thr={eog_state['sigma_thr']:.2f}×  glance_window={eog_state['glance_window_s']:.2f}s  "
+                  f"(adjust live via the browser sliders)")
 
         if TWO_PLAYER_MODE:
             eog_state_p2['sr']   = sampling_rate
             eog_state_p2['ch_L'] = all_eeg_channels[EOG_SLOT_L2]
             eog_state_p2['ch_R'] = all_eeg_channels[EOG_SLOT_R2]
-            print(f"P2 EOG channels: ch_L={eog_state_p2['ch_L']}  ch_R={eog_state_p2['ch_R']}")
+            print(f"P2 EOG channels: ch_L={eog_state_p2['ch_L']}  ch_R={eog_state_p2['ch_R']}  "
+                  f"σ_thr={eog_state_p2['sigma_thr']:.2f}×  glance_window={eog_state_p2['glance_window_s']:.2f}s")
 
         print("Starting data stream...")
         board.start_stream(450000)
