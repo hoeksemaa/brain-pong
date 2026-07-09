@@ -9,6 +9,8 @@ import plotly.graph_objs as go
 from dash import Dash, dcc, html, Output, Input, State, no_update, clientside_callback, ctx
 from dash.exceptions import PreventUpdate
 import logging
+from datetime import datetime
+from pathlib import Path
 
 # --- CLI ---
 _cli_parser = argparse.ArgumentParser(
@@ -69,6 +71,7 @@ from brainpong.eog_core import (
     eog_diff, _make_eog_state, _eog_filter, _eog_velocity, _sustained_crossing,
     _run_eog_sm, _reset_eog_st,
 )
+from brainpong.recording import save_eog_recording
 
 # ==============================================================================
 # === 1. CONFIGURATION =========================================================
@@ -81,6 +84,15 @@ BOARD_ID             = BoardIds.CERELOG_X8_BOARD
 # (they only appear while a board is plugged in). Single-player modes use P1 only.
 P1_SERIAL_PORT       = "/dev/cu.usbserial-1120"   # Player 1 board (v1.2 / original)
 P2_SERIAL_PORT       = "/dev/cu.usbserial-1110"   # Player 2 board — 2nd port on the hub (confirm which physical board at the paddle)
+
+# In-game recording (one npz per player per game, data/eog/). Board VERSION is
+# looked up from the port: v1.2 is always on 1120, v1.3 always on 1110 (asserted,
+# since BrainFlow can't tell same-model units apart over serial).
+BOARD_STREAM_BUFFER  = 450000     # ring size for start_stream; also caps the recording pull
+PORT_TO_VERSION      = {P1_SERIAL_PORT: "1.2", P2_SERIAL_PORT: "1.3"}
+REC_OUT_DIR          = Path(__file__).resolve().parent.parent / "data" / "eog"
+REC_MONTAGE          = "2 electrodes at outer canthi (differential) + active bias on ear clip, no ground"
+REC_GAIN             = 24         # Cerelog X8 default (assumed, not read from board); matches the corpus
 INITIAL_BALL_SPEED_Y = -4
 GAME_INTERVAL_MS     = 16
 GAME_WIDTH           = 800
@@ -125,10 +137,14 @@ EOG_SETTLE_S     = 0.4
 board_p1      = None   # Player 1's board (also the sole board in --eog / default single-player)
 board_p2      = None   # Player 2's board — only opened in --2player
 sampling_rate = 0      # model-level; both X8s report the same rate
+timestamp_row = 0      # board timestamp channel (set in main); used to slice the recording span
 
 
 eog_state    = _make_eog_state()
 eog_state_p2 = _make_eog_state()
+
+# In-game recording state: snapshotted on New Game, flushed to npz on Game Over.
+_rec = {'active': False, 'start_time': None, 'players': [], 'events': [], 'last_status': None}
 
 
 def _poll_eog(eog_st, brd):
@@ -200,6 +216,25 @@ app.layout = html.Div(
             html.Button('Pause / Resume', id='pause-button', n_clicks=0, style={'marginRight': '20px'}),
             html.Button('Start New Game', id='start-button', n_clicks=0),
         ], style={'marginBottom': '10px'}),
+        # Player names — saved as each recording's subject. Editable; default P1/P2.
+        # p2-name always exists (hidden in single-player) so the recording callback's
+        # State resolves. Whole row hidden when there's no board to record.
+        html.Div(
+            id='player-names-row',
+            style={'marginBottom': '10px',
+                   'display': 'block' if (EOG_MODE or TWO_PLAYER_MODE) and not NO_BOARD_MODE else 'none'},
+            children=[
+                html.Span('Recording as —', style={'color': '#888', 'fontSize': '13px', 'marginRight': '8px'}),
+                html.Label('P1:', style={'color': '#33ff66', 'fontSize': '13px', 'marginRight': '4px'}),
+                dcc.Input(id='p1-name', type='text', value='P1', debounce=True,
+                          style={'width': '110px', 'marginRight': '16px'}),
+                html.Label('P2:', style={'color': '#ff5252', 'fontSize': '13px', 'marginRight': '4px',
+                                         'display': 'inline' if TWO_PLAYER_MODE else 'none'}),
+                dcc.Input(id='p2-name', type='text', value='P2', debounce=True,
+                          style={'width': '110px',
+                                 'display': 'inline-block' if TWO_PLAYER_MODE else 'none'}),
+            ],
+        ),
         html.H3(id='status-display', style={'fontSize': '24px', 'color': 'yellow', 'minHeight': '80px'}),
         html.Div(
             style={'display': 'inline-flex', 'alignItems': 'stretch'},
@@ -342,6 +377,7 @@ app.layout = html.Div(
         dcc.Store(id='bci-command-store',    data={'command': 'NEUTRAL', 'seq': 0}),
         dcc.Store(id='bci-command-store-p2', data={'command': 'NEUTRAL', 'seq': 0}),
         dcc.Store(id='key-press-store',      data={'key': 'None', 'key_p2': 'None'}),
+        dcc.Store(id='rec-dummy-store'),   # sink for the recording callback (side-effect only)
         dcc.Interval(id='game-interval',   interval=GAME_INTERVAL_MS,       n_intervals=0, disabled=False),
         dcc.Interval(id='bci-interval',    interval=BCI_UPDATE_INTERVAL_MS,  n_intervals=0, disabled=True),
         dcc.Interval(id='status-interval', interval=500,                     n_intervals=0),
@@ -897,10 +933,136 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
 
 
 # ==============================================================================
+# === 5b. IN-GAME RECORDING ====================================================
+# ==============================================================================
+# One npz per player per game (data/eog/, eog-v3 schema, extends record_eog).
+# Driven by status transitions: New Game → INSTRUCTIONS starts it; CALIBRATING /
+# PLAYING drop event markers; GAME_OVER pulls each board's span and saves. Only
+# the 2 EOG channels are stored (CH3-8 firmware-off). Board version from the port.
+
+def _rec_boards():
+    """(slot, board, state, port) for each board to record this game — [] if none."""
+    out = []
+    if board_p1 is not None:
+        out.append(('P1', board_p1, eog_state, P1_SERIAL_PORT))
+    if TWO_PLAYER_MODE and board_p2 is not None:
+        out.append(('P2', board_p2, eog_state_p2, P2_SERIAL_PORT))
+    return out
+
+
+def _start_recording(p1_name, p2_name):
+    """Snapshot per-player metadata + live config at New Game. Discards any unsaved
+    in-progress recording (restarting mid-game abandons that game's data)."""
+    boards = _rec_boards()
+    if not boards:
+        return
+    names = {'P1': (p1_name or 'P1').strip() or 'P1',
+             'P2': (p2_name or 'P2').strip() or 'P2'}
+    players = [{
+        'slot': slot, 'board': brd, 'port': port,
+        'version': PORT_TO_VERSION.get(port, '?'), 'subject': names[slot],
+        'ch_L': st['ch_L'], 'ch_R': st['ch_R'], 'sr': st['sr'],
+        'sigma_thr': st.get('sigma_thr'), 'hpf_hz': st.get('hpf_hz'),
+        'lpf_hz': st.get('lpf_hz'), 'glance_window_s': st.get('glance_window_s'),
+    } for slot, brd, st, port in boards]
+    _rec['active']     = True
+    _rec['start_time'] = time.time()
+    _rec['players']    = players
+    _rec['events']     = []
+    summary = ', '.join(f"{p['slot']}={p['subject']}(v{p['version']})" for p in players)
+    print(f"[rec] started — {len(players)} player(s): {summary}")
+
+
+def _log_event(label):
+    if _rec['active']:
+        _rec['events'].append((label, time.time()))
+
+
+def _stop_and_save_recording():
+    """Flush each recording board's span to npz. Robust to per-board errors."""
+    if not _rec['active']:
+        return
+    _rec['active'] = False
+    start_t, stop_t = _rec['start_time'], time.time()
+    n_players = len(_rec['players'])
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')   # shared → the two files are linkable
+    for p in _rec['players']:
+        try:
+            _save_one_recording(p, start_t, stop_t, n_players, stamp)
+        except Exception as e:
+            print(f"[rec] save FAILED for {p['slot']} ({p['subject']}): {e}")
+
+
+def _save_one_recording(p, start_t, stop_t, n_players, stamp):
+    brd, sr = p['board'], p['sr']
+    n_pull  = min(BOARD_STREAM_BUFFER, int((max(0.0, stop_t - start_t) + 2.0) * sr) + 1)
+    full    = brd.get_current_board_data(n_pull)          # all rows, a fresh copy
+    if full.shape[1] == 0:
+        print(f"[rec] no samples for {p['slot']} ({p['subject']}) — skipped")
+        return
+    ts   = full[timestamp_row]
+    mask = (ts >= start_t) & (ts <= stop_t)
+    if mask.sum() < 2:                                    # timestamps unusable → keep all pulled
+        mask = np.ones(full.shape[1], dtype=bool)
+    idx  = np.where(mask)[0]
+    span = full[:, idx[0]:idx[-1] + 1]
+    eeg  = np.vstack([np.ascontiguousarray(span[p['ch_L']].astype(np.float64)),
+                      np.ascontiguousarray(span[p['ch_R']].astype(np.float64))])   # (2,N)
+    span_ts    = span[timestamp_row]
+    unix_start = float(span_ts[0]) if span_ts.size and span_ts[0] > 0 else start_t
+    n_samp     = eeg.shape[1]
+    ev_s, ev_l = [], []
+    for label, t in _rec['events']:
+        s = int(round((t - unix_start) * sr))
+        if 0 <= s < n_samp:
+            ev_s.append(s); ev_l.append(label)
+    notes = (f"in-game pong recording ({n_players}-player); board v{p['version']} on "
+             f"{p['port']}; CH3-8 firmware-off so only the EOG pair stored (row0=ch_L, "
+             f"row1=ch_R); detector sigma={p['sigma_thr']} hpf={p['hpf_hz']} "
+             f"lpf={p['lpf_hz']} glance={p['glance_window_s']}s")
+    path = save_eog_recording(
+        REC_OUT_DIR, p['subject'], eeg, unix_start, sr,
+        gain=REC_GAIN, board=f"CERELOG_X8 unit:v{p['version']}", montage=REC_MONTAGE,
+        notes=notes, tags=['in-game', f'{n_players}-player', f"board-v{p['version']}"],
+        ch_L=0, ch_R=1, n_players=n_players, board_version=p['version'],
+        serial_port=p['port'], player_slot=p['slot'], sigma_thr=p['sigma_thr'],
+        hpf_hz=p['hpf_hz'], lpf_hz=p['lpf_hz'], glance_window_s=p['glance_window_s'],
+        event_samples=ev_s, event_labels=ev_l, stamp=stamp)
+    print(f"[rec] saved {p['slot']} ({p['subject']}) → {path}  [{n_samp} samp, {n_samp / sr:.1f}s]")
+
+
+@app.callback(
+    Output('rec-dummy-store', 'data'),
+    Input('app-status-store', 'data'),
+    State('p1-name', 'value'),
+    State('p2-name', 'value'),
+    prevent_initial_call=True,
+)
+def manage_recording(app_status, p1_name, p2_name):
+    """Drive recording off status transitions. No-op without a board to record."""
+    if NO_BOARD_MODE or not (EOG_MODE or TWO_PLAYER_MODE):
+        return no_update
+    status = (app_status or {}).get('status')
+    prev   = _rec['last_status']
+    if status == prev:
+        return no_update
+    _rec['last_status'] = status
+    if status == 'INSTRUCTIONS':
+        _start_recording(p1_name, p2_name)
+    elif status == 'CALIBRATING' and prev == 'INSTRUCTIONS':
+        _log_event('calib_start')
+    elif status == 'PLAYING' and prev == 'CALIBRATING':
+        _log_event('play_start')
+    elif status == 'GAME_OVER':
+        _stop_and_save_recording()
+    return no_update
+
+
+# ==============================================================================
 # === 6. MAIN ==================================================================
 # ==============================================================================
 def main():
-    global board_p1, board_p2, sampling_rate
+    global board_p1, board_p2, sampling_rate, timestamp_row
 
     if NO_BOARD_MODE:
         mode_msg = ("2-PLAYER NO-BOARD: P1=←/→, P2=A/D." if TWO_PLAYER_MODE
@@ -943,6 +1105,7 @@ def main():
         board_p1 = _open_board(P1_SERIAL_PORT, "P1")
         sampling_rate    = BoardShim.get_sampling_rate(BOARD_ID)
         all_eeg_channels = BoardShim.get_eeg_channels(BOARD_ID)
+        timestamp_row    = BoardShim.get_timestamp_channel(BOARD_ID)
         print(f"P1 board connected. Sampling rate: {sampling_rate} Hz")
 
         if EOG_MODE or TWO_PLAYER_MODE:
@@ -966,9 +1129,9 @@ def main():
                   f"glance_window={eog_state_p2['glance_window_s']:.2f}s")
 
         print("Starting data stream(s)...")
-        board_p1.start_stream(450000)
+        board_p1.start_stream(BOARD_STREAM_BUFFER)
         if board_p2 is not None:
-            board_p2.start_stream(450000)
+            board_p2.start_stream(BOARD_STREAM_BUFFER)
         time.sleep(1.0)
 
         logging.getLogger('werkzeug').setLevel(logging.ERROR)
