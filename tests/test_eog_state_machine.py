@@ -30,7 +30,24 @@ def test_calibration_sets_sigma_and_goes_idle():
     noise = rng.standard_normal(int(EOG_BASELINE_S * SR) + 10) * 3.0
     assert _run_eog_sm(st, noise, now=0.0) is None
     assert st['sm'] == 'IDLE'
-    assert st['baseline_sigma'] == pytest.approx(np.std(noise), rel=1e-6)
+    # σ is a robust 1.4826·MAD noise scale — a consistent estimator of the
+    # Gaussian σ, so it lands near the true 3.0 (not exactly np.std).
+    assert st['baseline_sigma'] == pytest.approx(3.0, rel=0.1)
+
+
+def test_calibration_sigma_is_robust_to_outliers():
+    # A big saccade/blink transient during the eyes-forward calibration must not
+    # inflate the noise scale (MAD ignores outliers; plain std would be fooled and
+    # would desensitise the detector for the whole session).
+    st = _make_eog_state()
+    st['sr'] = SR
+    rng = np.random.default_rng(1)
+    noise = rng.standard_normal(int(EOG_BASELINE_S * SR) + 10) * 3.0
+    contaminated = noise.copy()
+    contaminated[100:140] = 500.0                       # a large transient mid-calibration
+    _run_eog_sm(st, contaminated, now=0.0)
+    assert st['baseline_sigma'] == pytest.approx(3.0, rel=0.15)  # noise scale ~unmoved
+    assert np.std(contaminated) > 6.0                  # std WOULD have been badly inflated
 
 
 def test_calibration_waits_for_enough_samples():
