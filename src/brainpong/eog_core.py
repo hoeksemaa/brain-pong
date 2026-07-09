@@ -42,7 +42,10 @@ from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 EOG_LPF_HZ       = 100.0
 EOG_HPF_HZ       = 0.5
 NOTCH_BANDS      = ((48.0, 52.0), (58.0, 62.0))
-EOG_SIGMA_THR    = 5.0     # crossing threshold in units of baseline σ
+EOG_SIGMA_THR    = 2.5     # crossing threshold in units of baseline σ (dropped 5→2.5:
+                           # the glance-PAIR debounce rejects stray singles, so we run the
+                           # primitive more sensitive to miss fewer real glances — esp. on
+                           # noisy-baseline players where 5σ was unreachable)
 EOG_MIN_DUR_MS   = 12.0    # a crossing must persist this long (kills single spikes)
 GLANCE_WINDOW_S  = 0.7     # max time between the two glances of a pair
 ARMED_MIN_WAIT_S = 0.05    # min time before the opposite glance counts
@@ -53,7 +56,9 @@ EOG_BASELINE_S   = 5.0     # baseline collected before σ is fixed
 # ── State factory ───────────────────────────────────────────────────────────────
 
 def _make_eog_state():
-    """Fresh per-player EOG state dict. ch_L/ch_R/sr are filled in at board setup."""
+    """Fresh per-player EOG state dict. ch_L/ch_R/sr are filled in at board setup;
+    the two runtime knobs (sigma_thr, glance_window_s) default here and are updated
+    live from the in-game browser sliders."""
     return {
         'ch_L': None, 'ch_R': None, 'sr': None,
         'sm': 'CALIBRATING',
@@ -63,11 +68,15 @@ def _make_eog_state():
         'arm_time': None,
         'last_cmd_time': 0.0,
         'cmd_seq': 0,
+        # ── tunable config (set at board setup; survive recalibration) ──────────
+        'sigma_thr': EOG_SIGMA_THR,          # ×; a glance must exceed this MULTIPLE of baseline σ
+        'glance_window_s': GLANCE_WINDOW_S,  # s; max gap between the two glances of a pair
     }
 
 
 def _reset_eog_st(eog_st):
-    """Return a player's state to fresh CALIBRATING (keeps ch_L/ch_R/sr/cmd_seq)."""
+    """Return a player's state to fresh CALIBRATING (keeps ch_L/ch_R/sr/cmd_seq
+    and the config knobs sigma_thr/glance_window_s)."""
     eog_st['sm']             = 'CALIBRATING'
     eog_st['baseline_acc']   = []
     eog_st['baseline_sigma'] = None
@@ -158,7 +167,8 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
         return None
 
     sigma    = eog_st['baseline_sigma']
-    crossing = _sustained_crossing(new_sig, sigma, eog_st['sr'])
+    crossing = _sustained_crossing(new_sig, sigma, eog_st['sr'],
+                                   sigma_thr=eog_st.get('sigma_thr', EOG_SIGMA_THR))
 
     if eog_st['sm'] == 'IDLE':
         if crossing is not None:
@@ -167,7 +177,7 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
             eog_st['arm_time']  = now
 
     elif eog_st['sm'] == 'ARMED':
-        if now - eog_st['arm_time'] > GLANCE_WINDOW_S:
+        if now - eog_st['arm_time'] > eog_st.get('glance_window_s', GLANCE_WINDOW_S):
             eog_st['sm']        = 'IDLE'
             eog_st['first_dir'] = None
         elif now - eog_st['arm_time'] > ARMED_MIN_WAIT_S and crossing is not None:
