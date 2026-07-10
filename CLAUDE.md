@@ -188,6 +188,10 @@ The user is the only reviewer.
 
 ## Working agreements
 
+- **Do NOT use the memory tool / auto-memory for this project.** Record any notes,
+  findings, or context worth persisting as **local files in the repo** (`docs/` for
+  durable notes — e.g. `docs/claude-memory-snapshot.md` holds the prior memory
+  export). Local files only; nothing goes into Claude's memory store.
 - Don't add features beyond the active task; this is a small repo and scope creep
   shows.
 - User-authored intent docs live in `docs/`. Keep the active tournament plan
