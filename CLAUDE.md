@@ -1,228 +1,197 @@
 # BrainPong — Claude project notes
 
-Cerelog X8 EEG/EOG project. **Active work is EOG-based eye-tracking** (2-electrode horizontal setup). The original SSVEP pong game and all prior scripts/data are preserved in `archive/`.
+**Play Pong with your eyes.** A 2-electrode horizontal **EOG** (electrooculography)
+montage on a Cerelog X8 reads left/right eye glances and drives the paddle in real
+time. Current focus: a **live, working 2-player EOG game** aimed at an in-person
+tournament (see `docs/tournament-prep-plan.md`). Prior SSVEP-flicker work is
+superseded and lives in `archive/` (reference only).
+
+## Context — how this device works (read first)
+
+Personal hobby project: play a game using eye movements. The sensor is
+**receive-only** — it records the tiny naturally-occurring voltages that appear on
+the skin near the eyes when you look left or right (standard EOG), and maps them to
+paddle moves. There is **no output path to the person**: no actuator, nothing applied
+back to the body. A few pieces of engineering shorthand below could be misread out of
+context, so:
+
+- **The Cerelog X8 is a biopotential *amplifier*** — an input-only measuring
+  instrument, essentially a sensitive voltmeter for microvolt–millivolt EOG. The
+  "±187 mV at ×24 gain" figure is its *input measuring range*, i.e. the largest signal
+  it can read — not anything applied to a person.
+- **The "bias" feedback on the reference electrode is a noise-canceller** — the
+  standard right-leg-drive common-mode servo found in every ECG/EEG front-end, there
+  to reject mains hum. "No ground" describes the referential montage wiring, not
+  electrical safety.
+- **The only person measured is the project owner** (plus consenting tournament
+  players). No third-party data, no medical or clinical use.
+- **The owner's own recordings are shared publicly by choice** — hence "committed to
+  git" below.
+
+## Hardware & acquisition → see the `cerelog-x8` skill
+
+The reusable board layer (BrainFlow fork install, serial/multi-board identity,
+gain/units/clip ceiling, channel slots, the live-acquisition loop, signal-quality
+gotchas) is documented once in the global **`cerelog-x8`** skill so it's reusable
+across projects. Project-specific facts:
+
+- **Board id**: `BoardIds.CERELOG_X8_BOARD` (Cerelog fork only). Fork lives at
+  `/Users/john/Dev/cerelog/Shared_brainflow-cerelog/python_package`.
+- **Serial ports are hardcoded** (not CLI): P1 `/dev/cu.usbserial-1120` (v1.2),
+  P2 `/dev/cu.usbserial-1110` (v1.3). Two same-model boards are keyed by port.
+- **EOG slots**: right eye → CH1/row0, left eye → CH2/row1 (L/R physically swapped
+  PERMANENTLY 2026-07-02 so `diff = ch_R − ch_L` is canonical, rightward → +).
+  CH3–8 are firmware-off; only the EOG pair is stored.
 
 ## Repository layout
 
 ```
-src/brainpong/    — importable library (eog_core, preprocess, detect); `pip install -e .`
-scripts/          — runnable entrypoints (record_eog, eog_display, bench, eval_*, plot_*)
-data/eog/         — EOG session recordings (.npz, protocol_version 'eog-v1'/'eog-v2')
-derivatives/      — regenerable outputs (derivatives/results/ = bench JSON)
-tests/            — pytest suite (imports brainpong from src/ via conftest)
-archive/          — all prior SSVEP pong work (scripts, recordings, plans, assets)
-docs/             — project documentation (roadmaps, protocols)
+src/brainpong/   — importable library (`pip install -e .`)
+  eog_core.py    — LIVE realtime glance-pair detector (single source of truth, 1- & 2-player)
+  recording.py   — LIVE in-game recorder → eog-v3 .npz (one per player)
+  preprocess.py  — OFFLINE eval preprocessors + VIEWER_FILTERS (display filters)
+  detect.py      — OFFLINE eval detectors (trial-based; not used by the live game)
+  store.py       — viewer SQLite store over frozen npz (metadata/events/trims only)
+scripts/         — pong_game_brainflow.py (game), record_eog.py (cued recorder),
+                   filtered_plot.py (live signal sanity plot),
+                   serve_viewer.py + ingest_npz.py (diagnostic viewer)
+web/             — "EOG Studio" diagnostic viewer frontend (canvas + Flask API)
+data/eog/        — labeled EOG recordings (eog-v1/v2/v3). Read-only ground truth.
+derivatives/     — regenerable outputs (results/ JSON; viewer.db, gitignored)
+archive/         — SSVEP pong + early EOG probes + archived offline eval/plot tooling
+                   (archive/eog-scripts/). Reference only; nothing live imports it.
+docs/            — active: tournament-prep-plan.md (supersedes tournament-roadmap.md);
+                   plus electrode/rig characterization docs.
+tests/           — pytest suite over the live EOG core (conftest adds src/ to path)
 ```
 
-Library code goes in `src/brainpong/`; new runnable scripts go in `scripts/` and
-import the library as `from brainpong.X import …` (run after `pip install -e .`).
-Don't put EOG work inside `archive/`. Root stays minimal (README, CLAUDE.md,
-pyproject.toml only).
+Library code → `src/brainpong/`; runnable entrypoints → `scripts/`, importing
+`from brainpong.X import …`. Don't put live EOG work in `archive/`. Root stays
+minimal (README, CLAUDE.md, pyproject.toml).
 
-## EOG diagnostic dashboard (active build)
+## Running it
 
-Goal: a **live raw-data dashboard** (frontend display + backend store) to tease apart an oscillating-noise problem on the current rig — 2 electrodes at the outer canthi (differential pair into one channel) + a single **active bias-drive** ear clip, **no ground**. Scope is deliberately minimal: display + store raw signal only. **No filtering, no real-signal extraction, no formal `.npz` recording protocol yet.**
-
-Why live (not record→offline): every diagnostic test is an *interactive manipulation* (re-prep electrode, switch to battery, toggle `PD_BIAS`/`MUX`), so the signal must respond under your hands in real time. "Raw" means genuinely raw: pre-filter, pre-HPF, in real units, with an explicit clip/rail indicator — quietly running the existing filter chain would hide the exact failures (#2 CMRR-collapse, #3 DC-rail) we're hunting. Adapt `archive/eog_filtered_plot.py` / `archive/filtered_plot.py`; don't greenfield a new Dash app.
-
-### Datapoints each recording stores
-
-**Per-recording (session metadata, constant within a recording):**
-
-| field | notes |
-|---|---|
-| Unix start time | when the session began; doubles as a natural ID |
-| Sample rate (fs) | ticks/sec (e.g. 250); denominator for the time axis |
-| Gain | amp setting (e.g. ×24); converts counts→volts *and* sets the clip ceiling. **Changing gain = new recording** |
-| Signal unit | what the stored numbers are: raw counts vs µV (BrainFlow may pre-convert — record which) |
-| Board used | single `board` str = model + **which physical unit**, e.g. `"CERELOG_X8 unit:original"`. Model is constant; the unit label (user-asserted via `--board`, default "original") is the part that matters now that a 2nd, possibly-faulty board exists — every recording must pin to one unit. BrainFlow can't distinguish two same-model units over serial, hence asserted not detected. (Numeric board id 65 lives only in the hardcoded `BOARD_ID` constant — runtime needs it, but it's 1:1 with the name so not stored) |
-| Person recorded | subject |
-| Method / montage | e.g. "2 electrodes at outer canthi (differential) + active bias on ear clip, no ground" |
-| Free-text notes | catch-all prose; defaults to blank |
-| Tags | `list[str]`, defaults to empty. Structured, machine-filterable labels — esp. **data-problem markers** so a corpus of known-bad recordings stays queryable (e.g. `flatline`, `railing`, `loose-electrode`). `notes` is prose; `tags` is the filter axis. Stored as a 1-D string array (not a wrapped singleton) since it's multi-valued |
-
-**Per-sample (every tick):**
-
-| field | notes |
-|---|---|
-| Running sample count | 0,1,2,3… — gives the honest evenly-spaced timeline and catches dropped data |
-| Raw signal | measured value(s), one per channel, in the unit named above |
-
-**Event markers (sparse):** a label + the sample count (or time) it occurred at, so it pins to the signal.
-
-Sample time is **derived, not stored**: `start_time + count / fs`. Use that uniform `n/fs` axis for any spectral/frequency analysis — *not* host arrival timestamps (USB delivers samples in bursts, so arrival times are lumpy and would smear the PSD). Clip/rail = signal approaching the ceiling implied by gain (≈ ±4.5 V / gain referred to input; ±187 mV at ×24).
-
-**Deliberately deferred** (flagged, not adopted in v1 — don't treat as oversights): structured per-segment instrument condition (`PD_BIAS`/`MUX` state per chunk — for now lives in free-text notes), structured electrode→channel→site map (cf. [[project_electrode_swap_john]]), lead-off / status-word ΔZ readout, and versioning (dashboard SHA / brainflow-fork / schema tag).
-
-### Raw-waveform web viewer — REMOVED
-
-A static Plotly.js viewer (`web/`, npz→decimated-JSON, Vercel-deployed) was the
-first attempt at a public raw-waveform website. **Removed 2026-06-22 — it never
-worked.** The underlying *goal* (a public, globally-accessible site to view raw
-waveforms; data is public by policy) may be revisited, but any future viewer
-starts fresh, ideally reading the live SQLite store rather than pre-built JSON.
-
-### Storage format + live architecture (decided, not yet built)
-
-Live capture will use **SQLite (WAL)**, not npz — npz is write-once (RAM-buffered, no crash durability) with a poor metadata story. Schema: `recording` (per-session metadata), `chunk` (one row per `get_board_data()` chunk; signal as `(n_channels,n_samples)` C-order BLOB, dtype/n_channels in `recording`), `event` (sample-pinned markers). Commit per chunk; `PRAGMA busy_timeout`. Architecture: two decoupled processes through the DB file — `recorder.py` (owns board, only acquires+stores) + frontend (reads via WAL, renders); **SQLite is the bus**, no sockets. Sample time derived `unix_start + sample_index/fs`. Existing 9 npz stay frozen ground truth — conform via a load-time sidecar shim, never re-save. Deduced constants for the old corpus: unit=volts, board=CERELOG_X8 (id 65), start=`eeg[10][0]` (EOG)/`started_at_iso` (SSVEP); **gain not stored anywhere — deduce ×24 (Cerelog default), confirm against fork**.
-
-### Oscillating-noise diagnostic protocol (what the dashboard serves)
-
-Turn each hypothesis into a falsifiable prediction; toggle one variable at a time:
-
-1. **Raw PSD** — frequency IDs the culprit: 60.0 Hz locked + harmonics → mains/CMRR (#2); odd non-mains peak → bias-loop self-oscillation (#1); sub-1 Hz / sawtooth → DC-rail (#3).
-2. **Input-short (`CHnSET` MUX=001)** — partitions board-internal vs electrode-side: oscillation persists → internal; vanishes → input-side.
-3. **`PD_BIAS` off** — splits #1 from #2: dies → #1 (bias loop generating its own oscillation via high-Z ear contact); worse/rails → #2 (mains leaking differential through canthus impedance mismatch ΔZ).
-
-Root of #2 is **electrode-impedance asymmetry** between the two canthi (system CMRR ≈ chip CMRR + ΔZ/Zin_cm), so a matched-electrode bench rig hides it — verdicts must be reproduced on the real canthus montage. See [[project_noise_60hz_cmrr]].
-
-## Archive contents (SSVEP pong — reference only)
-
-- `archive/pong_game_brainflow.py` — SSVEP Dash app: BrainFlow I/O, DSP, CCA, game loop. ~475 LoC.
-- `archive/assets/render.js` — canvas renderer + SSVEP flicker stimulus.
-- `archive/requirements.txt` — deps for the pong game.
-- `archive/refresh-rate.html` — browser rAF rate probe.
-- `archive/filtered_plot.py` — gold-standard 8-channel EEG plotter. Verbatim copy from upstream cerelog repo; don't edit unless syncing.
-- `archive/eog_filtered_plot.py` — EOG-tuned plotter (the starting point for new EOG work).
-- `archive/recordings/` — SSVEP session `.npz` files (protocol_version: 'v1'). Read-only ground truth.
-- `archive/plans/` — all prior day-plans and benchmark specs.
-- `archive/ROADMAP.md` — future improvements for the pong game.
-
-## Running it locally
-
-There is a project-local venv at `.venv/` (Python 3.13). **Always activate it before running any Python script in this repo** — otherwise BrainFlow / Dash / sklearn imports will fail or pull from the wrong interpreter.
+Project-local venv at `.venv/` (Python 3.13). **Always activate it first** or
+BrainFlow/Dash/sklearn imports pull from the wrong interpreter.
 
 ```bash
 source .venv/bin/activate
-pip install -e .                 # once: makes `brainpong` importable (src/ layout)
-python scripts/<script>.py       # entrypoints live in scripts/
+pip install -e .                                    # once: makes `brainpong` importable
+python scripts/filtered_plot.py                     # is the signal alive? (live plot)
+python scripts/record_eog.py --subject john         # record cued LEFT/RIGHT/REST data
+python scripts/pong_game_brainflow.py --no-board    # keyboard only, no hardware
+python scripts/pong_game_brainflow.py --eog         # 1-player EOG (needs board + fork)
+python scripts/pong_game_brainflow.py --2player     # 2-player EOG (two boards)
 ```
 
-The library lives in `src/brainpong/` and is imported as `from brainpong.X import …`. `pip install -e .` is editable, so source edits take effect without reinstall; `tests/conftest.py` also adds `src/` to the path so pytest runs even without the install. If deps drift, `pip install -r archive/requirements.txt` from inside the activated venv. The venv is gitignored.
-
-### Cerelog brainflow (real-hardware mode)
-
-Hardware modes (default play, `--record`) reference `BoardIds.CERELOG_X8_BOARD`, which only exists in Cerelog's brainflow fork — **not** upstream PyPI brainflow. To run with the real board, install the fork over the public package:
+Diagnostic viewer (no board needed — reads committed recordings):
 
 ```bash
-source .venv/bin/activate
-pip install -e /Users/john/Dev/cerelog/Shared_brainflow-cerelog/python_package
+python scripts/ingest_npz.py     # build derivatives/viewer.db from data/eog/
+python scripts/serve_viewer.py   # http://localhost:8770  (needs only flask + numpy/scipy)
 ```
 
-The fork imports `pkg_resources`, which is why `requirements.txt` pins `setuptools<81`. Without that pin, you'll hit `ModuleNotFoundError: No module named 'pkg_resources'` at import time. `--no-board` mode also reads the constant at module-load and so requires the fork (or stub) to be installed even though it doesn't use the board.
+**Modes** (`pong_game_brainflow.py`, `parse_known_args`): default = keyboard only
+(opens P1 board but leaves the detector idle — a mild foot-gun); `--no-board` =
+keyboard, no hardware; `--eog` = 1-player EOG; `--2player` = two boards. Guarded:
+`--eog + --no-board` and `--2player + --eog` exit with an error.
 
-### Recordings policy
+## The live EOG pipeline (board → paddle)
 
-**All `.npz` recordings are committed to git.** Personal project; owner is fine with biosignal data being public. Don't gitignore any recordings dir.
-
-- SSVEP sessions: `archive/recordings/` — protocol_version `v1`, schema defined in `archive/plans/recording-protocol.md`. Read-only ground truth; never mutate.
-- EOG sessions: `data/eog/` — protocol_version `eog-v1`/`eog-v2`. Same immutability rules apply.
-
-### SSVEP recording mode (archived — for reference)
-
-```bash
-source .venv/bin/activate
-python archive/pong_game_brainflow.py --record                 # 40 trials
-python archive/pong_game_brainflow.py --record --trials 4      # smoke-test
-```
-
-## Display / browser setup (matters a LOT for SSVEP precision)
-
-The flicker stimulus must hit precise frequencies. The owner runs a 14"/16" 2021 MBP (M1 Pro, Liquid Retina XDR, ProMotion adaptive 24–120 Hz). Empirical findings from `refresh-rate.html`:
-
-- **Use Chrome, not Safari.** Chrome on Apple Silicon delivers stable 120 Hz rAF (measured: 120.5 Hz median, 8.30 ms median Δ, p99 = 9.40 ms, 0 drops over 10 s / 1202 frames). Safari quantizes `performance.now()` to 1 ms (privacy hardening) AND tends to settle ProMotion at 60 Hz instead of 120 for canvas content.
-- **Display setting must be "ProMotion"** (System Settings → Displays → Refresh Rate). The fixed-rate options (60 / 59.94 / 50 / 48 / 47.95) are below 120, and macOS does NOT expose a fixed "120 Hz" option for built-in ProMotion displays — that's an Apple API gap, not something we control.
-- **Run fullscreen** during recording sessions. ProMotion is more likely to honor 120 Hz when the page is fullscreen and other apps aren't competing for the compositor.
-- **No external monitor** assumed. If that changes, re-run the probe — most external displays are 60 Hz only.
-
-### Target stimulus parameters (assumes 120 Hz refresh)
-
-| direction | freq | period (frames) | duty | edge resolution |
-|---|---|---|---|---|
-| LEFT  | 10 Hz | 12 | 6 on / 6 off | 8.33 ms |
-| RIGHT | 15 Hz | 8  | 4 on / 4 off | 8.33 ms |
-
-Flicker is **black ↔ white** (max luminance contrast for strongest SSVEP evoked response), not the cyan/magenta of the original cosmetic palette.
-
-If anything about the display, browser, or refresh rate changes, **re-run `refresh-rate.html` first** before debugging downstream signal issues.
-
-## Pipeline at a glance
+Per player, per BCI tick (all DSP lives in `eog_core.py`):
 
 ```
-Cerelog X8 → serial(/dev/cu.usbserial-1120, hardcoded) → BrainFlow ringbuffer
-  → every 300 ms: pull 1.5 s × 4 ch
-  → detrend → LP(45) → HP(5) → notch(50,60) → rolling-median(3)
-  → CCA against sin/cos refs @ 10 Hz (LEFT) and 15 Hz (RIGHT), 3 harmonics
-  → raw_score = (corr_R - corr_L) * 2.5
-  → EMA (α=0.4) → calibrated thresholds → {LEFT, RIGHT, NEUTRAL}
-  → drives player_x in 16 ms game tick
+2 EEG rows (CH1=right, CH2=left) → get_current_board_data(0.4s settle + 0.1s new)
+  → differential: (ch_R − ch_L) × 1e6  → HEOG in µV, rightward +
+  → detrend → Butterworth LP(50 Hz) → notch(48–52, 58–62) → Butterworth HP(0.1 Hz)
+  → Engbert–Kliegl 5-point velocity (µV/s)                  [the detector statistic]
+  → detector signal: 'velocity' (default) OR 'matched' (UI toggle; ~120 ms Hann
+    velocity template, cross-correlated)
+  → sustained crossing: first run where |signal| > sigma_thr·σ persists ≥ 12 ms
+  → glance-PAIR state machine (look-one-way-then-back) → {LEFT, RIGHT}
+  → paddle snaps one of N_PANELS=5 discrete slots (clamped)
 ```
 
-## State machine
+A **glance pair** = the outgoing saccade + the return saccade of a deliberate look;
+keying on that signature (not raw amplitude) keeps it robust to drift. Velocity is
+itself a high-pass, so slow drift and HPF-recovery tails self-reject.
 
-`STARTING → CALIBRATING_LEFT (7s) → CALIBRATING_RIGHT (7s) → CALIBRATING_REST (7s) → ANALYZING → READY (3s) → PLAYING ⇄ PAUSED`
+**Dash intervals**: `game-interval` 16 ms (physics + render), `bci-interval` 100 ms
+(EOG poll → detector, enabled only in PLAYING/CALIBRATING), `status-interval` 500 ms
+(app-flow SM, countdowns, live plots, recording driver).
 
-`--no-board` flag skips hardware and calibration entirely; arrow goes `STARTING → PLAYING` and the user controls with A/D keys only.
+## State machines
 
-## Data integrity — CRITICAL
+**App/UI flow** (500 ms tick): `STARTING → INSTRUCTIONS (5 s) → CALIBRATING (~5.5 s)
+→ PLAYING ⇄ PAUSED → GAME_OVER` (first to `POINTS_TO_WIN = 10`). Keyboard-only modes
+skip INSTRUCTIONS/CALIBRATING.
 
-**All `.npz` recordings are read-only ground truth.** They back benchmarks, future ML training, and every algorithm comparison. Never mutate the underlying data; never re-save over a session file.
+**Per-player detector SM** (`_run_eog_sm`): `CALIBRATING → IDLE → ARMED →
+REFRACTORY → IDLE`.
+- **CALIBRATING**: collect `EOG_BASELINE_S = 5 s` of the detector signal, set the
+  noise floor **σ via robust MAD** (1.4826·MAD, std fallback). This is a single
+  *omnidirectional* baseline — there is **no** per-direction (left/right/rest)
+  calibration.
+- **IDLE→ARMED**: a sustained crossing arms on `first_dir`.
+- **ARMED→FIRE**: an opposite-direction crossing within `GLANCE_WINDOW_S = 0.5 s`
+  (after `ARMED_MIN_WAIT_S = 0.05 s`) fires the command → REFRACTORY. Timeout → IDLE.
+- **REFRACTORY**: `REFRACTORY_S = 0.8 s` dead time → IDLE.
 
-Concrete rules when handling recorded data:
+## Detection tuning knobs (live, in-browser sliders — not CLI)
 
-- **Filtering algorithms (DSP, CCA preprocessing, etc.) operate on copies, not the loaded arrays.** BrainFlow's `DataFilter.*` functions mutate their input *in place*. If a caller does `DataFilter.detrend(eeg[i], ...)` on a slice of the loaded npz array, it corrupts the source. Always copy first: `x = np.ascontiguousarray(eeg[i].astype(np.float64))`, then filter `x`.
-- **The mock-board adapter (step 6) returns copies** of the requested window, never views into the underlying recording array. Matches BrainFlow's real behavior.
-- **`np.savez` over an existing recording is forbidden** unless we're explicitly migrating a session to a new format (and even then, write to `<id>.npz.tmp` first, verify load round-trips, then atomic rename).
-- **Outputs (analysis results, baseline numbers, plots) live elsewhere** — `derivatives/` or `docs/`. Never write back into any `data/` recordings directory.
+`sigma_thr` (default **4.0**, crossing threshold in σ), `glance_window_s` (0.5),
+HPF/LPF corners (0.1 / 50 Hz), and the **detector toggle** (velocity | matched).
+All are captured into each recording's eog-v3 metadata so a session is
+reconstructable. Tune these against recorded corpora, not by feel alone.
 
-The reason: as algorithms change (HPF cutoff, freq pair, harmonics, classifier), we want to compare apples-to-apples against the same reference recordings. If we ever silently mutate the source data, comparisons across PRs become meaningless.
+## Recording & data integrity — CRITICAL
 
-## Three Dash intervals
+- **In-game recorder** writes one **eog-v3** `.npz` per player to `data/eog/`
+  (`recording.save_eog_recording`): the 2 EOG channels `(2, N)` in volts, plus
+  session metadata + the live detector config + sample-pinned event markers
+  (calib_start / play_start). `record_eog.py` is the separate *cued* recorder
+  (saves all 11 board rows). Detector version tag: `pipeline-v2`.
+- **All `.npz` recordings are committed to git and are read-only ground truth.**
+  They back benchmarks, ML training, and every algorithm comparison. Never mutate;
+  never re-save over a session file.
+- **DSP operates on copies.** BrainFlow's `DataFilter.*` mutate in place; always
+  `x = np.ascontiguousarray(arr.astype(np.float64))` first. The viewer store reads
+  signal on-demand from the frozen npz and only ever writes *annotations* (trims),
+  never the npz.
+- **Outputs live in `derivatives/` or `docs/`**, never written back into `data/`.
+  `np.savez` over an existing recording is forbidden (migration only: `.tmp` +
+  verify round-trip + atomic rename).
 
-- `game-interval` 16 ms (~60 Hz physics + render)
-- `bci-interval` 300 ms (window step = `FFT_WINDOW_SECONDS × (1 − overlap)`)
-- `status-interval` 500 ms (state machine tick; countdowns decrement by 0.5 per fire)
+Sample time is **derived** (`unix_start + sample_index / fs`), never host arrival
+timestamps — USB bursts make arrival times lumpy and would smear any PSD.
 
-## Playability targets (v1)
+## Known current issues (EOG game — not features)
 
-- Latency ≤ 500 ms (intent → paddle move). Stretch: 200 ms.
-- Accuracy ≥ 75% (look-direction matches paddle direction).
-
-These trade off against each other; the benchmark plan exists to map the curve and pick a knee.
-
-## Known smells / latent bugs
-
-Don't treat these as features:
-
-- **`CHANNELS_TO_USE = [1,2,3,4]` is used as a length only.** `main()` does `all_eeg_channels[:len(CHANNELS_TO_USE)]` — the actual indices are ignored. If we ever want non-contiguous channels (e.g. `[3,5,7,9]`), the indexing logic must change.
-- **`scores_rest` is collected during calibration and never read.** `manage_app_flow` only uses left/right scores when computing thresholds. Free 3-class training data sitting on the floor — relevant when we add a learned classifier.
-- **Pause-from-calibration is broken.** `manage_app_flow` toggles `'PAUSED' if status != 'PAUSED' else 'PLAYING'`. Unpausing during a calibration phase yeets the user into PLAYING with `cal_data['thresholds'] = None`, so `update_bci_command` early-returns forever.
-- **`render.js` flicker time source uses `n_intervals * interval_ms`, not `performance.now()`.** Stimulus phase is tied to Dash callback fire count; if the browser throttles, the effective SSVEP frequency drifts off 10/15 Hz, while the Python-side CCA references are built against true wallclock time — they'll desync. **Slated for replacement** with a frame-counted, rAF-driven flicker loop (see "Display / browser setup" above).
-- **Monitor refresh assumption was implicit.** Now explicit: target is 120 Hz on Chrome + ProMotion. 10/15 Hz are clean integer divisors at both 60 and 120; the rewrite assumes 120 and falls loud if rAF measurement says otherwise.
-- **`threading` imported but unused** — vestigial.
-- **PSD plot only shows ch0**, even though CCA uses all four channels.
-- **Hardcoded serial port** `/dev/cu.usbserial-1120` — not CLI-configurable.
-- **No raw EEG logging.** Means no post-hoc analysis, no replay testing, no labeled training data. Phase 1 of the benchmark plan fixes this with a `--record` flag.
-- **No `requirements.txt` / `pyproject.toml`** and no tests of any kind.
-
-## Optimization knobs we expect to tune
-
-- `FFT_WINDOW_SECONDS` (currently 1.5) — hard floor on latency. Try 0.5 / 0.3 / 0.2 once benchmarking exists.
-- SSVEP frequencies — 10 Hz has a 100 ms cycle; pushing to 30 Hz or 60 Hz on a 60 Hz monitor would shrink the integration floor. Stretch: detect monitor refresh rate at runtime and pick clean divisors.
-- Spatial filtering (CAR, Laplacian) — currently zero, each channel filtered independently.
-- FBCCA / TRCA over plain CCA — both well-known SSVEP wins.
-- Replace FFT-based filter chain with Goertzel at the two target freqs for cheaper narrow-band detection.
+- **Oscillating-noise false fires.** `_sustained_crossing` gates on persistence but
+  does **not** reject oscillation, so periodic noise can phantom-fire. Reproduced
+  end-to-end in `tests/test_oscillation_noise.py` (a run-count discriminator is a
+  candidate mitigation, **not** shipped). Related: the 60 Hz / CMRR-asymmetry hunt
+  documented in the electrode-comparison docs — system CMRR degrades with
+  electrode-impedance mismatch (ΔZ) between the two canthi, so verdicts must be
+  reproduced on the real montage, not a matched bench rig.
+- **Default (no-flag) mode opens the P1 board but never uses the detector** — a
+  board is required to launch yet contributes nothing (keyboard only).
+- **`_sustained_crossing` is imported but unused** in `pong_game_brainflow.py`
+  (it's called internally by `_run_eog_sm`); vestigial import.
 
 ## Shipping policy
 
-**NEVER open a PR or merge to main without an explicit user request.** Default flow per change:
-1. Branch + commit + push to remote.
-2. **STOP.** Wait for the user to say "PR + merge" (or equivalent) before running `gh pr create` / `gh pr merge`.
-
-This applies even when the change feels obviously complete. The user is the only reviewer; PRs and merges are user-initiated actions.
+**NEVER open a PR or merge to main without an explicit user request.** Per change:
+branch + commit + push, then **STOP** and wait for "PR + merge" (or equivalent)
+before `gh pr create` / `gh pr merge`. Applies even when the change feels complete.
+The user is the only reviewer.
 
 ## Working agreements
 
-- Don't add features beyond what the active task asks for; this is a small repo and accidental scope creep shows.
-- User-authored intent docs live in `docs/` (active EOG) and `archive/ROADMAP.md` / `archive/plans/` (prior SSVEP). Update them when relevant; don't fork parallel docs. New EOG planning docs go in `docs/`.
-- Project owner is interning at Cerelog (the board vendor), so domain feedback on signal processing should be treated as authoritative — verify code-level claims, but defer on hardware/signal intuition.
+- Don't add features beyond the active task; this is a small repo and scope creep
+  shows.
+- User-authored intent docs live in `docs/`. Keep the active tournament plan
+  current; don't fork parallel docs.
+- The owner interns at Cerelog (the board vendor), so **defer to their hardware /
+  signal intuition** (verify code-level claims, but treat domain feedback as
+  authoritative).

@@ -70,7 +70,7 @@ from brainpong.eog_core import (
     EOG_SIGMA_THR, GLANCE_WINDOW_S, EOG_BASELINE_S, EOG_LPF_HZ, EOG_HPF_HZ,
     eog_diff, _make_eog_state, _eog_filter, _eog_velocity, _sustained_crossing,
     _run_eog_sm, _reset_eog_st, pipeline_description,
-    _make_velocity_template, _matched_filter,
+    _make_velocity_template, _matched_filter, begin_play_settle,
 )
 from brainpong.recording import save_eog_recording
 
@@ -218,6 +218,12 @@ def get_initial_game_state():
     }
 
 
+# Shared base style for the four glance-flash dots (position/color set per-dot).
+_FLASH_DOT_BASE = {
+    'position': 'absolute', 'width': '24px', 'height': '24px', 'borderRadius': '50%',
+    'opacity': 0, 'pointerEvents': 'none', 'transition': 'opacity 60ms linear',
+}
+
 app.layout = html.Div(
     id='main-container',
     style={'backgroundColor': '#111', 'color': '#DDD', 'fontFamily': 'monospace', 'textAlign': 'center'},
@@ -257,6 +263,13 @@ app.layout = html.Div(
                             html.Canvas(id='pong-game-canvas', width=GAME_WIDTH, height=GAME_HEIGHT),
                             style={'border': '2px solid #555'},
                         ),
+                        # Glance-registered flash dots: blink when the detector fires a
+                        # LEFT/RIGHT for that player. P1 = bottom (green), P2 = top (red).
+                        # Opacity is driven each frame by the clientside fade callback.
+                        html.Div(id='flash-p2-left',  style={**_FLASH_DOT_BASE, 'top': '12px',    'left': '12px',  'backgroundColor': '#ff5252'}),
+                        html.Div(id='flash-p2-right', style={**_FLASH_DOT_BASE, 'top': '12px',    'right': '12px', 'backgroundColor': '#ff5252'}),
+                        html.Div(id='flash-p1-left',  style={**_FLASH_DOT_BASE, 'bottom': '12px', 'left': '12px',  'backgroundColor': '#33ff66'}),
+                        html.Div(id='flash-p1-right', style={**_FLASH_DOT_BASE, 'bottom': '12px', 'right': '12px', 'backgroundColor': '#33ff66'}),
                         html.Div(id='winner-overlay', style={'display': 'none'}),
                     ],
                 ),
@@ -462,6 +475,54 @@ clientside_callback(
     Input('settings-store', 'data'),
 )
 
+# Glance-flash feedback: fade each of the four corner dots after its player's
+# detector fires a LEFT/RIGHT. Purely reactive to the command stores the state
+# machine already emits — no estimator, no new signal path. Runs every game tick
+# (16 ms) so the fade is smooth; command seq increments drive the (re)trigger.
+clientside_callback(
+    """
+    function(n, c1, c2) {
+        var ds = window.dash_clientside;
+        if (!ds._flash) { ds._flash = {s1:-1, s2:-1, p1L:-1e12, p1R:-1e12, p2L:-1e12, p2R:-1e12}; }
+        var f = ds._flash, now = performance.now();
+        function tap(cmd, sk, Lk, Rk) {
+            if (cmd && typeof cmd.seq === 'number' && cmd.seq !== f[sk]) {
+                f[sk] = cmd.seq;
+                if (cmd.command === 'LEFT')       { f[Lk] = now; }
+                else if (cmd.command === 'RIGHT') { f[Rk] = now; }
+            }
+        }
+        tap(c1, 's1', 'p1L', 'p1R');
+        tap(c2, 's2', 'p2L', 'p2R');
+        var FADE = 450.0;
+        function op(t) { var a = (now - t) / FADE; return a >= 1 ? 0 : (1 - a); }
+        var base = {position:'absolute', width:'24px', height:'24px', borderRadius:'50%',
+                    pointerEvents:'none'};
+        function sty(pos, color, o) {
+            var s = Object.assign({}, base, pos);
+            s.backgroundColor = color;
+            s.boxShadow = o > 0 ? '0 0 14px 4px ' + color : 'none';
+            s.opacity = o;
+            return s;
+        }
+        return [
+            sty({top:'12px',    left:'12px'},  '#ff5252', op(f.p2L)),
+            sty({top:'12px',    right:'12px'}, '#ff5252', op(f.p2R)),
+            sty({bottom:'12px', left:'12px'},  '#33ff66', op(f.p1L)),
+            sty({bottom:'12px', right:'12px'}, '#33ff66', op(f.p1R)),
+        ];
+    }
+    """,
+    Output('flash-p2-left',  'style'),
+    Output('flash-p2-right', 'style'),
+    Output('flash-p1-left',  'style'),
+    Output('flash-p1-right', 'style'),
+    Input('game-interval', 'n_intervals'),
+    State('bci-command-store', 'data'),
+    State('bci-command-store-p2', 'data'),
+    prevent_initial_call=True,
+)
+
 # ==============================================================================
 # === 5. SERVER CALLBACKS ======================================================
 # ==============================================================================
@@ -474,7 +535,11 @@ clientside_callback(
 def update_bci_command(_, app_status):
     if board_p1 is None or eog_state['ch_L'] is None:
         return no_update
-    if app_status.get('status') not in ('PLAYING', 'CALIBRATING'):
+    status = app_status.get('status')
+    if status == 'PLAYING' and eog_state.get('_prev_status') != 'PLAYING':
+        begin_play_settle(eog_state, time.time())   # mute the opening-second transient
+    eog_state['_prev_status'] = status
+    if status not in ('PLAYING', 'CALIBRATING'):
         return no_update
     new_sig = _poll_eog(eog_state, board_p1)
     if new_sig is None:
@@ -494,7 +559,11 @@ def update_bci_command_p2(_, app_status):
         return no_update
     if board_p2 is None or eog_state_p2['ch_L'] is None:
         return no_update
-    if app_status.get('status') not in ('PLAYING', 'CALIBRATING'):
+    status = app_status.get('status')
+    if status == 'PLAYING' and eog_state_p2.get('_prev_status') != 'PLAYING':
+        begin_play_settle(eog_state_p2, time.time())   # mute the opening-second transient
+    eog_state_p2['_prev_status'] = status
+    if status not in ('PLAYING', 'CALIBRATING'):
         return no_update
     new_sig = _poll_eog(eog_state_p2, board_p2)
     if new_sig is None:
@@ -817,13 +886,18 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
                     spd = math.hypot(b['vx'], b['vy'])
                     if spd < 0.01:
                         spd = target_speed
+                    # Preserve the source ball's vertical direction so the split
+                    # balls continue the way it was already travelling (a ball
+                    # heading down splits into three heading down), instead of
+                    # always launching up toward the top paddle.
+                    vdir = 1.0 if b['vy'] >= 0 else -1.0
                     for _ in range(3):
                         a = random.uniform(-math.pi / 3, math.pi / 3)
                         tripled.append({
                             'x':  float(b['x']),
                             'y':  float(b['y']),
                             'vx': float(spd * math.sin(a)),
-                            'vy': float(-abs(spd * math.cos(a))),
+                            'vy': float(vdir * abs(spd * math.cos(a))),
                         })
                 balls_remaining = tripled
             continue
@@ -936,19 +1010,21 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
             html.Div("1. Stare at the CENTER of the screen",   style={'fontSize': '15px', 'color': '#ccc'}),
             html.Div("2. Do NOT blink",                        style={'fontSize': '15px', 'color': '#ccc'}),
             html.Div("3. Keep your eyes completely still",     style={'fontSize': '15px', 'color': '#ccc'}),
+            html.Div("4. 🔇 Do NOT talk or clench your jaw — it corrupts the signal",
+                     style={'fontSize': '15px', 'color': '#ffcc33'}),
         ])
     elif new_status == 'CALIBRATING':
         who = "Both players — " if TWO_PLAYER_MODE else ""
-        msg = f"Calibrating — {who}hold still, eyes forward...  {max(0, int(countdown))}s"
+        msg = f"Calibrating — {who}hold still, eyes forward, 🔇 no talking...  {max(0, int(countdown))}s"
     elif new_status == 'PLAYING':
         if TWO_PLAYER_MODE and NO_BOARD_MODE:
             msg = "2-PLAYER — P1: ←/→  |  P2: A/D"
         elif TWO_PLAYER_MODE:
-            msg = "2-PLAYER EOG — glance to move  |  P1: ←/→ override  |  P2: A/D override"
+            msg = "2-PLAYER EOG — glance to move  |  🔇 no talking  |  P1: ←/→ override  |  P2: A/D override"
         elif NO_BOARD_MODE:
             msg = "NO BOARD — keyboard only (←/→)"
         elif EOG_MODE:
-            msg = "PLAYING — glance left/right to move  |  ←/→ to override"
+            msg = "PLAYING — glance left/right to move  |  🔇 no talking  |  ←/→ to override"
         else:
             msg = "PLAYING — ←/→ keys"
     elif new_status == 'PAUSED':

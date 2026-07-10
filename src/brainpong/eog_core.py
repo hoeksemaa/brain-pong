@@ -53,6 +53,11 @@ EOG_MIN_DUR_MS   = 12.0    # a crossing must persist this long (kills single spi
 GLANCE_WINDOW_S  = 0.5     # max time between the two glances of a pair
 ARMED_MIN_WAIT_S = 0.05    # min time before the opposite glance counts
 REFRACTORY_S     = 0.8     # dead time after a fired command
+PLAY_SETTLE_S    = 0.7     # detector muted for this long after PLAY begins, so the
+                           # filter/velocity startup transient (a large edge artifact
+                           # on the first freshly-filtered window) can't phantom-fire
+                           # and jitter the paddle in the opening second. Symptom guard;
+                           # the root-cause edge-artifact fix lives in the offline eval.
 EOG_BASELINE_S   = 5.0     # baseline collected before σ is fixed
 MATCHED_TEMPLATE_MS = 120.0  # saccade-velocity template width for the matched-filter detector
 
@@ -72,6 +77,7 @@ def _make_eog_state():
         'arm_time': None,
         'last_cmd_time': 0.0,
         'cmd_seq': 0,
+        'settle_until': 0.0,                 # wallclock until which fires are muted (startup guard)
         # ── tunable config (set at board setup; survive recalibration) ──────────
         'sigma_thr': EOG_SIGMA_THR,          # ×; a glance must exceed this MULTIPLE of baseline σ
         'glance_window_s': GLANCE_WINDOW_S,  # s; max gap between the two glances of a pair
@@ -91,6 +97,17 @@ def _reset_eog_st(eog_st):
     eog_st['first_dir']      = None
     eog_st['arm_time']       = None
     eog_st['last_cmd_time']  = 0.0
+    eog_st['settle_until']   = 0.0
+
+
+def begin_play_settle(eog_st, now, settle_s=PLAY_SETTLE_S):
+    """Call the instant the game enters PLAY: drop the detector to IDLE and mute
+    it for ``settle_s`` so the filter startup transient can't phantom-fire and
+    jitter the paddle. Idempotent — safe to call every tick while PLAYING; it only
+    re-arms the window on the transition (guarded by the caller)."""
+    eog_st['sm']           = 'IDLE'
+    eog_st['first_dir']    = None
+    eog_st['settle_until'] = now + settle_s
 
 
 # ── Differential + filter (pure DSP) ────────────────────────────────────────────
@@ -234,6 +251,14 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
     if eog_st['sm'] == 'REFRACTORY':
         if now - eog_st['last_cmd_time'] > REFRACTORY_S:
             eog_st['sm'] = 'IDLE'
+        return None
+
+    # Startup-transient guard: for the first PLAY_SETTLE_S of play, stay muted and
+    # IDLE so the filter/velocity edge artifact on the opening windows can't fire.
+    if now < eog_st.get('settle_until', 0.0):
+        if eog_st['sm'] == 'ARMED':
+            eog_st['sm']        = 'IDLE'
+            eog_st['first_dir'] = None
         return None
 
     sigma    = eog_st['baseline_sigma']
