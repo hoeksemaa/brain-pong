@@ -26,7 +26,7 @@ def save_eog_recording(out_dir, subject_id, eeg, unix_start, sr, *,
                        gain, board, montage, notes, tags, ch_L, ch_R,
                        n_players, board_version, serial_port, player_slot,
                        sigma_thr, hpf_hz, lpf_hz, glance_window_s,
-                       event_samples=(), event_labels=(),
+                       detector='velocity', event_samples=(), event_labels=(),
                        protocol_version=PROTOCOL_VERSION, stamp=None):
     """Write one player's EOG recording to ``<out_dir>/<ts>-<subject>.npz``.
 
@@ -76,5 +76,6 @@ def save_eog_recording(out_dir, subject_id, eeg, unix_start, sr, *,
         hpf_hz           = np.array([hpf_hz]),
         lpf_hz           = np.array([lpf_hz]),
         glance_window_s  = np.array([glance_window_s]),
+        detector         = np.array([detector]),
     )
     return path

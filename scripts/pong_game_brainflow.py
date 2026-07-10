@@ -70,6 +70,7 @@ from brainpong.eog_core import (
     EOG_SIGMA_THR, GLANCE_WINDOW_S, EOG_BASELINE_S, EOG_LPF_HZ, EOG_HPF_HZ,
     eog_diff, _make_eog_state, _eog_filter, _eog_velocity, _sustained_crossing,
     _run_eog_sm, _reset_eog_st, pipeline_description,
+    _make_velocity_template, _matched_filter,
 )
 from brainpong.recording import save_eog_recording
 
@@ -147,6 +148,16 @@ eog_state_p2 = _make_eog_state()
 _rec = {'active': False, 'start_time': None, 'players': [], 'events': [], 'last_status': None}
 
 
+def _detector_signal(eog_st, vel):
+    """The signal the state machine (and live plot) threshold: raw velocity, or —
+    in 'matched' mode — velocity cross-correlated with the saccade template. Used in
+    both _poll_eog and _make_eog_figure so calibration σ, detection, and the plot all
+    key off the SAME signal. Falls back to velocity if no template is set yet."""
+    if eog_st.get('detector') == 'matched' and eog_st.get('mf_template') is not None:
+        return _matched_filter(vel, eog_st['mf_template'])
+    return vel
+
+
 def _poll_eog(eog_st, brd):
     """Pull latest window from board `brd`, filter → velocity, return new_sig slice or None.
 
@@ -171,7 +182,7 @@ def _poll_eog(eog_st, brd):
                            lpf_hz=eog_st.get('lpf_hz', EOG_LPF_HZ),
                            hpf_hz=eog_st.get('hpf_hz', EOG_HPF_HZ))
     vel      = _eog_velocity(filtered, sr)
-    return vel[-n_new:]
+    return _detector_signal(eog_st, vel)[-n_new:]
 
 
 # ==============================================================================
@@ -293,6 +304,21 @@ app.layout = html.Div(
                    'display': 'block' if (EOG_MODE or TWO_PLAYER_MODE) else 'none'},
             children=[
                 html.Div([
+                    html.Label('Detector',
+                               style={'display': 'inline-block', 'width': '170px'}),
+                    dcc.RadioItems(
+                        id='detector-toggle',
+                        options=[{'label': ' Velocity', 'value': 'velocity'},
+                                 {'label': ' Matched filter', 'value': 'matched'}],
+                        value='velocity', inline=True,
+                        style={'display': 'inline-block'},
+                        inputStyle={'marginLeft': '16px', 'marginRight': '4px'},
+                    ),
+                ]),
+                html.Div('(swap per run; the choice locks in on the next New Game — it '
+                         'sets which signal the baseline σ is measured on)',
+                         style={'fontSize': '11px', 'color': '#777', 'margin': '2px 0 8px 0'}),
+                html.Div([
                     html.Label('Sigma Threshold (×σ)',
                                style={'display': 'inline-block', 'width': '170px'}),
                     html.Div(
@@ -371,7 +397,7 @@ app.layout = html.Div(
         ),
         dcc.Store(id='settings-store',       data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH}),
         dcc.Store(id='eog-tuning-store',      data={'sigma_thr': EOG_SIGMA_THR, 'glance_window_s': GLANCE_WINDOW_S,
-                                                    'lpf_hz': EOG_LPF_HZ, 'hpf_hz': EOG_HPF_HZ}),
+                                                    'lpf_hz': EOG_LPF_HZ, 'hpf_hz': EOG_HPF_HZ, 'detector': 'velocity'}),
         dcc.Store(id='game-state-store',     data=get_initial_game_state()),
         dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0}),
         dcc.Store(id='bci-command-store',    data={'command': 'NEUTRAL', 'seq': 0}),
@@ -492,14 +518,17 @@ def _make_eog_figure(eog_st, brd, title, line_color, thr_color):
     filtered = _eog_filter(diff_raw.copy(), sr,
                            lpf_hz=eog_st.get('lpf_hz', EOG_LPF_HZ),
                            hpf_hz=eog_st.get('hpf_hz', EOG_HPF_HZ))
-    vel      = _eog_velocity(filtered, sr)      # detector runs on velocity → plot velocity
-    n_pts    = len(vel)
+    vel      = _eog_velocity(filtered, sr)
+    sig      = _detector_signal(eog_st, vel)    # what the detector thresholds → what we plot
+    matched  = eog_st.get('detector') == 'matched' and eog_st.get('mf_template') is not None
+    n_pts    = len(sig)
     t        = np.linspace(-n_pts / sr, 0, n_pts)
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=t, y=vel, mode='lines', name='velocity',
+    fig.add_trace(go.Scatter(x=t, y=sig, mode='lines',
+                             name='matched' if matched else 'velocity',
                              line=dict(color=line_color, width=1)))
-    sigma = eog_st['baseline_sigma']            # velocity noise floor (µV/s) from calibration
+    sigma = eog_st['baseline_sigma']            # detector-signal noise floor from calibration
     if sigma is not None:
         sig_thr = eog_st.get('sigma_thr', EOG_SIGMA_THR)   # live value from the slider
         thr = sig_thr * sigma
@@ -507,13 +536,14 @@ def _make_eog_figure(eog_st, brd, title, line_color, thr_color):
                       annotation_text=f'+{sig_thr:.1f}σ', annotation_font_color=thr_color)
         fig.add_hline(y=-thr, line_dash='dash', line_color=thr_color,
                       annotation_text=f'-{sig_thr:.1f}σ', annotation_font_color=thr_color)
-    peak = max(float(np.abs(vel).max()) * 1.3, 500.0) if vel.size else 500.0
+    peak = max(float(np.abs(sig).max()) * 1.3, 500.0) if sig.size else 500.0
+    ylabel = 'matched-filter response' if matched else 'µV/s (velocity)'
     fig.update_layout(
         template='plotly_dark', paper_bgcolor='#111111', plot_bgcolor='#111111',
         margin=dict(l=50, r=30, t=30, b=40), height=200,
         title=dict(text=title, font=dict(size=12, color='#aaa'), x=0.5),
         xaxis=dict(title='time (s)', range=[-EOG_DISPLAY_SECS, 0], color='#666'),
-        yaxis=dict(title='µV/s (velocity)', range=[-peak, peak], color='#666'),
+        yaxis=dict(title=ylabel, range=[-peak, peak], color='#666'),
         showlegend=False,
     )
     return fig
@@ -567,24 +597,28 @@ def update_settings(ball_speed):
     Input('glance-window-slider', 'value'),
     Input('hpf-slider', 'value'),
     Input('lpf-slider', 'value'),
+    Input('detector-toggle', 'value'),
 )
-def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz):
-    """Live-apply the detector knobs from the browser sliders.
+def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, detector):
+    """Live-apply the detector knobs from the browser controls.
 
     Writes straight into both players' state dicts (mutated in place). _run_eog_sm
     reads sigma_thr / glance_window_s each tick, and _poll_eog / _make_eog_figure
-    read hpf_hz / lpf_hz each poll when they build the filter — so every knob takes
-    effect on the next detector poll without a restart, and the knobs survive
-    recalibration (_reset_eog_st keeps them), so a New Game locks in whatever the
-    sliders currently read. Harmless in keyboard-only mode.
+    read hpf_hz / lpf_hz / detector each poll — so every knob takes effect on the
+    next detector poll without a restart, and all survive recalibration
+    (_reset_eog_st keeps them), so a New Game locks in whatever the controls read.
+    The `detector` toggle changes which signal the baseline σ is measured on, so it
+    only detects correctly from the next New Game (recalibration). Harmless in
+    keyboard-only mode.
     """
     for st in (eog_state, eog_state_p2):
         st['sigma_thr']       = sigma_thr
         st['glance_window_s'] = glance_window
         st['hpf_hz']          = hpf_hz
         st['lpf_hz']          = lpf_hz
+        st['detector']        = detector
     return {'sigma_thr': sigma_thr, 'glance_window_s': glance_window,
-            'hpf_hz': hpf_hz, 'lpf_hz': lpf_hz}
+            'hpf_hz': hpf_hz, 'lpf_hz': lpf_hz, 'detector': detector}
 
 
 @app.callback(
@@ -964,6 +998,7 @@ def _start_recording(p1_name, p2_name):
         'ch_L': st['ch_L'], 'ch_R': st['ch_R'], 'sr': st['sr'],
         'sigma_thr': st.get('sigma_thr'), 'hpf_hz': st.get('hpf_hz'),
         'lpf_hz': st.get('lpf_hz'), 'glance_window_s': st.get('glance_window_s'),
+        'detector': st.get('detector', 'velocity'),
     } for slot, brd, st, port in boards]
     _rec['active']     = True
     _rec['start_time'] = time.time()
@@ -1016,17 +1051,19 @@ def _save_one_recording(p, start_t, stop_t, n_players, stamp):
         s = int(round((t - unix_start) * sr))
         if 0 <= s < n_samp:
             ev_s.append(s); ev_l.append(label)
+    detector = p.get('detector', 'velocity')
     notes = (f"in-game pong recording ({n_players}-player); board v{p['version']} on "
              f"{p['port']}; CH3-8 firmware-off so only the EOG pair stored "
-             f"(row0=ch_L, row1=ch_R). {pipeline_description()}")
+             f"(row0=ch_L, row1=ch_R). {pipeline_description(detector)}")
     path = save_eog_recording(
         REC_OUT_DIR, p['subject'], eeg, unix_start, sr,
         gain=REC_GAIN, board=f"CERELOG_X8 unit:v{p['version']}", montage=REC_MONTAGE,
-        notes=notes, tags=['in-game', f'{n_players}-player', f"board-v{p['version']}"],
+        notes=notes, tags=['in-game', f'{n_players}-player', f"board-v{p['version']}",
+                           f"detector-{detector}"],
         ch_L=0, ch_R=1, n_players=n_players, board_version=p['version'],
         serial_port=p['port'], player_slot=p['slot'], sigma_thr=p['sigma_thr'],
         hpf_hz=p['hpf_hz'], lpf_hz=p['lpf_hz'], glance_window_s=p['glance_window_s'],
-        event_samples=ev_s, event_labels=ev_l, stamp=stamp)
+        detector=detector, event_samples=ev_s, event_labels=ev_l, stamp=stamp)
     print(f"[rec] saved {p['slot']} ({p['subject']}) → {path}  [{n_samp} samp, {n_samp / sr:.1f}s]")
 
 
@@ -1108,9 +1145,10 @@ def main():
         print(f"P1 board connected. Sampling rate: {sampling_rate} Hz")
 
         if EOG_MODE or TWO_PLAYER_MODE:
-            eog_state['sr']   = sampling_rate
-            eog_state['ch_L'] = all_eeg_channels[EOG_SLOT_L]
-            eog_state['ch_R'] = all_eeg_channels[EOG_SLOT_R]
+            eog_state['sr']          = sampling_rate
+            eog_state['ch_L']        = all_eeg_channels[EOG_SLOT_L]
+            eog_state['ch_R']        = all_eeg_channels[EOG_SLOT_R]
+            eog_state['mf_template'] = _make_velocity_template(sampling_rate)
             print(f"P1 EOG channels: ch_L={eog_state['ch_L']}  ch_R={eog_state['ch_R']}  "
                   f"σ_thr={eog_state['sigma_thr']:.2f}×  glance_window={eog_state['glance_window_s']:.2f}s  "
                   f"(adjust live via the browser sliders)")
@@ -1120,9 +1158,10 @@ def main():
             # same-model BoardShim coexist in ONE process because BrainFlow keys its
             # session registry on (board_id, serial_port), not board_id alone.
             board_p2 = _open_board(P2_SERIAL_PORT, "P2")
-            eog_state_p2['sr']   = sampling_rate            # same model → same rate
-            eog_state_p2['ch_L'] = all_eeg_channels[EOG_SLOT_L2]
-            eog_state_p2['ch_R'] = all_eeg_channels[EOG_SLOT_R2]
+            eog_state_p2['sr']          = sampling_rate     # same model → same rate
+            eog_state_p2['ch_L']        = all_eeg_channels[EOG_SLOT_L2]
+            eog_state_p2['ch_R']        = all_eeg_channels[EOG_SLOT_R2]
+            eog_state_p2['mf_template'] = _make_velocity_template(sampling_rate)
             print(f"P2 board connected. EOG channels: ch_L={eog_state_p2['ch_L']}  "
                   f"ch_R={eog_state_p2['ch_R']}  σ_thr={eog_state_p2['sigma_thr']:.2f}×  "
                   f"glance_window={eog_state_p2['glance_window_s']:.2f}s")

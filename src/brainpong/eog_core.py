@@ -54,14 +54,15 @@ GLANCE_WINDOW_S  = 0.5     # max time between the two glances of a pair
 ARMED_MIN_WAIT_S = 0.05    # min time before the opposite glance counts
 REFRACTORY_S     = 0.8     # dead time after a fired command
 EOG_BASELINE_S   = 5.0     # baseline collected before σ is fixed
+MATCHED_TEMPLATE_MS = 120.0  # saccade-velocity template width for the matched-filter detector
 
 
 # ── State factory ───────────────────────────────────────────────────────────────
 
 def _make_eog_state():
-    """Fresh per-player EOG state dict. ch_L/ch_R/sr are filled in at board setup;
-    the runtime knobs (sigma_thr, glance_window_s, lpf_hz, hpf_hz) default here and
-    are updated live from the in-game browser sliders."""
+    """Fresh per-player EOG state dict. ch_L/ch_R/sr/mf_template are filled in at
+    board setup; the runtime knobs (sigma_thr, glance_window_s, lpf_hz, hpf_hz,
+    detector) default here and are updated live from the in-game browser controls."""
     return {
         'ch_L': None, 'ch_R': None, 'sr': None,
         'sm': 'CALIBRATING',
@@ -76,6 +77,8 @@ def _make_eog_state():
         'glance_window_s': GLANCE_WINDOW_S,  # s; max gap between the two glances of a pair
         'lpf_hz': EOG_LPF_HZ,                # Hz; low-pass corner of the filter chain
         'hpf_hz': EOG_HPF_HZ,                # Hz; high-pass corner of the filter chain
+        'detector': 'velocity',             # 'velocity' | 'matched' — detection method (UI toggle)
+        'mf_template': None,                 # saccade template for the matched filter (set at board setup)
     }
 
 
@@ -145,6 +148,35 @@ def _eog_velocity(x_uv, sr):
     yp = np.pad(y, 2, mode='edge')
     dt = 1.0 / sr
     return (yp[4:] + yp[3:-1] - yp[1:-3] - yp[:-4]) / (6.0 * dt)
+
+
+# ── Matched filter (pure) ────────────────────────────────────────────────────────
+
+def _make_velocity_template(sr, width_ms=MATCHED_TEMPLATE_MS):
+    """Unit-norm saccade-velocity template for the matched filter.
+
+    A saccade is a UNIPOLAR velocity pulse, so the template is a single positive
+    Hann bump ~width_ms wide. The sign (LEFT vs RIGHT) is carried by the signal,
+    not the template, so one template matches both directions. Unit-norm keeps the
+    response scaled sanely; the σ-relative threshold absorbs the absolute scale.
+    """
+    n = max(3, int(round(width_ms / 1000.0 * sr)))
+    t = np.hanning(n).astype(np.float64)
+    return t / (np.linalg.norm(t) + 1e-12)
+
+
+def _matched_filter(vel, template):
+    """Matched-filter response: velocity cross-correlated with the saccade template
+    (zero-lag-centred, same length as `vel`). Peaks where the velocity matches the
+    saccade shape; the peak's SIGN is the gaze-change direction, so it drops
+    straight into _sustained_crossing in place of raw velocity. Integrating over the
+    template width lifts a coherent saccade above incoherent noise (~√len gain);
+    the shape-match also rejects transients that don't look like a saccade.
+    """
+    v = np.ascontiguousarray(vel, dtype=np.float64)
+    if v.size < template.size:
+        return np.zeros_like(v)
+    return np.correlate(v, template, mode='same')
 
 
 # ── Crossing detector (pure) ─────────────────────────────────────────────────────
@@ -238,26 +270,39 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
 # their own fields). The parameterised bits (notch bands) are derived from the
 # constants above so they can't drift; the method prose is hand-maintained and
 # names the exact functions, so the CODE stays the source of truth for a reader.
-PIPELINE_VERSION = "pipeline-v1"
+PIPELINE_VERSION = "pipeline-v2"
 
 
-def pipeline_description():
+def pipeline_description(detector='velocity'):
     """One-line English description of the current live preprocessing + detection
-    METHOD, embedded in each recording's notes so the pipeline is reconstructable
-    from the file alone. Deliberately omits the numeric cutoffs/thresholds (stored
-    as the lpf_hz / hpf_hz / sigma_thr / glance_window_s fields) — it describes
-    HOW, not WITH-WHAT."""
+    METHOD (for the requested `detector`), embedded in each recording's notes so the
+    pipeline is reconstructable from the file alone. Omits the numeric cutoffs/
+    thresholds (stored as the lpf_hz/hpf_hz/sigma_thr/glance_window_s fields) — it
+    describes HOW, not WITH-WHAT."""
     notches = ', '.join(f"{lo:g}-{hi:g} Hz" for lo, hi in NOTCH_BANDS)
-    return (
+    pre = (
         "PREPROCESS: HEOG differential (R-L, µV) -> causal Butterworth chain "
         f"(constant detrend -> 4th-order low-pass -> bandstop notches [{notches}] -> "
-        "4th-order high-pass) -> Engbert & Kliegl (2003) 5-point smoothed velocity; "
-        "the detector runs on VELOCITY, not amplitude. "
-        "DETECT: per-player glance-PAIR state machine on the velocity signal -- a "
-        "crossing of (sigma_thr x robust MAD baseline sigma) sustained >= min-"
-        "duration arms a direction; the OPPOSITE crossing within glance_window "
-        "fires that command, then a refractory dead-time. Cutoff/threshold values "
-        "are in the lpf_hz/hpf_hz/sigma_thr/glance_window_s fields. "
-        "Code: eog_core._eog_filter / _eog_velocity / _sustained_crossing / "
-        f"_run_eog_sm. [{PIPELINE_VERSION}]"
+        "4th-order high-pass) -> Engbert & Kliegl (2003) 5-point smoothed velocity. "
     )
+    if detector == 'matched':
+        det = (
+            "DETECT (matched-filter): the velocity is cross-correlated with a "
+            f"~{MATCHED_TEMPLATE_MS:g} ms unit-norm Hann saccade template (matched "
+            "filter); the per-player glance-PAIR state machine then runs on that "
+            "response -- a crossing of (sigma_thr x robust MAD baseline sigma of the "
+            "response) sustained >= min-duration arms a direction, the OPPOSITE "
+            "crossing within glance_window fires, then a refractory dead-time. "
+        )
+        code = "_eog_filter / _eog_velocity / _matched_filter / _sustained_crossing / _run_eog_sm"
+    else:
+        det = (
+            "DETECT (velocity): per-player glance-PAIR state machine on the velocity "
+            "signal -- a crossing of (sigma_thr x robust MAD baseline sigma) sustained "
+            ">= min-duration arms a direction, the OPPOSITE crossing within "
+            "glance_window fires, then a refractory dead-time. "
+        )
+        code = "_eog_filter / _eog_velocity / _sustained_crossing / _run_eog_sm"
+    tail = ("Cutoff/threshold values are in the lpf_hz/hpf_hz/sigma_thr/"
+            f"glance_window_s fields. Code: eog_core.{code}. [{PIPELINE_VERSION}]")
+    return pre + det + tail

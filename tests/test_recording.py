@@ -7,7 +7,7 @@ from brainpong.recording import save_eog_recording, SIGNAL_UNIT
 
 
 def _save(tmp_path, subject="german", stamp="20260709-171500", slot="P1",
-          version="1.3", eeg=None, events=((), ())):
+          version="1.3", eeg=None, events=((), ()), detector="velocity"):
     if eeg is None:
         eeg = np.vstack([np.linspace(-1e-3, 1e-3, 500),      # ch_L (volts)
                          np.linspace(1e-3, -1e-3, 500)])     # ch_R
@@ -19,7 +19,8 @@ def _save(tmp_path, subject="german", stamp="20260709-171500", slot="P1",
         notes="test", tags=["in-game", "2-player"], ch_L=0, ch_R=1,
         n_players=2, board_version=version, serial_port="/dev/cu.usbserial-1110",
         player_slot=slot, sigma_thr=4.0, hpf_hz=0.1, lpf_hz=50.0,
-        glance_window_s=0.5, event_samples=ev_s, event_labels=ev_l, stamp=stamp)
+        glance_window_s=0.5, detector=detector,
+        event_samples=ev_s, event_labels=ev_l, stamp=stamp)
 
 
 def test_roundtrip_fields(tmp_path):
@@ -69,6 +70,21 @@ def test_same_subject_collision_gets_slot_suffix(tmp_path):
 def test_rejects_wrong_shape(tmp_path):
     with pytest.raises(ValueError):
         _save(tmp_path, eeg=np.zeros((8, 100)))   # must be (2, N)
+
+
+def test_detector_field_stored(tmp_path):
+    assert str(np.load(_save(tmp_path), allow_pickle=True)['detector'][0]) == "velocity"
+    d = np.load(_save(tmp_path, subject="x", detector="matched"), allow_pickle=True)
+    assert str(d['detector'][0]) == "matched"
+
+
+def test_pipeline_description_reflects_detector():
+    from brainpong.eog_core import pipeline_description
+    v = pipeline_description('velocity')
+    m = pipeline_description('matched')
+    assert 'DETECT (velocity)' in v and '_matched_filter' not in v
+    assert 'DETECT (matched-filter)' in m and '_matched_filter' in m
+    assert 'saccade template' in m
 
 
 def test_pipeline_description_is_reconstructable():
