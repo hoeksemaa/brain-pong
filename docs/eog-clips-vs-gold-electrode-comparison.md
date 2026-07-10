@@ -10,8 +10,8 @@ ADS1299 inside), gain ×24, fs 250 Hz, same `record_eog.py` paradigm (25 LEFT + 
 cued 2 s gaze holds), back-to-back (~18 min apart), **zero sample drops** → directly comparable.
 
 The **two outer-canthi signal electrodes were identical gold cups in both.** The *only*
-change was the **two earlobe electrodes** — the active **bias-drive** on one ear + the
-**SRB1 reference** on the other:
+change was the **two earlobe electrodes** — the common-mode **bias-reference servo**
+on one ear + the **SRB1 reference** on the other:
 
 - **CLIPS:** carbon/rubber clip pads + **Signa gel** (a *low*-impedance wet gel).
 - **GOLD:** gold-plated cups + **Ten20** paste, taped on.
@@ -80,9 +80,9 @@ collapses CMRR (the 350× per-channel 60 Hz).
 the ear node by construction, so an ear-only swap has *no first-order path* to attenuate the
 differential; the gain-compression story works only via the shared front-end operating
 point. A pure resistive input-divider is implausible (ADS1299 inputs ~GΩ). The behavioral
-explanation is killed by the blink test. **Definitive test:** inject a known calibration
-signal in each electrode state (ADS1299 `INT_TEST` square wave, or an external mV dipole)
-and read the recovered gain — if it drops ~11× with clips, gain-compression is confirmed.
+explanation is killed by the blink test. **Definitive test:** apply the ADS1299's built-in
+calibration reference in each electrode state (`INT_TEST` square wave, or an external mV
+bench source) and read the recovered gain — if it drops ~11× with clips, gain-compression is confirmed.
 
 ## "More conductive gel, yet worse" — resolved
 
@@ -108,8 +108,9 @@ here. The two ear electrodes have *different* requirements, both of which carbon
 - **SRB1 reference** sets the DC offset → wants a **low, stable, non-polarizable half-cell**
   → **Ag/AgCl ideal, gold good, carbon terrible.** (Material matters more than area here —
   a bigger clip wouldn't pull −178 mV off the rail.)
-- **Bias-drive** injects current → wants **low impedance / large contact area** for CMRR and
-  to keep the bias amp out of saturation.
+- **The common-mode servo electrode** carries the µA-scale return of the right-leg-drive
+  feedback → wants **low impedance / large contact area** for CMRR and to keep the bias
+  amp out of saturation.
 
 Preference order: **all-Ag/AgCl > all-gold > anything with carbon-rubber.** Since EOG is
 essentially a DC/sub-Hz signal, offset stability and low-frequency electrode noise dominate —
