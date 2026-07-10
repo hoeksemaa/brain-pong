@@ -69,7 +69,7 @@ from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 from brainpong.eog_core import (
     EOG_SIGMA_THR, GLANCE_WINDOW_S, EOG_BASELINE_S, EOG_LPF_HZ, EOG_HPF_HZ,
     eog_diff, _make_eog_state, _eog_filter, _eog_velocity, _sustained_crossing,
-    _run_eog_sm, _reset_eog_st,
+    _run_eog_sm, _reset_eog_st, pipeline_description,
 )
 from brainpong.recording import save_eog_recording
 
@@ -1017,9 +1017,8 @@ def _save_one_recording(p, start_t, stop_t, n_players, stamp):
         if 0 <= s < n_samp:
             ev_s.append(s); ev_l.append(label)
     notes = (f"in-game pong recording ({n_players}-player); board v{p['version']} on "
-             f"{p['port']}; CH3-8 firmware-off so only the EOG pair stored (row0=ch_L, "
-             f"row1=ch_R); detector sigma={p['sigma_thr']} hpf={p['hpf_hz']} "
-             f"lpf={p['lpf_hz']} glance={p['glance_window_s']}s")
+             f"{p['port']}; CH3-8 firmware-off so only the EOG pair stored "
+             f"(row0=ch_L, row1=ch_R). {pipeline_description()}")
     path = save_eog_recording(
         REC_OUT_DIR, p['subject'], eeg, unix_start, sr,
         gain=REC_GAIN, board=f"CERELOG_X8 unit:v{p['version']}", montage=REC_MONTAGE,

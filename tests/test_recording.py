@@ -69,3 +69,17 @@ def test_same_subject_collision_gets_slot_suffix(tmp_path):
 def test_rejects_wrong_shape(tmp_path):
     with pytest.raises(ValueError):
         _save(tmp_path, eeg=np.zeros((8, 100)))   # must be (2, N)
+
+
+def test_pipeline_description_is_reconstructable():
+    from brainpong.eog_core import pipeline_description, PIPELINE_VERSION, NOTCH_BANDS
+    desc = pipeline_description()
+    assert isinstance(desc, str) and len(desc) > 80
+    for token in ('PREPROCESS', 'DETECT', 'velocity', 'glance', '_eog_filter',
+                  '_run_eog_sm', PIPELINE_VERSION):
+        assert token in desc, token
+    # notch bands auto-derived from the constant → can't drift
+    lo, hi = NOTCH_BANDS[0]
+    assert f"{lo:g}-{hi:g} Hz" in desc
+    # names the fields, doesn't bake in per-recording numeric values
+    assert 'sigma_thr x' in desc and 'lpf_hz/hpf_hz' in desc

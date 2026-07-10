@@ -229,3 +229,35 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
                 print(f"[{label}] command={cmd}  seq={eog_st['cmd_seq']}")
                 return {'command': cmd, 'seq': eog_st['cmd_seq']}
     return None
+
+
+# ── Pipeline self-description (for recording notes) ───────────────────────────
+# UPDATE pipeline_description() AND bump PIPELINE_VERSION whenever the
+# preprocessing or detection METHOD changes — i.e. the *shape* of the pipeline,
+# not the tunable cutoff/threshold VALUES (those are stored per-recording in
+# their own fields). The parameterised bits (notch bands) are derived from the
+# constants above so they can't drift; the method prose is hand-maintained and
+# names the exact functions, so the CODE stays the source of truth for a reader.
+PIPELINE_VERSION = "pipeline-v1"
+
+
+def pipeline_description():
+    """One-line English description of the current live preprocessing + detection
+    METHOD, embedded in each recording's notes so the pipeline is reconstructable
+    from the file alone. Deliberately omits the numeric cutoffs/thresholds (stored
+    as the lpf_hz / hpf_hz / sigma_thr / glance_window_s fields) — it describes
+    HOW, not WITH-WHAT."""
+    notches = ', '.join(f"{lo:g}-{hi:g} Hz" for lo, hi in NOTCH_BANDS)
+    return (
+        "PREPROCESS: HEOG differential (R-L, µV) -> causal Butterworth chain "
+        f"(constant detrend -> 4th-order low-pass -> bandstop notches [{notches}] -> "
+        "4th-order high-pass) -> Engbert & Kliegl (2003) 5-point smoothed velocity; "
+        "the detector runs on VELOCITY, not amplitude. "
+        "DETECT: per-player glance-PAIR state machine on the velocity signal -- a "
+        "crossing of (sigma_thr x robust MAD baseline sigma) sustained >= min-"
+        "duration arms a direction; the OPPOSITE crossing within glance_window "
+        "fires that command, then a refractory dead-time. Cutoff/threshold values "
+        "are in the lpf_hz/hpf_hz/sigma_thr/glance_window_s fields. "
+        "Code: eog_core._eog_filter / _eog_velocity / _sustained_crossing / "
+        f"_run_eog_sm. [{PIPELINE_VERSION}]"
+    )
