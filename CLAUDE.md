@@ -103,7 +103,7 @@ Per player, per BCI tick (all DSP lives in `eog_core.py`):
 ```
 2 EEG rows (CH1=right, CH2=left) → get_current_board_data(0.4s settle + 0.1s new)
   → differential: (ch_R − ch_L) × 1e6  → HEOG in µV, rightward +
-  → detrend → Butterworth LP(50 Hz) → notch(48–52, 58–62) → Butterworth HP(0.1 Hz)
+  → detrend → Butterworth LP(30 Hz) → notch(48–52, 58–62) → Butterworth HP(0.1 Hz)
   → Engbert–Kliegl 5-point velocity (µV/s)                  [the detector statistic]
   → detector signal: 'velocity' (default) OR 'matched' (UI toggle; ~120 ms Hann
     velocity template, cross-correlated)
@@ -139,8 +139,8 @@ REFRACTORY → IDLE`.
 
 ## Detection tuning knobs (live, in-browser sliders — not CLI)
 
-`sigma_thr` (default **4.0**, crossing threshold in σ), `glance_window_s` (0.5),
-HPF/LPF corners (0.1 / 50 Hz), and the **detector toggle** (velocity | matched).
+`sigma_thr` (default **6.0**, crossing threshold in σ), `glance_window_s` (0.5),
+HPF/LPF corners (0.1 / 30 Hz), and the **detector toggle** (velocity | matched).
 All are captured into each recording's eog-v3 metadata so a session is
 reconstructable. Tune these against recorded corpora, not by feel alone.
 

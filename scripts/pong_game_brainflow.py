@@ -24,9 +24,15 @@ _cli_parser = argparse.ArgumentParser(
         'Modes:\n'
         '  (default)    Single-player on a connected board; keyboard control (P1: ←/→).\n'
         '  --eog        Single-player EOG glance-pair detector (needs board).\n'
-        '  --2player    Two-player EOG.  Two boards, one per player  (P1 ←/→ | P2 A/D)\n'
+        '  --2player    Two-player EOG.  Two boards, one per player.\n'
         '  --no-board   Skip hardware; keyboard only. Combine with --2player for\n'
-        '               keyboard two-player (P1: ←/→, P2: A/D).\n'
+        '               keyboard two-player.\n'
+        '\n'
+        'Controls / intention labels  (P1 = arrows: Left/Right/Up,  P2 = WASD: A/D/W):\n'
+        '  Left/Right or A/D = look left / right,  Up or W = blink.\n'
+        '  In keyboard modes these move the paddle. Under EOG the eyes drive the\n'
+        '  paddle and the keys instead log a sample-pinned intention label into the\n'
+        '  recording (p1_left/p1_right/p1_blink, p2_*) to build a labeled training set.\n'
         '\n'
         'Note: --eog cannot be combined with --no-board or --2player.'
     ),
@@ -39,11 +45,11 @@ _cli_parser = argparse.ArgumentParser(
     ),
 )
 _cli_parser.add_argument('--no-board', action='store_true',
-                         help='Run without BrainFlow hardware; keyboard only (P1: ←/→).')
+                         help='Run without BrainFlow hardware; keyboard only (P1: arrows, P2: WASD).')
 _cli_parser.add_argument('--eog', action='store_true',
                          help='Single-player EOG glance-pair detector (requires hardware).')
 _cli_parser.add_argument('--2player', dest='two_player', action='store_true',
-                         help='Two-player EOG: two boards, one per player (P1 ←/→, P2 A/D). Exclusive with --eog.')
+                         help='Two-player EOG: two boards, one per player (P1 arrows, P2 WASD). Exclusive with --eog.')
 # NOTE: detector tuning (σ-threshold, glance-window) is done LIVE via in-game
 # sliders in the browser, not CLI flags — see the 'EOG detector tuning' layout block.
 # parse_known_args (not parse_args) keeps the historically lenient behavior of
@@ -72,7 +78,7 @@ from brainpong.eog_core import (
     _run_eog_sm, _reset_eog_st, pipeline_description,
     _make_velocity_template, _matched_filter, begin_play_settle,
 )
-from brainpong.recording import save_eog_recording
+from brainpong.recording import save_eog_recording, map_events_to_samples
 
 # ==============================================================================
 # === 1. CONFIGURATION =========================================================
@@ -138,7 +144,6 @@ EOG_SETTLE_S     = 0.4
 board_p1      = None   # Player 1's board (also the sole board in --eog / default single-player)
 board_p2      = None   # Player 2's board — only opened in --2player
 sampling_rate = 0      # model-level; both X8s report the same rate
-timestamp_row = 0      # board timestamp channel (set in main); used to slice the recording span
 
 
 eog_state    = _make_eog_state()
@@ -212,8 +217,8 @@ def get_initial_game_state():
         'powerups': [],
         'speed_mult': 1.0,
         'ai_zone_idx': CENTER_ZONE, 'ai_move_timer': 0,
-        'zone_idx': CENTER_ZONE,    'prev_key': 'None',    'last_bci_seq': 0,
-        'zone_idx_p2': CENTER_ZONE, 'prev_key_p2': 'None', 'last_bci_seq_p2': 0,
+        'zone_idx': CENTER_ZONE,    'last_label_seq': None,    'last_bci_seq': 0,
+        'zone_idx_p2': CENTER_ZONE, 'last_label_seq_p2': None, 'last_bci_seq_p2': 0,
         'player_score': 0, 'ai_score': 0, 'winner': None,
     }
 
@@ -415,7 +420,7 @@ app.layout = html.Div(
         dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0}),
         dcc.Store(id='bci-command-store',    data={'command': 'NEUTRAL', 'seq': 0}),
         dcc.Store(id='bci-command-store-p2', data={'command': 'NEUTRAL', 'seq': 0}),
-        dcc.Store(id='key-press-store',      data={'key': 'None', 'key_p2': 'None'}),
+        dcc.Store(id='key-press-store',      data={'p1_last': 'None', 'p1_seq': 0, 'p2_last': 'None', 'p2_seq': 0}),
         dcc.Store(id='rec-dummy-store'),   # sink for the recording callback (side-effect only)
         dcc.Interval(id='game-interval',   interval=GAME_INTERVAL_MS,       n_intervals=0, disabled=False),
         dcc.Interval(id='bci-interval',    interval=BCI_UPDATE_INTERVAL_MS,  n_intervals=0, disabled=True),
@@ -429,31 +434,22 @@ app.layout = html.Div(
 clientside_callback(
     """
     function(n_intervals) {
-        if (!window.dash_clientside) { window.dash_clientside = {}; }
-        if (!window.dash_clientside.key_listener_added) {
-            window.dash_clientside.key_listener_added = true;
-            window.dash_clientside.current_key    = 'None';
-            window.dash_clientside.current_key_p2 = 'None';
+        var ds = window.dash_clientside = window.dash_clientside || {};
+        if (!ds.label_listener_added) {
+            ds.label_listener_added = true;
+            ds.p1_last = 'None'; ds.p1_seq = 0;   // P1 = arrows (Left/Right/Up) — bottom paddle
+            ds.p2_last = 'None'; ds.p2_seq = 0;   // P2 = WASD  (A=left, D=right, W=blink) — top paddle
+            var P1 = {ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'blink'};
+            var P2 = {a: 'left', d: 'right', w: 'blink'};
             document.addEventListener('keydown', function(e) {
-                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                    e.preventDefault();
-                    window.dash_clientside.current_key = e.key;      // P1 = arrows
-                }
-                if (e.key === 'a' || e.key === 'd') {
-                    window.dash_clientside.current_key_p2 = e.key;   // P2 = A/D
-                }
-            });
-            document.addEventListener('keyup', function(e) {
-                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                    window.dash_clientside.current_key = 'None';
-                }
-                if (e.key === 'a' || e.key === 'd') {
-                    window.dash_clientside.current_key_p2 = 'None';
-                }
+                if (e.repeat) return;             // one label per physical press (ignore auto-repeat)
+                if (e.key.indexOf('Arrow') === 0) e.preventDefault();   // stop arrow-key page scroll
+                if (P1.hasOwnProperty(e.key))      { ds.p1_last = P1[e.key]; ds.p1_seq++; }
+                else if (P2.hasOwnProperty(e.key)) { ds.p2_last = P2[e.key]; ds.p2_seq++; }
             });
         }
-        return {key: window.dash_clientside.current_key,
-                key_p2: window.dash_clientside.current_key_p2};
+        return {p1_last: ds.p1_last, p1_seq: ds.p1_seq,
+                p2_last: ds.p2_last, p2_seq: ds.p2_seq};
     }
     """,
     Output('key-press-store', 'data'),
@@ -707,18 +703,32 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
 
     settings    = settings or {}
     ball_speed  = settings.get('ball_speed', abs(INITIAL_BALL_SPEED_Y))
-    key_command = key_data.get('key', 'None')
-    prev_key    = state.get('prev_key', 'None')
     zone_idx    = state.get('zone_idx', CENTER_ZONE)
     speed_mult  = state.get('speed_mult', 1.0)
     balls       = state.get('balls', [])
     powerups    = state.get('powerups', [])
 
-    # --- P1 keyboard (← / →) ---
-    if key_command != prev_key:
-        if key_command == 'ArrowLeft':    zone_idx = max(0, zone_idx - 1)
-        elif key_command == 'ArrowRight': zone_idx = min(MAX_ZONE, zone_idx + 1)
-    state['prev_key'] = key_command
+    # --- P1 intention keys (WASD: A=left, D=right, W=blink) ---
+    # Each physical press logs a sample-pinned intention label into the recording
+    # (see _log_event) to build the labeled training set. In keyboard-only modes the
+    # left/right keys also move the paddle; in EOG modes the EYES drive the paddle and
+    # these keys are label-ONLY, so a logged label always coincides with a real eye
+    # movement the player made (the whole point of collecting it).
+    # Keys move the paddle only when no live EOG is driving it: keyboard-only modes
+    # (default, --no-board, --no-board --2player). Under real EOG the eyes drive the
+    # paddle and the keys are label-only.
+    kbd_moves = NO_BOARD_MODE or not (EOG_MODE or TWO_PLAYER_MODE)
+    p1_seq = key_data.get('p1_seq', 0)
+    prev_p1_seq = state.get('last_label_seq')
+    if prev_p1_seq is None:                       # first tick of a game: adopt the live
+        state['last_label_seq'] = p1_seq          # counter without logging a pre-game press
+    elif p1_seq != prev_p1_seq:
+        state['last_label_seq'] = p1_seq
+        intent = key_data.get('p1_last', 'None')
+        if intent in ('left', 'right', 'blink'):
+            _log_event(f'p1_{intent}')
+            if kbd_moves and intent == 'left':    zone_idx = max(0, zone_idx - 1)
+            elif kbd_moves and intent == 'right': zone_idx = min(MAX_ZONE, zone_idx + 1)
 
     # --- P1 EOG ---
     bci_seq = (bci_command or {}).get('seq', 0)
@@ -734,13 +744,21 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
     # --- Top paddle: P2 (2-player) or AI (single-player) ---
     if TWO_PLAYER_MODE:
         zone_idx_p2 = state.get('zone_idx_p2', CENTER_ZONE)
-        prev_key_p2 = state.get('prev_key_p2', 'None')
-        key_p2      = key_data.get('key_p2', 'None')
 
-        if key_p2 != prev_key_p2:
-            if key_p2 == 'a':  zone_idx_p2 = max(0, zone_idx_p2 - 1)
-            elif key_p2 == 'd': zone_idx_p2 = min(MAX_ZONE, zone_idx_p2 + 1)
-        state['prev_key_p2'] = key_p2
+        # --- P2 intention keys (arrows: ←=left, →=right, ↑=blink) ---
+        # Under real 2-player EOG the paddle is eye-driven and these are label-only;
+        # in keyboard two-player (--no-board --2player) they move P2's paddle.
+        p2_seq = key_data.get('p2_seq', 0)
+        prev_p2_seq = state.get('last_label_seq_p2')
+        if prev_p2_seq is None:                   # first tick: adopt without logging (see P1)
+            state['last_label_seq_p2'] = p2_seq
+        elif p2_seq != prev_p2_seq:
+            state['last_label_seq_p2'] = p2_seq
+            intent = key_data.get('p2_last', 'None')
+            if intent in ('left', 'right', 'blink'):
+                _log_event(f'p2_{intent}')
+                if kbd_moves and intent == 'left':    zone_idx_p2 = max(0, zone_idx_p2 - 1)
+                elif kbd_moves and intent == 'right': zone_idx_p2 = min(MAX_ZONE, zone_idx_p2 + 1)
 
         bci_seq_p2 = (bci_command_p2 or {}).get('seq', 0)
         if bci_seq_p2 != state.get('last_bci_seq_p2', 0):
@@ -1108,25 +1126,20 @@ def _save_one_recording(p, start_t, stop_t, n_players, stamp):
     brd, sr = p['board'], p['sr']
     n_pull  = min(BOARD_STREAM_BUFFER, int((max(0.0, stop_t - start_t) + 2.0) * sr) + 1)
     full    = brd.get_current_board_data(n_pull)          # all rows, a fresh copy
+    t_pull  = time.time()                                 # host time of the newest pulled sample
     if full.shape[1] == 0:
         print(f"[rec] no samples for {p['slot']} ({p['subject']}) — skipped")
         return
-    ts   = full[timestamp_row]
-    mask = (ts >= start_t) & (ts <= stop_t)
-    if mask.sum() < 2:                                    # timestamps unusable → keep all pulled
-        mask = np.ones(full.shape[1], dtype=bool)
-    idx  = np.where(mask)[0]
-    span = full[:, idx[0]:idx[-1] + 1]
+    # Place the span + markers on the HOST clock, never the board's timestamp channel:
+    # one X8 ran a fixed ~801 s fast, which (via the board clock) mapped every P1 marker
+    # to a negative sample index and silently dropped it in 2-player mode. This is immune
+    # to any board-clock skew and gives the two players' files a shared timebase.
+    i0, i1, unix_start, ev_s, ev_l = map_events_to_samples(
+        _rec['events'], start_t, stop_t, t_pull, full.shape[1], sr)
+    span = full[:, i0:i1 + 1]
     eeg  = np.vstack([np.ascontiguousarray(span[p['ch_L']].astype(np.float64)),
                       np.ascontiguousarray(span[p['ch_R']].astype(np.float64))])   # (2,N)
-    span_ts    = span[timestamp_row]
-    unix_start = float(span_ts[0]) if span_ts.size and span_ts[0] > 0 else start_t
-    n_samp     = eeg.shape[1]
-    ev_s, ev_l = [], []
-    for label, t in _rec['events']:
-        s = int(round((t - unix_start) * sr))
-        if 0 <= s < n_samp:
-            ev_s.append(s); ev_l.append(label)
+    n_samp = eeg.shape[1]
     detector = p.get('detector', 'velocity')
     notes = (f"in-game pong recording ({n_players}-player); board v{p['version']} on "
              f"{p['port']}; CH3-8 firmware-off so only the EOG pair stored "
@@ -1174,7 +1187,7 @@ def manage_recording(app_status, p1_name, p2_name):
 # === 6. MAIN ==================================================================
 # ==============================================================================
 def main():
-    global board_p1, board_p2, sampling_rate, timestamp_row
+    global board_p1, board_p2, sampling_rate
 
     if NO_BOARD_MODE:
         mode_msg = ("2-PLAYER NO-BOARD: P1=←/→, P2=A/D." if TWO_PLAYER_MODE
@@ -1217,7 +1230,6 @@ def main():
         board_p1 = _open_board(P1_SERIAL_PORT, "P1")
         sampling_rate    = BoardShim.get_sampling_rate(BOARD_ID)
         all_eeg_channels = BoardShim.get_eeg_channels(BOARD_ID)
-        timestamp_row    = BoardShim.get_timestamp_channel(BOARD_ID)
         print(f"P1 board connected. Sampling rate: {sampling_rate} Hz")
 
         if EOG_MODE or TWO_PLAYER_MODE:

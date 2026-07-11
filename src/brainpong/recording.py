@@ -8,18 +8,58 @@ glance window). Protocol tag ``eog-v3``.
 
 Only the two EOG channels are stored (``eeg`` is ``(2, N)`` volts: row 0 = ch_L,
 row 1 = ch_R), because CH3-8 are powered down in firmware and carry nothing.
-``unix_start`` is passed in explicitly (the honest first board timestamp of the
-captured span) rather than derived from a stored timestamp row.
+``unix_start`` is passed in explicitly — the HOST-clock time of the span's first
+sample (see :func:`map_events_to_samples`), not the board's own timestamp channel,
+so it is immune to board-clock skew and the two players' files share one timebase.
 
 Kept in the library (not the Dash script) so it is unit-testable without a board.
 """
 
+import math
 import numpy as np
 from datetime import datetime
 from pathlib import Path
 
 SIGNAL_UNIT = "volts"
 PROTOCOL_VERSION = "eog-v3"
+
+
+def map_events_to_samples(events, start_t, stop_t, t_pull, n_pulled, sr):
+    """Place a recording's span + event markers on the HOST clock — robust to board-clock skew.
+
+    The X8 exposes a per-sample timestamp channel, but that channel can sit at a large
+    *constant* offset from the host clock (one board was observed running ~801 s fast).
+    Anchoring markers to the board clock then maps them to negative sample indices and
+    silently drops them — exactly how every 2-player P1 file lost its calib/play markers.
+    This function never reads the board timestamp. It treats the pulled buffer of
+    ``n_pulled`` samples (rate ``sr``) as ending at host time ``t_pull``, so sample ``i``
+    was acquired at ``t_pull - (n_pulled-1-i)/sr``.
+
+    ``start_t``/``stop_t`` are the host times bracketing the recording (same clock as the
+    event times). The buffer is trimmed to that window and each ``(label, host_time)``
+    event is mapped onto the trimmed span.
+
+    Returns ``(i0, i1, unix_start, ev_s, ev_l)``: inclusive slice bounds into the pulled
+    buffer; the host time of the first stored sample (store it as ``unix_start`` so
+    ``unix_start + i/fs`` is a host-referenced sample clock, which also gives the two
+    players a shared timebase); and the in-span sample indices + labels of the events that
+    fall inside the span. Only the host clock and nominal rate are used, so any board-clock
+    offset is irrelevant by construction.
+    """
+    host0 = t_pull - (n_pulled - 1) / sr                    # host time of pulled sample 0
+    i0 = max(0, int(math.ceil((start_t - host0) * sr)))     # first sample at/after start_t
+    i1 = min(n_pulled - 1, int(math.floor((stop_t - host0) * sr)))  # last sample at/before stop_t
+    if i1 - i0 < 1:                                          # window misses the buffer → keep all
+        i0, i1 = 0, n_pulled - 1
+    unix_start = host0 + i0 / sr                             # host time of the first stored sample
+    n_span = i1 - i0 + 1
+    ev_s, ev_l = [], []
+    for label, t in events:
+        s = int(round((t - unix_start) * sr))
+        if 0 <= s < n_span:
+            ev_s.append(s)
+            ev_l.append(label)
+    return i0, i1, float(unix_start), ev_s, ev_l
 
 
 def save_eog_recording(out_dir, subject_id, eeg, unix_start, sr, *,
