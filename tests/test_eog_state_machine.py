@@ -12,12 +12,17 @@ import pytest
 
 from brainpong.eog_core import (
     _run_eog_sm, _make_eog_state, _reset_eog_st,
-    GLANCE_WINDOW_S, ARMED_MIN_WAIT_S, REFRACTORY_S, EOG_BASELINE_S,
+    GLANCE_WINDOW_S, ARMED_MIN_WAIT_S, REFRACTORY_S, EOG_BASELINE_S, EOG_SIGMA_THR,
 )
 from synth import SR, calibrated_state, const_window
 
-RIGHT_SIG = const_window(6.0)   # σ defaults to 1.0 in calibrated_state → 6σ
-LEFT_SIG = const_window(-6.0)
+# A clearly supra-threshold glance: σ defaults to 1.0 in calibrated_state, and the
+# crossing gate fires on |signal| > EOG_SIGMA_THR·σ, so size the fixture a few σ
+# above that bar. Derived from the constant so a change to the default threshold
+# can't silently drop these windows below it (which would fail every SM test).
+_SUPRA = EOG_SIGMA_THR + 4.0
+RIGHT_SIG = const_window(_SUPRA)
+LEFT_SIG = const_window(-_SUPRA)
 
 
 # ── calibration ──────────────────────────────────────────────────────────────────

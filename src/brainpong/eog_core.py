@@ -39,16 +39,24 @@ from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 # These are the *defaults*. Where a function exposes a matching keyword arg, the
 # default is sourced from here so production behaviour is defined in one place
 # while tests can pin behaviour at explicit values independent of these defaults.
-EOG_LPF_HZ       = 50.0    # low-pass corner. At 50 Hz the 58–62 Hz notch sits above the cutoff (60 Hz
-                           # mains already attenuated by the LPF); the 48–52 Hz notch straddles the corner.
+EOG_LPF_HZ       = 30.0    # low-pass corner. Detection runs on VELOCITY (a derivative), which amplifies
+                           # high frequencies, so 30–50 Hz broadband/EMG noise dominates the velocity noise
+                           # floor. Dropping the corner 50→30 Hz cuts ~1/3 off that floor with no hit-rate
+                           # cost on labeled saccades (their velocity energy sits <30 Hz). Both notch bands
+                           # (48–52, 58–62) now fall entirely above the corner — redundant but harmless.
+                           # MUST move together with the raised σ below: a lower floor lowers the ABSOLUTE
+                           # threshold (σ·floor), so LPF-down alone fires MORE, not less.
 EOG_HPF_HZ       = 0.1     # high-pass corner. 0.1 Hz (τ≈1.6 s) keeps more low-frequency signal than
                            # 0.5 Hz but its recovery tail does NOT fully settle inside the ~0.4 s per-poll
                            # window; acceptable because the VELOCITY detector rejects the slow tail (a
                            # slow tail is low-velocity). Offline whole-window filtering favoured 0.1 Hz on hit-rate.
 NOTCH_BANDS      = ((48.0, 52.0), (58.0, 62.0))
-EOG_SIGMA_THR    = 4.0     # crossing threshold in units of baseline σ. Lower than the
-                           # original 5σ: the glance-PAIR debounce rejects stray singles,
-                           # so a more sensitive primitive misses fewer real glances.
+EOG_SIGMA_THR    = 6.0     # crossing threshold in units of baseline σ. Raised 4→6 to spend the lower
+                           # LP30 noise floor (above) on FEWER phantom fires rather than more sensitivity.
+                           # At LP30 the floor is ~27% lower, so σ≈5.5 reproduces the old LP50/σ4 absolute
+                           # bar and σ=6 tightens it ~9%; labeled-cue hit-rate stays ~0.89 while resting
+                           # phantom pair-commands drop. Drop toward 5.5 (live slider) if a noisy rig starts
+                           # missing real glances — an under-firing rig wants a lower multiplier, not this.
 EOG_MIN_DUR_MS   = 12.0    # a crossing must persist this long (kills single spikes)
 GLANCE_WINDOW_S  = 0.5     # max time between the two glances of a pair
 ARMED_MIN_WAIT_S = 0.05    # min time before the opposite glance counts
