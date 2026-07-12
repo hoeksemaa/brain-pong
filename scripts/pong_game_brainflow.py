@@ -78,6 +78,7 @@ from brainpong.eog_core import (
     _run_eog_sm, _reset_eog_st, pipeline_description,
     _make_velocity_template, _matched_filter, begin_play_settle,
 )
+from brainpong.game_logic import advance_paddle_zone
 from brainpong.recording import save_eog_recording, map_events_to_samples
 
 # ==============================================================================
@@ -217,8 +218,8 @@ def get_initial_game_state():
         'powerups': [],
         'speed_mult': 1.0,
         'ai_zone_idx': CENTER_ZONE, 'ai_move_timer': 0,
-        'zone_idx': CENTER_ZONE,    'last_label_seq': None,    'last_bci_seq': 0,
-        'zone_idx_p2': CENTER_ZONE, 'last_label_seq_p2': None, 'last_bci_seq_p2': 0,
+        'zone_idx': CENTER_ZONE,    'last_label_seq': None,    'last_bci_seq': None,
+        'zone_idx_p2': CENTER_ZONE, 'last_label_seq_p2': None, 'last_bci_seq_p2': None,
         'player_score': 0, 'ai_score': 0, 'winner': None,
     }
 
@@ -541,6 +542,11 @@ def update_bci_command(_, app_status):
     if new_sig is None:
         return no_update
     result = _run_eog_sm(eog_state, new_sig, time.time(), label='P1')
+    # Only PLAYING may move a paddle. During CALIBRATING the SM still runs (it must
+    # accumulate the baseline), but once σ locks it can fire in the ~0.5 s tail before
+    # PLAYING begins — discard that so no command ever reaches the store before play.
+    if status != 'PLAYING':
+        return no_update
     return result if result is not None else no_update
 
 
@@ -565,7 +571,31 @@ def update_bci_command_p2(_, app_status):
     if new_sig is None:
         return no_update
     result = _run_eog_sm(eog_state_p2, new_sig, time.time(), label='P2')
+    # Only PLAYING may move a paddle (closes the calibration-tail fire; see P1).
+    if status != 'PLAYING':
+        return no_update
     return result if result is not None else no_update
+
+
+@app.callback(
+    Output('bci-command-store',    'data', allow_duplicate=True),
+    Output('bci-command-store-p2', 'data', allow_duplicate=True),
+    Input('start-button', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def clear_bci_stores_on_new_game(n_clicks):
+    """Wipe both command stores to NEUTRAL/seq0 on New Game (belt-and-suspenders).
+
+    The primary guard against a start-of-rally twitch is advance_paddle_zone's
+    adopt-on-first-tick rule; this second layer keeps the store itself clean so no
+    command from the previous game (or a fire during the calibration tail) can linger
+    in it. Pairs with _reset_eog_st resetting cmd_seq, so a new game's seq numbering
+    restarts from 0. allow_duplicate: update_bci_command / _p2 also write these stores.
+    """
+    if not n_clicks:
+        return no_update, no_update
+    fresh = {'command': 'NEUTRAL', 'seq': 0}
+    return dict(fresh), dict(fresh)
 
 
 EOG_DISPLAY_SECS = 8.0
@@ -731,12 +761,13 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
             elif kbd_moves and intent == 'right': zone_idx = min(MAX_ZONE, zone_idx + 1)
 
     # --- P1 EOG ---
-    bci_seq = (bci_command or {}).get('seq', 0)
-    if bci_seq != state.get('last_bci_seq', 0):
-        state['last_bci_seq'] = bci_seq
-        bci_move = (bci_command or {}).get('command', 'NEUTRAL')
-        if bci_move == 'LEFT':    zone_idx = max(0, zone_idx - 1)
-        elif bci_move == 'RIGHT': zone_idx = min(MAX_ZONE, zone_idx + 1)
+    # adopt-on-first-tick: a command sitting in the store before this rally began (a
+    # leftover from the previous game, or a fire during the calibration tail) must NOT
+    # move the paddle — it is adopted without acting, mirroring the keyboard-label seq
+    # handling above. Because last_bci_seq is reset to None on New Game AND after every
+    # point, this also kills the start-of-rally twitch. See brainpong.game_logic.
+    zone_idx, state['last_bci_seq'] = advance_paddle_zone(
+        zone_idx, bci_command, state.get('last_bci_seq'), min_zone=0, max_zone=MAX_ZONE)
 
     state['zone_idx'] = zone_idx
     state['player_x'] = PADDLE_POSITIONS[zone_idx]
@@ -760,12 +791,10 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
                 if kbd_moves and intent == 'left':    zone_idx_p2 = max(0, zone_idx_p2 - 1)
                 elif kbd_moves and intent == 'right': zone_idx_p2 = min(MAX_ZONE, zone_idx_p2 + 1)
 
-        bci_seq_p2 = (bci_command_p2 or {}).get('seq', 0)
-        if bci_seq_p2 != state.get('last_bci_seq_p2', 0):
-            state['last_bci_seq_p2'] = bci_seq_p2
-            bci_move_p2 = (bci_command_p2 or {}).get('command', 'NEUTRAL')
-            if bci_move_p2 == 'LEFT':  zone_idx_p2 = max(0, zone_idx_p2 - 1)
-            elif bci_move_p2 == 'RIGHT': zone_idx_p2 = min(MAX_ZONE, zone_idx_p2 + 1)
+        # Same adopt-on-first-tick rule as P1 (see brainpong.game_logic).
+        zone_idx_p2, state['last_bci_seq_p2'] = advance_paddle_zone(
+            zone_idx_p2, bci_command_p2, state.get('last_bci_seq_p2'),
+            min_zone=0, max_zone=MAX_ZONE)
 
         state['zone_idx_p2'] = zone_idx_p2
         state['ai_x']        = PADDLE_POSITIONS[zone_idx_p2]

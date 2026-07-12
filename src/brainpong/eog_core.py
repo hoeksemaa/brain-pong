@@ -97,8 +97,13 @@ def _make_eog_state():
 
 
 def _reset_eog_st(eog_st):
-    """Return a player's state to fresh CALIBRATING (keeps ch_L/ch_R/sr/cmd_seq
-    and the config knobs sigma_thr/glance_window_s)."""
+    """Return a player's state to fresh CALIBRATING for a new game (keeps ch_L/ch_R/sr
+    and the config knobs sigma_thr/glance_window_s/lpf_hz/hpf_hz/detector/mf_template).
+
+    cmd_seq resets to 0 so each game's command sequence restarts clean; the browser
+    command stores are cleared to a matching seq 0 on New Game
+    (clear_bci_stores_on_new_game in the game script), so no command from a previous
+    game can survive into the new game's first PLAYING tick."""
     eog_st['sm']             = 'CALIBRATING'
     eog_st['baseline_acc']   = []
     eog_st['baseline_sigma'] = None
@@ -106,6 +111,7 @@ def _reset_eog_st(eog_st):
     eog_st['arm_time']       = None
     eog_st['last_cmd_time']  = 0.0
     eog_st['settle_until']   = 0.0
+    eog_st['cmd_seq']        = 0
 
 
 def begin_play_settle(eog_st, now, settle_s=PLAY_SETTLE_S):

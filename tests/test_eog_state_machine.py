@@ -150,3 +150,4 @@ def test_reset_returns_to_calibrating_but_keeps_channels():
     assert st['sm'] == 'CALIBRATING'
     assert st['baseline_sigma'] is None
     assert st['ch_L'] == 2 and st['ch_R'] == 3   # channel mapping survives reset
+    assert st['cmd_seq'] == 0   # new game restarts the command sequence (anti-twitch)
