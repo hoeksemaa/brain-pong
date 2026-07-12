@@ -1,0 +1,185 @@
+/* ============================================================
+   BrainPong — arcade UI (Balatro-forward). PRESENTATION ONLY.
+   Dash auto-loads this from assets/. The m6x11 font is served
+   from assets/fonts/ (gitignored, bundled per machine).
+   Players are fixed: P1/John = purple (TOP), P2/Esther = yellow (BOTTOM).
+   ============================================================ */
+
+@font-face {
+  font-family: 'm6x11';
+  src: url('/assets/fonts/m6x11.ttf') format('truetype');
+  font-display: block;
+}
+
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%;
+  background: #06090c;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color: #f4ead2;
+  overflow: hidden;
+}
+
+/* ---- design tokens ---- */
+.bp {
+  --ground:   #122431;
+  --ground-2: #0b171f;
+  --panel:    #1b2c39;
+  --panel-hi: #24394a;
+  --screen:   #0b151c;
+  --edge:     #060d12;
+  --edge-hi:  rgba(255,255,255,.10);
+  --ink:      #f4ead2;
+  --ink-dim:  #90a4b0;
+  --p1:       #b06bff;  --p1-deep: #5f2fb8;
+  --p2:       #ffcf33;  --p2-deep: #b07f00;
+  --ball:     #f7f8fc;
+  --left:     #46e08a;  --right: #ff5b57;
+  --sigma:    #7d8fb8;  --trace: #ecdcae;
+  --gap:      clamp(16px, 1.9vw, 28px);
+}
+
+.pixel {
+  font-family: 'm6x11', ui-monospace, monospace;
+  font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+  text-shadow: 0 1px 2px rgba(0,0,0,.32);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- page + stage ---- */
+.bp-wrap {
+  height: 100vh; width: 100vw;
+  display: flex; flex-direction: column;
+  padding: 0;
+  background: radial-gradient(120% 90% at 50% 8%, #17303f 0%, var(--ground) 42%, var(--ground-2) 100%);
+  overflow: hidden;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bp-wrap { background-size: 160% 160%; animation: bp-drift 26s ease-in-out infinite alternate; }
+  @keyframes bp-drift { from { background-position: 42% 0%; } to { background-position: 58% 30%; } }
+}
+
+.stage {
+  position: relative; flex: 1; min-height: 0;
+  padding: clamp(16px, 2.4vh, 32px);
+  overflow: hidden;
+  text-align: initial;
+  display: flex; align-items: center; justify-content: center;   /* center the grid */
+}
+.stage::before {
+  content: ""; position: absolute; inset: 0; z-index: 40; pointer-events: none; mix-blend-mode: multiply;
+  background: repeating-linear-gradient(to bottom, rgba(0,0,0,.06) 0 1px, transparent 1px 3px);
+}
+.stage::after {
+  content: ""; position: absolute; inset: 0; z-index: 41; pointer-events: none;
+  background: radial-gradient(135% 120% at 50% 42%, transparent 46%, rgba(0,0,0,.6) 100%);
+}
+
+/* grid height is set by render.js (sizeLayout) to the field's square side, so the
+   left / center / right columns all share that height and their tops+bottoms line up. */
+.grid { position: relative; z-index: 3; display: flex; gap: var(--gap); align-items: stretch; }
+.col { display: flex; flex-direction: column; justify-content: space-between; min-height: 0; }
+.col.left, .col.right { width: clamp(190px, 15vw, 264px); }   /* equal widths */
+.col.center { flex: 0 0 auto; align-items: center; justify-content: center; }
+
+/* ---- cards ---- */
+.card {
+  background: linear-gradient(180deg, var(--panel-hi), var(--panel));
+  border: 2px solid var(--edge); border-radius: 14px;
+  box-shadow: 0 6px 0 var(--edge), 0 14px 26px rgba(0,0,0,.45), inset 0 2px 0 var(--edge-hi);
+}
+
+.player {
+  flex: 0 0 32%; min-height: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: space-evenly;
+  gap: clamp(8px, 2vh, 22px); padding: clamp(14px, 2.4vh, 28px); text-align: center;
+}
+.player.p1 { --accent: var(--p1); border-color: var(--p1); box-shadow: 0 6px 0 var(--p1-deep), 0 14px 26px rgba(0,0,0,.5), inset 0 2px 0 rgba(255,255,255,.12); }
+.player.p2 { --accent: var(--p2); border-color: var(--p2); box-shadow: 0 6px 0 var(--p2-deep), 0 14px 26px rgba(0,0,0,.5), inset 0 2px 0 rgba(255,255,255,.12); }
+
+/* Name field. NOTE: dcc.Input renders a WRAPPER div (.dash-input-container, which
+   carries our className) around the real <input class="dash-input-element">. The
+   wrapper defaults to a white background, so make it transparent + full width; the
+   inner <input> (targeted by position below) gets the text/centering/font. */
+.player .dash-input-container {
+  background: transparent; width: 100%; border: none; box-shadow: none; margin: 0; padding: 0;
+}
+.player input {
+  width: 100%; box-sizing: border-box; border: none; background: transparent; text-align: center;
+  appearance: none; -webkit-appearance: none;   /* strip the native widget's white fill */
+  color: var(--accent); caret-color: var(--accent);
+  font-family: 'm6x11', ui-monospace, monospace; text-transform: uppercase; letter-spacing: .04em;
+  font-size: clamp(26px, 4.6vh, 52px);
+  /* Give the single-line box ~2x the glyph height and let the input vertically
+     centre the text in it, so m6x11's tall ascenders always have headroom — no
+     top clipping even when the layout stretches to full height. */
+  line-height: 2.3; height: auto; padding: 4px; border-radius: 8px;
+  cursor: text; transition: background .12s;
+}
+.player input::placeholder { color: color-mix(in srgb, var(--accent) 50%, transparent); opacity: 1; }
+.player input:hover { background: rgba(255,255,255,.05); }
+.player input:focus { outline: none; background: rgba(255,255,255,.09); }
+/* kill the browser autofill background/tint so a remembered name doesn't paint a box */
+.player input:-webkit-autofill,
+.player input:-webkit-autofill:hover,
+.player input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--accent);
+  -webkit-box-shadow: 0 0 0 1000px transparent inset;
+  caret-color: var(--accent);
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+.score { color: var(--accent); font-size: clamp(44px, 8vh, 92px); line-height: .85; }
+
+/* ---- controls (stay bright over the dim) ---- */
+.controls { display: flex; gap: clamp(14px, 1.8vw, 22px); justify-content: center; align-items: center; z-index: 30; }
+.btn {
+  width: clamp(88px, 10vh, 128px); aspect-ratio: 1; border-radius: 18px; cursor: pointer;
+  border: 2px solid var(--edge);
+  background: linear-gradient(180deg, var(--panel-hi), var(--panel));
+  box-shadow: 0 5px 0 var(--edge), inset 0 2px 0 var(--edge-hi);
+  display: grid; place-items: center; color: var(--ink); padding: 0;
+  transition: transform .06s, box-shadow .06s, border-color .12s;
+}
+.btn:hover { border-color: var(--ink); }
+.btn:active { transform: translateY(4px); box-shadow: 0 1px 0 var(--edge), inset 0 2px 0 var(--edge-hi); }
+.btn svg, .btn img { width: 46%; height: 46%; }
+.btn .ic-fill { fill: var(--ink); } .btn .ic-stroke { stroke: var(--ink); fill: none; }
+.btn.pause:hover .ic-fill { fill: var(--p1); }
+.btn.newgame:hover .ic-stroke { stroke: var(--p2); }
+
+/* ---- center cabinet — white button frame ---- */
+.cabinet {
+  position: relative; border-radius: 14px; padding: 10px; background: var(--screen);
+  border: 2px solid #e9e9f2;
+  box-shadow: 0 6px 0 #565667, 0 16px 30px rgba(0,0,0,.5), inset 0 2px 0 rgba(255,255,255,.14), inset 0 0 44px rgba(0,0,0,.7);
+}
+.cabinet canvas { width: 100%; height: 100%; display: block; border-radius: 6px; }
+
+/* ---- waveform feeds ---- */
+.wave { flex: 0 0 32%; min-height: 0; padding: 8px; border-radius: 13px; background: var(--screen); border: 2px solid var(--edge); }
+.wave.p1 { border-color: var(--p1); box-shadow: 0 6px 0 var(--p1-deep), 0 12px 22px rgba(0,0,0,.5); }
+.wave.p2 { border-color: var(--p2); box-shadow: 0 6px 0 var(--p2-deep), 0 12px 22px rgba(0,0,0,.5); }
+.wave .screen { height: 100%; border-radius: 8px; overflow: hidden; background: var(--screen); }
+.wave canvas { width: 100%; height: 100%; display: block; }
+
+/* ---- dim + overlay ---- */
+.dimmable { transition: opacity .25s, filter .25s; }
+.stage.frozen .dimmable { opacity: .3; filter: grayscale(.5) brightness(.75); }
+.game-overlay { position: absolute; inset: 0; z-index: 35; display: none; place-items: center; text-align: center; pointer-events: none; }
+.stage.frozen .game-overlay { display: grid; }
+.game-overlay .otitle { font-size: clamp(64px, 13vh, 170px); margin-bottom: clamp(12px, 2.5vh, 30px); line-height: .95; }
+.game-overlay .osub  { font-family: 'm6x11', ui-monospace, monospace; font-size: clamp(26px, 4.6vh, 58px); color: var(--ink); line-height: 1.5; }
+.game-overlay .ohint { font-family: 'm6x11', ui-monospace, monospace; font-size: clamp(20px, 3.2vh, 40px); color: var(--ink-dim); margin-top: clamp(16px, 3vh, 40px); letter-spacing: .06em; text-transform: uppercase; }
+
+/* elements kept for existing callbacks but not shown in the arcade view */
+.bp-hidden { display: none !important; }
+
+/* ---- operator settings drawer: hidden from players; toggled with the G key ---- */
+.tuning { flex: 0 0 auto; max-height: 48vh; overflow-y: auto;
+          background: var(--ground-2); color: var(--ink-dim); padding: 14px 20px 22px;
+          border-top: 1px solid #1e2a34; font-size: 13px; }
+.tuning-head { color: var(--ink); letter-spacing: .1em; text-transform: uppercase; font-size: 12px; margin-bottom: 12px; }
+.tuning label { color: var(--ink-dim); }
+.tuning .rc-slider-mark-text { color: #bcd !important; }

@@ -46,6 +46,10 @@ env/
 tmp/
 .cache/
 
+# Fonts — bundled locally per machine, not committed (e.g. Balatro's m6x11.ttf
+# in assets/fonts/; the game loads it, but the file itself stays out of git)
+*.ttf
+
 # Viewer DB — regenerable derivative (rebuild: python scripts/ingest_npz.py)
 derivatives/viewer.db
 derivatives/viewer.db-shm

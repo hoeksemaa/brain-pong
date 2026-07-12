@@ -5,7 +5,6 @@ import random
 import sys
 import time
 import numpy as np
-import plotly.graph_objs as go
 from dash import Dash, dcc, html, Output, Input, State, no_update, clientside_callback, ctx
 from dash.exceptions import PreventUpdate
 import logging
@@ -104,7 +103,9 @@ REC_GAIN             = 24         # Cerelog X8 default (assumed, not read from b
 INITIAL_BALL_SPEED_Y = -4
 GAME_INTERVAL_MS     = 16
 GAME_WIDTH           = 800
-GAME_HEIGHT          = 600
+GAME_HEIGHT          = 800   # square play field (UI revamp). Was 600; N_PANELS still
+                             # tiles WIDTH so paddle slots/width are unchanged — only the
+                             # vertical extent changes (all physics scale off GAME_HEIGHT).
 # Each side has N_PANELS discrete paddle slots that tile the width evenly:
 # the paddle is one panel wide and snaps to panel centers. Bump N_PANELS to
 # re-tile everything (width, slot centers, clamps) — keep assets/render.js's
@@ -157,7 +158,7 @@ _rec = {'active': False, 'start_time': None, 'players': [], 'events': [], 'last_
 def _detector_signal(eog_st, vel):
     """The signal the state machine (and live plot) threshold: raw velocity, or —
     in 'matched' mode — velocity cross-correlated with the saccade template. Used in
-    both _poll_eog and _make_eog_figure so calibration σ, detection, and the plot all
+    both _poll_eog and _wave_payload so calibration σ, detection, and the live feed all
     key off the SAME signal. Falls back to velocity if no template is set yet."""
     if eog_st.get('detector') == 'matched' and eog_st.get('mf_template') is not None:
         return _matched_filter(vel, eog_st['mf_template'])
@@ -224,196 +225,122 @@ def get_initial_game_state():
     }
 
 
-# Shared base style for the four glance-flash dots (position/color set per-dot).
-_FLASH_DOT_BASE = {
-    'position': 'absolute', 'width': '24px', 'height': '24px', 'borderRadius': '50%',
-    'opacity': 0, 'pointerEvents': 'none', 'transition': 'opacity 60ms linear',
-}
+# ── UI assets: button icons (inline SVG data URIs; html.Img renders them crisply) ──
+import urllib.parse
+_ICON = lambda svg: "data:image/svg+xml," + urllib.parse.quote(svg)
+_PAUSE_ICON = _ICON(
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<rect x='5' y='4' width='5' height='16' rx='1.5' fill='#f4ead2'/>"
+    "<rect x='14' y='4' width='5' height='16' rx='1.5' fill='#f4ead2'/></svg>")
+_NEWGAME_ICON = _ICON(
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='#f4ead2' "
+    "stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'>"
+    "<path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 3.5V8.2H15.3'/></svg>")
+
+_MK = lambda v: {'label': str(v), 'style': {'color': '#a9bcd0'}}   # slider marks (dark bg)
+
+
+def _tuning_row(label, control):
+    return html.Div(
+        [html.Label(label, style={'display': 'inline-block', 'width': '160px', 'fontSize': '12px'}),
+         html.Div(control, style={'display': 'inline-block', 'width': 'min(560px, 68%)',
+                                  'verticalAlign': 'middle'})],
+        style={'margin': '10px 0'})
+
+
+def _player_card(slot):
+    """A scoreboard card. P1 = John = purple = TOP; P2 = Esther/AI = yellow = BOTTOM.
+    The name field doubles as the recording subject; both p1-name/p2-name always exist
+    so the recording callback's State always resolves (p2 is the AI in single-player)."""
+    pid = 'p1' if slot == 1 else 'p2'
+    return html.Div(
+        className=f'card player {pid} dimmable',
+        children=[
+            dcc.Input(id=f'{pid}-name', className='nameField pixel', type='text',
+                      value='', placeholder=f'Player {slot}', debounce=True, maxLength=14,
+                      autoComplete='off'),
+            html.Div('00', id=f'{pid}-score', className='score pixel'),
+        ],
+    )
+
 
 app.layout = html.Div(
-    id='main-container',
-    style={'backgroundColor': '#111', 'color': '#DDD', 'fontFamily': 'monospace', 'textAlign': 'center'},
+    className='bp bp-wrap',
     children=[
-        html.H1("BrainPong — 2-Player EOG" if TWO_PLAYER_MODE else "BrainPong — EOG"),
-        html.Div([
-            html.Button('Pause / Resume', id='pause-button', n_clicks=0, style={'marginRight': '20px'}),
-            html.Button('Start New Game', id='start-button', n_clicks=0),
-        ], style={'marginBottom': '10px'}),
-        # Player names — saved as each recording's subject. Editable; default P1/P2.
-        # p2-name always exists (hidden in single-player) so the recording callback's
-        # State resolves. Whole row hidden when there's no board to record.
         html.Div(
-            id='player-names-row',
-            style={'marginBottom': '10px',
-                   'display': 'block' if (EOG_MODE or TWO_PLAYER_MODE) and not NO_BOARD_MODE else 'none'},
-            children=[
-                html.Span('Recording as —', style={'color': '#888', 'fontSize': '13px', 'marginRight': '8px'}),
-                html.Label('P1:', style={'color': '#33ff66', 'fontSize': '13px', 'marginRight': '4px'}),
-                dcc.Input(id='p1-name', type='text', value='P1', debounce=True,
-                          style={'width': '110px', 'marginRight': '16px'}),
-                html.Label('P2:', style={'color': '#ff5252', 'fontSize': '13px', 'marginRight': '4px',
-                                         'display': 'inline' if TWO_PLAYER_MODE else 'none'}),
-                dcc.Input(id='p2-name', type='text', value='P2', debounce=True,
-                          style={'width': '110px',
-                                 'display': 'inline-block' if TWO_PLAYER_MODE else 'none'}),
-            ],
-        ),
-        html.H3(id='status-display', style={'fontSize': '24px', 'color': 'yellow', 'minHeight': '80px'}),
-        html.Div(
-            style={'display': 'inline-flex', 'alignItems': 'stretch'},
+            className='stage', id='game-stage',
             children=[
                 html.Div(
-                    style={'position': 'relative'},
+                    className='grid',
                     children=[
-                        html.Div(
-                            html.Canvas(id='pong-game-canvas', width=GAME_WIDTH, height=GAME_HEIGHT),
-                            style={'border': '2px solid #555'},
-                        ),
-                        # Glance-registered flash dots: blink when the detector fires a
-                        # LEFT/RIGHT for that player. P1 = bottom (green), P2 = top (red).
-                        # Opacity is driven each frame by the clientside fade callback.
-                        html.Div(id='flash-p2-left',  style={**_FLASH_DOT_BASE, 'top': '12px',    'left': '12px',  'backgroundColor': '#ff5252'}),
-                        html.Div(id='flash-p2-right', style={**_FLASH_DOT_BASE, 'top': '12px',    'right': '12px', 'backgroundColor': '#ff5252'}),
-                        html.Div(id='flash-p1-left',  style={**_FLASH_DOT_BASE, 'bottom': '12px', 'left': '12px',  'backgroundColor': '#33ff66'}),
-                        html.Div(id='flash-p1-right', style={**_FLASH_DOT_BASE, 'bottom': '12px', 'right': '12px', 'backgroundColor': '#33ff66'}),
-                        html.Div(id='winner-overlay', style={'display': 'none'}),
-                    ],
-                ),
-                html.Div(
-                    style={
-                        'display': 'flex', 'flexDirection': 'column',
-                        'justifyContent': 'space-between',
-                        'paddingLeft': '18px', 'paddingTop': '8px', 'paddingBottom': '8px',
-                    },
-                    children=[
-                        html.Div([
-                            html.Div(_P2_LABEL, style={'fontSize': '13px', 'color': '#888', 'marginBottom': '2px'}),
-                            html.Div(id='ai-score-display', children='0',
-                                     style={'fontSize': '32px', 'color': '#ff5252', 'fontWeight': 'bold'}),
+                        # LEFT — P1 card / controls / P2 card
+                        html.Div(className='col left', children=[
+                            _player_card(1),
+                            html.Div(className='controls', children=[
+                                html.Button(html.Img(src=_PAUSE_ICON, alt='Pause / Resume'),
+                                            id='pause-button', className='btn pause', n_clicks=0,
+                                            title='Pause / Resume'),
+                                html.Button(html.Img(src=_NEWGAME_ICON, alt='New Game'),
+                                            id='start-button', className='btn newgame', n_clicks=0,
+                                            title='New Game'),
+                            ]),
+                            _player_card(2),
                         ]),
-                        html.Div([
-                            html.Div(_P1_LABEL, style={'fontSize': '13px', 'color': '#888', 'marginBottom': '2px'}),
-                            html.Div(id='player-score-display', children='0',
-                                     style={'fontSize': '32px', 'color': '#33ff66', 'fontWeight': 'bold'}),
+                        # CENTER — square play field
+                        html.Div(className='col center', children=[
+                            html.Div(className='cabinet dimmable', id='cabinet', children=[
+                                html.Canvas(id='pong-game-canvas', width=GAME_WIDTH, height=GAME_HEIGHT),
+                            ]),
+                        ]),
+                        # RIGHT — live EOG feeds (P1 purple top, P2 yellow bottom)
+                        html.Div(className='col right', children=[
+                            html.Div(className='card wave p1 dimmable', children=[
+                                html.Div(className='screen', children=html.Canvas(id='wave-canvas-p1'))]),
+                            html.Div(className='card wave p2 dimmable', children=[
+                                html.Div(className='screen', children=html.Canvas(id='wave-canvas-p2'))]),
                         ]),
                     ],
                 ),
+                # Centered overlay text (calibration / game over / paused / start). Driven
+                # clientside by renderPong from app-status-store; the controls stay bright.
+                html.Div(className='game-overlay', id='game-overlay', children=[
+                    html.Div([
+                        html.Div(id='overlay-title', className='otitle pixel'),
+                        html.Div(id='overlay-sub', className='osub'),
+                        html.Div(id='overlay-hint', className='ohint'),
+                    ]),
+                ]),
+                # Kept only so manage_app_flow's status-display Output resolves; not shown.
+                html.H3(id='status-display', className='bp-hidden'),
             ],
         ),
-        html.Div(
-            style={'width': '800px', 'margin': '15px auto', 'textAlign': 'left',
-                   'padding': '10px', 'border': '1px solid #333', 'borderRadius': '6px'},
-            children=[html.Div([
-                html.Label('Ball Speed', style={'display': 'inline-block', 'width': '120px'}),
-                html.Div(
-                    dcc.Slider(
-                        id='ball-speed-slider', min=1, max=12, step=0.5,
-                        value=abs(INITIAL_BALL_SPEED_Y),
-                        marks={i: {'label': str(i), 'style': {'color': 'black', 'fontWeight': 'bold'}}
-                               for i in range(1, 13, 2)},
-                    ),
-                    style={'display': 'inline-block', 'width': '640px', 'verticalAlign': 'middle'},
-                ),
-            ])],
-        ),
-        # EOG detector tuning — live sliders (shown only when the detector runs)
-        html.Div(
-            style={'width': '800px', 'margin': '15px auto', 'textAlign': 'left',
-                   'padding': '10px', 'border': '1px solid #333', 'borderRadius': '6px',
-                   'display': 'block' if (EOG_MODE or TWO_PLAYER_MODE) else 'none'},
-            children=[
-                html.Div([
-                    html.Label('Detector',
-                               style={'display': 'inline-block', 'width': '170px'}),
-                    dcc.RadioItems(
-                        id='detector-toggle',
-                        options=[{'label': ' Velocity', 'value': 'velocity'},
-                                 {'label': ' Matched filter', 'value': 'matched'}],
-                        value='velocity', inline=True,
-                        style={'display': 'inline-block'},
-                        inputStyle={'marginLeft': '16px', 'marginRight': '4px'},
-                    ),
-                ]),
-                html.Div('(swap per run; the choice locks in on the next New Game — it '
-                         'sets which signal the baseline σ is measured on)',
-                         style={'fontSize': '11px', 'color': '#777', 'margin': '2px 0 8px 0'}),
-                html.Div([
-                    html.Label('Sigma Threshold (×σ)',
-                               style={'display': 'inline-block', 'width': '170px'}),
-                    html.Div(
-                        dcc.Slider(
-                            id='sigma-thr-slider', min=1, max=10, step=0.5,
-                            value=EOG_SIGMA_THR,
-                            marks={i: {'label': str(i), 'style': {'color': 'black', 'fontWeight': 'bold'}}
-                                   for i in range(1, 11)},
-                        ),
-                        style={'display': 'inline-block', 'width': '590px', 'verticalAlign': 'middle'},
-                    ),
-                ]),
-                html.Div(style={'height': '8px'}),
-                html.Div([
-                    html.Label('Glance Window (s)',
-                               style={'display': 'inline-block', 'width': '170px'}),
-                    html.Div(
-                        dcc.Slider(
-                            id='glance-window-slider', min=0.1, max=2.0, step=0.1,
-                            value=GLANCE_WINDOW_S,
-                            marks={v: {'label': str(v), 'style': {'color': 'black', 'fontWeight': 'bold'}}
-                                   for v in (0.1, 0.5, 1.0, 1.5, 2.0)},
-                        ),
-                        style={'display': 'inline-block', 'width': '590px', 'verticalAlign': 'middle'},
-                    ),
-                ]),
-                html.Div(style={'height': '8px'}),
-                html.Div([
-                    html.Label('High-pass (Hz)',
-                               style={'display': 'inline-block', 'width': '170px'}),
-                    html.Div(
-                        dcc.Slider(
-                            id='hpf-slider', min=0.1, max=2.0, step=0.1,
-                            value=EOG_HPF_HZ,
-                            marks={v: {'label': str(v), 'style': {'color': 'black', 'fontWeight': 'bold'}}
-                                   for v in (0.1, 0.5, 1.0, 1.5, 2.0)},
-                        ),
-                        style={'display': 'inline-block', 'width': '590px', 'verticalAlign': 'middle'},
-                    ),
-                ]),
-                html.Div(style={'height': '8px'}),
-                html.Div([
-                    html.Label('Low-pass (Hz)',
-                               style={'display': 'inline-block', 'width': '170px'}),
-                    html.Div(
-                        dcc.Slider(
-                            id='lpf-slider', min=10, max=100, step=5,
-                            value=EOG_LPF_HZ,
-                            marks={v: {'label': str(v), 'style': {'color': 'black', 'fontWeight': 'bold'}}
-                                   for v in (10, 30, 50, 70, 100)},
-                        ),
-                        style={'display': 'inline-block', 'width': '590px', 'verticalAlign': 'middle'},
-                    ),
-                ]),
-            ],
-        ),
-        # P1 EOG live plot
-        html.Div(
-            [
-                html.Div('Player 1 — HEOG' if TWO_PLAYER_MODE else '',
-                         style={'color': '#33ff66', 'fontSize': '13px', 'marginBottom': '2px'}),
-                dcc.Graph(id='eog-live-plot', config={'displayModeBar': False}),
-            ],
-            style={'width': '800px', 'margin': '0 auto',
-                   'display': 'block' if (EOG_MODE or TWO_PLAYER_MODE) else 'none'},
-        ),
-        # P2 EOG live plot (2-player only)
-        html.Div(
-            [
-                html.Div('Player 2 — HEOG',
-                         style={'color': '#ff5252', 'fontSize': '13px', 'marginBottom': '2px', 'marginTop': '10px'}),
-                dcc.Graph(id='eog-live-plot-p2', config={'displayModeBar': False}),
-            ],
-            style={'width': '800px', 'margin': '0 auto',
-                   'display': 'block' if TWO_PLAYER_MODE else 'none'},
-        ),
+        # ── Operator settings drawer: HIDDEN from players by default; toggled with the
+        #    G key (handled in render.js). Keeps every existing slider id so
+        #    update_settings / update_eog_tuning are byte-for-byte unchanged. ──
+        html.Div(id='tuning-drawer', className='tuning', style={'display': 'none'}, children=[
+            html.Div('⚙  Game & detector settings — press G to hide', className='tuning-head'),
+            _tuning_row('Ball speed', dcc.Slider(
+                id='ball-speed-slider', min=1, max=12, step=0.5, value=abs(INITIAL_BALL_SPEED_Y),
+                marks={i: _MK(i) for i in range(1, 13, 2)})),
+            _tuning_row('Detector', dcc.RadioItems(
+                id='detector-toggle',
+                options=[{'label': ' Velocity', 'value': 'velocity'},
+                         {'label': ' Matched filter', 'value': 'matched'}],
+                value='velocity', inline=True, inputStyle={'marginLeft': '16px', 'marginRight': '4px'})),
+            _tuning_row('Sigma threshold (×σ)', dcc.Slider(
+                id='sigma-thr-slider', min=1, max=10, step=0.5, value=EOG_SIGMA_THR,
+                marks={i: _MK(i) for i in range(1, 11)})),
+            _tuning_row('Glance window (s)', dcc.Slider(
+                id='glance-window-slider', min=0.1, max=2.0, step=0.1, value=GLANCE_WINDOW_S,
+                marks={v: _MK(v) for v in (0.1, 0.5, 1.0, 1.5, 2.0)})),
+            _tuning_row('High-pass (Hz)', dcc.Slider(
+                id='hpf-slider', min=0.1, max=2.0, step=0.1, value=EOG_HPF_HZ,
+                marks={v: _MK(v) for v in (0.1, 0.5, 1.0, 1.5, 2.0)})),
+            _tuning_row('Low-pass (Hz)', dcc.Slider(
+                id='lpf-slider', min=10, max=100, step=5, value=EOG_LPF_HZ,
+                marks={v: _MK(v) for v in (10, 30, 50, 70, 100)})),
+        ]),
+        # ── stores + intervals (unchanged) + two new waveform-display stores ──
         dcc.Store(id='settings-store',       data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH}),
         dcc.Store(id='eog-tuning-store',      data={'sigma_thr': EOG_SIGMA_THR, 'glance_window_s': GLANCE_WINDOW_S,
                                                     'lpf_hz': EOG_LPF_HZ, 'hpf_hz': EOG_HPF_HZ, 'detector': 'velocity'}),
@@ -423,6 +350,8 @@ app.layout = html.Div(
         dcc.Store(id='bci-command-store-p2', data={'command': 'NEUTRAL', 'seq': 0}),
         dcc.Store(id='key-press-store',      data={'p1_last': 'None', 'p1_seq': 0, 'p2_last': 'None', 'p2_seq': 0}),
         dcc.Store(id='rec-dummy-store'),   # sink for the recording callback (side-effect only)
+        dcc.Store(id='wave-store-p1'),     # display-only: filtered detector signal for the P1 feed
+        dcc.Store(id='wave-store-p2'),     # display-only: filtered detector signal for the P2 feed
         dcc.Interval(id='game-interval',   interval=GAME_INTERVAL_MS,       n_intervals=0, disabled=False),
         dcc.Interval(id='bci-interval',    interval=BCI_UPDATE_INTERVAL_MS,  n_intervals=0, disabled=True),
         dcc.Interval(id='status-interval', interval=500,                     n_intervals=0),
@@ -472,52 +401,33 @@ clientside_callback(
     Input('settings-store', 'data'),
 )
 
-# Glance-flash feedback: fade each of the four corner dots after its player's
-# detector fires a LEFT/RIGHT. Purely reactive to the command stores the state
-# machine already emits — no estimator, no new signal path. Runs every game tick
-# (16 ms) so the fade is smooth; command seq increments drive the (re)trigger.
+# Live EOG feed rendering (presentation only): draw each player's waveform canvas
+# whenever its wave store updates. Glance feedback now lives in the waveform's
+# green (LEFT) / red (RIGHT) bands, which replaces the old corner flash-dots.
 clientside_callback(
     """
-    function(n, c1, c2) {
-        var ds = window.dash_clientside;
-        if (!ds._flash) { ds._flash = {s1:-1, s2:-1, p1L:-1e12, p1R:-1e12, p2L:-1e12, p2R:-1e12}; }
-        var f = ds._flash, now = performance.now();
-        function tap(cmd, sk, Lk, Rk) {
-            if (cmd && typeof cmd.seq === 'number' && cmd.seq !== f[sk]) {
-                f[sk] = cmd.seq;
-                if (cmd.command === 'LEFT')       { f[Lk] = now; }
-                else if (cmd.command === 'RIGHT') { f[Rk] = now; }
-            }
+    function(data) {
+        if (window.dash_clientside && window.dash_clientside.renderWave) {
+            window.dash_clientside.renderWave('wave-canvas-p1', data);
         }
-        tap(c1, 's1', 'p1L', 'p1R');
-        tap(c2, 's2', 'p2L', 'p2R');
-        var FADE = 450.0;
-        function op(t) { var a = (now - t) / FADE; return a >= 1 ? 0 : (1 - a); }
-        var base = {position:'absolute', width:'24px', height:'24px', borderRadius:'50%',
-                    pointerEvents:'none'};
-        function sty(pos, color, o) {
-            var s = Object.assign({}, base, pos);
-            s.backgroundColor = color;
-            s.boxShadow = o > 0 ? '0 0 14px 4px ' + color : 'none';
-            s.opacity = o;
-            return s;
-        }
-        return [
-            sty({top:'12px',    left:'12px'},  '#ff5252', op(f.p2L)),
-            sty({top:'12px',    right:'12px'}, '#ff5252', op(f.p2R)),
-            sty({bottom:'12px', left:'12px'},  '#33ff66', op(f.p1L)),
-            sty({bottom:'12px', right:'12px'}, '#33ff66', op(f.p1R)),
-        ];
+        return null;
     }
     """,
-    Output('flash-p2-left',  'style'),
-    Output('flash-p2-right', 'style'),
-    Output('flash-p1-left',  'style'),
-    Output('flash-p1-right', 'style'),
-    Input('game-interval', 'n_intervals'),
-    State('bci-command-store', 'data'),
-    State('bci-command-store-p2', 'data'),
-    prevent_initial_call=True,
+    Output('wave-canvas-p1', 'className'),
+    Input('wave-store-p1', 'data'),
+)
+
+clientside_callback(
+    """
+    function(data) {
+        if (window.dash_clientside && window.dash_clientside.renderWave) {
+            window.dash_clientside.renderWave('wave-canvas-p2', data);
+        }
+        return null;
+    }
+    """,
+    Output('wave-canvas-p2', 'className'),
+    Input('wave-store-p2', 'data'),
 )
 
 # ==============================================================================
@@ -598,84 +508,84 @@ def clear_bci_stores_on_new_game(n_clicks):
     return dict(fresh), dict(fresh)
 
 
-EOG_DISPLAY_SECS = 8.0
+WAVE_WINDOW_S = 5.0     # seconds of live EOG feed shown per panel
+WAVE_POINTS   = 480     # peak-preserving downsample target sent to the canvas
 
 
-def _make_eog_figure(eog_st, brd, title, line_color, thr_color):
+def _decimate_peak(sig, n_out):
+    """Downsample to n_out points, keeping the max-|amplitude| sample per bucket so
+    saccade spikes survive. Presentation-only (feed display), never the detector."""
+    n = len(sig)
+    if n <= n_out:
+        return [round(float(v), 1) for v in sig]
+    idx = np.linspace(0, n, n_out + 1).astype(int)
+    out = []
+    for a, b in zip(idx[:-1], idx[1:]):
+        seg = sig[a:b] if b > a else sig[a:a + 1]
+        out.append(round(float(seg[int(np.argmax(np.abs(seg)))]), 1))
+    return out
+
+
+def _wave_payload(eog_st, brd):
+    """Compact display payload for a player's live EOG feed: the SAME filtered
+    detector signal the state machine thresholds (eog_diff → _eog_filter →
+    _eog_velocity → _detector_signal), peak-downsampled, plus the σ-threshold line.
+    Reuses the detection DSP for DISPLAY ONLY — it does not feed the detector, mutate
+    eog_st, or change any decision (the state machine still polls independently)."""
     sr = eog_st['sr']
-    if sr is None or brd is None:
+    if sr is None or brd is None or eog_st['ch_L'] is None:
         return None
-    n_req = int(EOG_DISPLAY_SECS * sr)
-    data  = brd.get_current_board_data(n_req)
+    data = brd.get_current_board_data(int(WAVE_WINDOW_S * sr))
     if data.shape[1] < 20:
         return None
-    diff_raw = eog_diff(data, eog_st['ch_R'], eog_st['ch_L'])
-    filtered = _eog_filter(diff_raw.copy(), sr,
-                           lpf_hz=eog_st.get('lpf_hz', EOG_LPF_HZ),
-                           hpf_hz=eog_st.get('hpf_hz', EOG_HPF_HZ))
-    vel      = _eog_velocity(filtered, sr)
-    sig      = _detector_signal(eog_st, vel)    # what the detector thresholds → what we plot
-    matched  = eog_st.get('detector') == 'matched' and eog_st.get('mf_template') is not None
-    n_pts    = len(sig)
-    t        = np.linspace(-n_pts / sr, 0, n_pts)
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=t, y=sig, mode='lines',
-                             name='matched' if matched else 'velocity',
-                             line=dict(color=line_color, width=1)))
-    sigma = eog_st['baseline_sigma']            # detector-signal noise floor from calibration
-    if sigma is not None:
-        sig_thr = eog_st.get('sigma_thr', EOG_SIGMA_THR)   # live value from the slider
-        thr = sig_thr * sigma
-        fig.add_hline(y= thr, line_dash='dash', line_color=thr_color,
-                      annotation_text=f'+{sig_thr:.1f}σ', annotation_font_color=thr_color)
-        fig.add_hline(y=-thr, line_dash='dash', line_color=thr_color,
-                      annotation_text=f'-{sig_thr:.1f}σ', annotation_font_color=thr_color)
-    peak = max(float(np.abs(sig).max()) * 1.3, 500.0) if sig.size else 500.0
-    ylabel = 'matched-filter response' if matched else 'µV/s (velocity)'
-    fig.update_layout(
-        template='plotly_dark', paper_bgcolor='#111111', plot_bgcolor='#111111',
-        margin=dict(l=50, r=30, t=30, b=40), height=200,
-        title=dict(text=title, font=dict(size=12, color='#aaa'), x=0.5),
-        xaxis=dict(title='time (s)', range=[-EOG_DISPLAY_SECS, 0], color='#666'),
-        yaxis=dict(title=ylabel, range=[-peak, peak], color='#666'),
-        showlegend=False,
-    )
-    return fig
+    diff = eog_diff(data, eog_st['ch_R'], eog_st['ch_L'])
+    filt = _eog_filter(diff.copy(), sr,
+                       lpf_hz=eog_st.get('lpf_hz', EOG_LPF_HZ),
+                       hpf_hz=eog_st.get('hpf_hz', EOG_HPF_HZ))
+    vel  = _eog_velocity(filt, sr)
+    sig  = _detector_signal(eog_st, vel)
+    sigma   = eog_st['baseline_sigma']
+    sig_thr = eog_st.get('sigma_thr', EOG_SIGMA_THR)
+    thr = round(float(sig_thr * sigma), 1) if sigma else None
+    return {'y': _decimate_peak(sig, WAVE_POINTS), 'thr': thr,
+            'sigma_thr': round(float(sig_thr), 1), 'win_s': WAVE_WINDOW_S}
 
 
+# Live-feed store fills, on the BCI tick (100 ms, enabled only in CALIBRATING/PLAYING),
+# so each feed is live during play/calibration and holds its last frame (dimmed) while
+# paused or on the game-over screen. A clientside callback draws the canvas from the store.
 @app.callback(
-    Output('eog-live-plot', 'figure'),
-    Input('status-interval', 'n_intervals'),
+    Output('wave-store-p1', 'data'),
+    Input('bci-interval', 'n_intervals'),
     State('app-status-store', 'data'),
     prevent_initial_call=True,
 )
-def update_eog_plot(_, app_status):
+def update_wave_store_p1(_, app_status):
     if not (EOG_MODE or TWO_PLAYER_MODE) or board_p1 is None or eog_state['ch_L'] is None:
         raise PreventUpdate
-    if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING', 'PAUSED'):
+    if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING'):
         raise PreventUpdate
-    fig = _make_eog_figure(eog_state, board_p1, 'P1 HEOG  (R − L, filtered)', '#aaffaa', 'orange')
-    if fig is None:
+    payload = _wave_payload(eog_state, board_p1)
+    if payload is None:
         raise PreventUpdate
-    return fig
+    return payload
 
 
 @app.callback(
-    Output('eog-live-plot-p2', 'figure'),
-    Input('status-interval', 'n_intervals'),
+    Output('wave-store-p2', 'data'),
+    Input('bci-interval', 'n_intervals'),
     State('app-status-store', 'data'),
     prevent_initial_call=True,
 )
-def update_eog_plot_p2(_, app_status):
+def update_wave_store_p2(_, app_status):
     if not TWO_PLAYER_MODE or board_p2 is None or eog_state_p2['ch_L'] is None:
         raise PreventUpdate
-    if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING', 'PAUSED'):
+    if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING'):
         raise PreventUpdate
-    fig = _make_eog_figure(eog_state_p2, board_p2, 'P2 HEOG  (R − L, filtered)', '#ffaaaa', 'cyan')
-    if fig is None:
+    payload = _wave_payload(eog_state_p2, board_p2)
+    if payload is None:
         raise PreventUpdate
-    return fig
+    return payload
 
 
 @app.callback(
@@ -698,7 +608,7 @@ def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, detector):
     """Live-apply the detector knobs from the browser controls.
 
     Writes straight into both players' state dicts (mutated in place). _run_eog_sm
-    reads sigma_thr / glance_window_s each tick, and _poll_eog / _make_eog_figure
+    reads sigma_thr / glance_window_s each tick, and _poll_eog / _wave_payload
     read hpf_hz / lpf_hz / detector each poll — so every knob takes effect on the
     next detector poll without a restart, and all survive recalibration
     (_reset_eog_st keeps them), so a New Game locks in whatever the controls read.
@@ -973,35 +883,10 @@ def check_winner(game_state, app_status):
     return no_update
 
 
-@app.callback(
-    Output('winner-overlay', 'style'),
-    Output('winner-overlay', 'children'),
-    Input('app-status-store', 'data'),
-)
-def update_winner_overlay(app_status):
-    if app_status and app_status.get('status') == 'GAME_OVER':
-        winner = app_status.get('winner', '???')
-        top_wins = winner in ('AI', 'P2')
-        text_color = '#ff5252' if top_wins else '#33ff66'
-        display_map = {'AI': 'AI', 'Player': 'Player', 'P1': 'Player 1', 'P2': 'Player 2'}
-        display_name = display_map.get(winner, winner)
-        return (
-            {
-                'position': 'absolute', 'top': '0', 'left': '0',
-                'width': '100%', 'height': '100%',
-                'backgroundColor': 'rgba(0,0,0,0.82)',
-                'display': 'flex', 'flexDirection': 'column',
-                'alignItems': 'center', 'justifyContent': 'center',
-                'zIndex': '10',
-            },
-            html.Div([
-                html.Div(f"{display_name} Wins!!!",
-                         style={'fontSize': '64px', 'color': text_color, 'fontWeight': 'bold'}),
-                html.Div("Click  Start New Game  to play again",
-                         style={'fontSize': '18px', 'color': '#ccc', 'marginTop': '16px'}),
-            ]),
-        )
-    return {'display': 'none'}, ''
+# The GAME_OVER (and calibration / paused / start) overlay is rendered clientside by
+# render.js::renderPong straight from app-status-store + game-state-store, so there is
+# no server-side winner-overlay callback here anymore. check_winner still drives the
+# GAME_OVER transition (game logic); the overlay is pure presentation on top of it.
 
 
 @app.callback(
