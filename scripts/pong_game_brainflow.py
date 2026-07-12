@@ -1108,8 +1108,15 @@ def _rec_boards():
 
 
 def _start_recording(p1_name, p2_name):
-    """Snapshot per-player metadata + live config at New Game. Discards any unsaved
-    in-progress recording (restarting mid-game abandons that game's data)."""
+    """Snapshot per-player metadata + live config at New Game.
+
+    Save-and-restart: if a recording is still in progress (a game abandoned via New
+    Game without reaching GAME_OVER), flush it to disk FIRST so no electrode data is
+    lost, then start the fresh block. _stop_and_save_recording is a no-op when nothing
+    is active (first game of the session, or already saved at GAME_OVER), so this never
+    double-saves."""
+    if _rec['active']:
+        _stop_and_save_recording()
     boards = _rec_boards()
     if not boards:
         return
