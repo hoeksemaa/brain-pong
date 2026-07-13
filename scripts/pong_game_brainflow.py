@@ -33,6 +33,10 @@ _cli_parser = argparse.ArgumentParser(
         '  paddle and the keys instead log a sample-pinned intention label into the\n'
         '  recording (p1_left/p1_right/p1_blink, p2_*) to build a labeled training set.\n'
         '\n'
+        'In any mode, the dumbbell button (next to pause / new-game) enters TRAINING:\n'
+        'no ball, no score — on-field prompts cue each player to sweep their paddle\n'
+        'all the way left, then right, in a loop. New Game exits back to a real game.\n'
+        '\n'
         'Note: --eog cannot be combined with --no-board or --2player.'
     ),
     epilog=(
@@ -77,7 +81,7 @@ from brainpong.eog_core import (
     _run_eog_sm, _reset_eog_st, pipeline_description,
     _make_velocity_template, _matched_filter, begin_play_settle,
 )
-from brainpong.game_logic import advance_paddle_zone
+from brainpong.game_logic import advance_paddle_zone, next_training_target
 from brainpong.recording import save_eog_recording, map_events_to_samples
 
 # ==============================================================================
@@ -151,8 +155,11 @@ sampling_rate = 0      # model-level; both X8s report the same rate
 eog_state    = _make_eog_state()
 eog_state_p2 = _make_eog_state()
 
-# In-game recording state: snapshotted on New Game, flushed to npz on Game Over.
-_rec = {'active': False, 'start_time': None, 'players': [], 'events': [], 'last_status': None}
+# In-game recording state: snapshotted on New Game / Training, flushed to npz on
+# Game Over (or save-and-restart on the next New Game / Training click).
+# mode: 'game' | 'training' — training sessions get a 'training' tag in the npz.
+_rec = {'active': False, 'start_time': None, 'players': [], 'events': [],
+        'last_status': None, 'mode': 'game'}
 
 
 def _detector_signal(eog_st, vel):
@@ -221,6 +228,9 @@ def get_initial_game_state():
         'ai_zone_idx': CENTER_ZONE, 'ai_move_timer': 0,
         'zone_idx': CENTER_ZONE,    'last_label_seq': None,    'last_bci_seq': None,
         'zone_idx_p2': CENTER_ZONE, 'last_label_seq_p2': None, 'last_bci_seq_p2': None,
+        # TRAINING-mode prompt targets (render.js draws them; harmless during play).
+        # Both prompts always start by asking for LEFT.
+        'train_target': 'left', 'train_target_p2': 'left',
         'player_score': 0, 'ai_score': 0, 'winner': None,
     }
 
@@ -236,6 +246,13 @@ _NEWGAME_ICON = _ICON(
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='#f4ead2' "
     "stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'>"
     "<path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 3.5V8.2H15.3'/></svg>")
+_TRAINING_ICON = _ICON(   # dumbbell: outer + inner plates, bar through the middle
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='#f4ead2'>"
+    "<rect x='1.5' y='9' width='2.6' height='6' rx='1.1'/>"
+    "<rect x='4.9' y='6.4' width='3' height='11.2' rx='1.2'/>"
+    "<rect x='7' y='10.6' width='10' height='2.8' rx='1.2'/>"
+    "<rect x='16.1' y='6.4' width='3' height='11.2' rx='1.2'/>"
+    "<rect x='19.9' y='9' width='2.6' height='6' rx='1.1'/></svg>")
 
 _MK = lambda v: {'label': str(v), 'style': {'color': '#a9bcd0'}}   # slider marks (dark bg)
 
@@ -283,6 +300,9 @@ app.layout = html.Div(
                                 html.Button(html.Img(src=_NEWGAME_ICON, alt='New Game'),
                                             id='start-button', className='btn newgame', n_clicks=0,
                                             title='New Game'),
+                                html.Button(html.Img(src=_TRAINING_ICON, alt='Training Mode'),
+                                            id='training-button', className='btn training', n_clicks=0,
+                                            title='Training Mode'),
                             ]),
                             _player_card(2),
                         ]),
@@ -341,11 +361,12 @@ app.layout = html.Div(
                 marks={v: _MK(v) for v in (10, 30, 50, 70, 100)})),
         ]),
         # ── stores + intervals (unchanged) + two new waveform-display stores ──
-        dcc.Store(id='settings-store',       data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH}),
+        dcc.Store(id='settings-store',       data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH,
+                                                    'two_player': TWO_PLAYER_MODE}),
         dcc.Store(id='eog-tuning-store',      data={'sigma_thr': EOG_SIGMA_THR, 'glance_window_s': GLANCE_WINDOW_S,
                                                     'lpf_hz': EOG_LPF_HZ, 'hpf_hz': EOG_HPF_HZ, 'detector': 'velocity'}),
         dcc.Store(id='game-state-store',     data=get_initial_game_state()),
-        dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0}),
+        dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0, 'mode': 'game'}),
         dcc.Store(id='bci-command-store',    data={'command': 'NEUTRAL', 'seq': 0}),
         dcc.Store(id='bci-command-store-p2', data={'command': 'NEUTRAL', 'seq': 0}),
         dcc.Store(id='key-press-store',      data={'p1_last': 'None', 'p1_seq': 0, 'p2_last': 'None', 'p2_seq': 0}),
@@ -443,19 +464,22 @@ def update_bci_command(_, app_status):
     if board_p1 is None or eog_state['ch_L'] is None:
         return no_update
     status = app_status.get('status')
-    if status == 'PLAYING' and eog_state.get('_prev_status') != 'PLAYING':
+    # TRAINING is a full detector consumer, exactly like PLAYING: settle on entry,
+    # poll every tick, and let fires move the paddle (that's the point of training).
+    if status in ('PLAYING', 'TRAINING') and \
+            eog_state.get('_prev_status') not in ('PLAYING', 'TRAINING'):
         begin_play_settle(eog_state, time.time())   # mute the opening-second transient
     eog_state['_prev_status'] = status
-    if status not in ('PLAYING', 'CALIBRATING'):
+    if status not in ('PLAYING', 'CALIBRATING', 'TRAINING'):
         return no_update
     new_sig = _poll_eog(eog_state, board_p1)
     if new_sig is None:
         return no_update
     result = _run_eog_sm(eog_state, new_sig, time.time(), label='P1')
-    # Only PLAYING may move a paddle. During CALIBRATING the SM still runs (it must
-    # accumulate the baseline), but once σ locks it can fire in the ~0.5 s tail before
-    # PLAYING begins — discard that so no command ever reaches the store before play.
-    if status != 'PLAYING':
+    # Only PLAYING/TRAINING may move a paddle. During CALIBRATING the SM still runs
+    # (it must accumulate the baseline), but once σ locks it can fire in the ~0.5 s
+    # tail before play begins — discard that so no command reaches the store early.
+    if status not in ('PLAYING', 'TRAINING'):
         return no_update
     return result if result is not None else no_update
 
@@ -472,17 +496,18 @@ def update_bci_command_p2(_, app_status):
     if board_p2 is None or eog_state_p2['ch_L'] is None:
         return no_update
     status = app_status.get('status')
-    if status == 'PLAYING' and eog_state_p2.get('_prev_status') != 'PLAYING':
+    if status in ('PLAYING', 'TRAINING') and \
+            eog_state_p2.get('_prev_status') not in ('PLAYING', 'TRAINING'):
         begin_play_settle(eog_state_p2, time.time())   # mute the opening-second transient
     eog_state_p2['_prev_status'] = status
-    if status not in ('PLAYING', 'CALIBRATING'):
+    if status not in ('PLAYING', 'CALIBRATING', 'TRAINING'):
         return no_update
     new_sig = _poll_eog(eog_state_p2, board_p2)
     if new_sig is None:
         return no_update
     result = _run_eog_sm(eog_state_p2, new_sig, time.time(), label='P2')
-    # Only PLAYING may move a paddle (closes the calibration-tail fire; see P1).
-    if status != 'PLAYING':
+    # Only PLAYING/TRAINING may move a paddle (closes the calibration-tail fire; see P1).
+    if status not in ('PLAYING', 'TRAINING'):
         return no_update
     return result if result is not None else no_update
 
@@ -491,10 +516,12 @@ def update_bci_command_p2(_, app_status):
     Output('bci-command-store',    'data', allow_duplicate=True),
     Output('bci-command-store-p2', 'data', allow_duplicate=True),
     Input('start-button', 'n_clicks'),
+    Input('training-button', 'n_clicks'),
+    State('app-status-store', 'data'),
     prevent_initial_call=True,
 )
-def clear_bci_stores_on_new_game(n_clicks):
-    """Wipe both command stores to NEUTRAL/seq0 on New Game (belt-and-suspenders).
+def clear_bci_stores_on_restart(start_clicks, training_clicks, app_status):
+    """Wipe both command stores to NEUTRAL/seq0 on New Game / Training (belt-and-suspenders).
 
     The primary guard against a start-of-rally twitch is advance_paddle_zone's
     adopt-on-first-tick rule; this second layer keeps the store itself clean so no
@@ -502,7 +529,17 @@ def clear_bci_stores_on_new_game(n_clicks):
     in it. Pairs with _reset_eog_st resetting cmd_seq, so a new game's seq numbering
     restarts from 0. allow_duplicate: update_bci_command / _p2 also write these stores.
     """
-    if not n_clicks:
+    if not (start_clicks or training_clicks):
+        return no_update, no_update
+    # A redundant Training click mid-training is a no-op in manage_app_flow; be a
+    # strict no-op here too — the wipe could otherwise swallow a just-fired EOG
+    # command the 16 ms physics tick hasn't consumed yet (one lost glance per click).
+    st = app_status or {}
+    in_training_flow = (st.get('status') == 'TRAINING' or
+                        (st.get('mode') == 'training' and
+                         st.get('status') in ('INSTRUCTIONS', 'CALIBRATING')))
+    triggered = {t['prop_id'].split('.')[0] for t in (ctx.triggered or [])}
+    if 'start-button' not in triggered and in_training_flow:
         return no_update, no_update
     fresh = {'command': 'NEUTRAL', 'seq': 0}
     return dict(fresh), dict(fresh)
@@ -563,7 +600,7 @@ def _wave_payload(eog_st, brd):
 def update_wave_store_p1(_, app_status):
     if not (EOG_MODE or TWO_PLAYER_MODE) or board_p1 is None or eog_state['ch_L'] is None:
         raise PreventUpdate
-    if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING'):
+    if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING', 'TRAINING'):
         raise PreventUpdate
     payload = _wave_payload(eog_state, board_p1)
     if payload is None:
@@ -580,7 +617,7 @@ def update_wave_store_p1(_, app_status):
 def update_wave_store_p2(_, app_status):
     if not TWO_PLAYER_MODE or board_p2 is None or eog_state_p2['ch_L'] is None:
         raise PreventUpdate
-    if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING'):
+    if (app_status or {}).get('status', '') not in ('CALIBRATING', 'PLAYING', 'TRAINING'):
         raise PreventUpdate
     payload = _wave_payload(eog_state_p2, board_p2)
     if payload is None:
@@ -593,7 +630,10 @@ def update_wave_store_p2(_, app_status):
     Input('ball-speed-slider', 'value'),
 )
 def update_settings(ball_speed):
-    return {'ball_speed': ball_speed, 'paddle_width': PADDLE_WIDTH}
+    # two_player rides along so render.js knows whether the bottom paddle is a human
+    # (draw a P2 training prompt) or the AI (no prompt).
+    return {'ball_speed': ball_speed, 'paddle_width': PADDLE_WIDTH,
+            'two_player': TWO_PLAYER_MODE}
 
 
 @app.callback(
@@ -626,6 +666,77 @@ def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, detector):
             'hpf_hz': hpf_hz, 'lpf_hz': lpf_hz, 'detector': detector}
 
 
+def _advance_training(state, bci_command, bci_command_p2, key_data):
+    """One 16 ms tick of TRAINING mode.
+
+    Paddles move EXACTLY as in play — same key seq-adopt pattern, same
+    advance_paddle_zone for EOG commands (the input blocks mirror
+    update_game_physics' PLAYING path byte-for-byte) — but there is no ball, no
+    powerups, no AI motion, and the score never changes. Each human player has a
+    prompt target ('left'/'right'); reaching the commanded edge flips it (see
+    game_logic.next_training_target) and, when recording, logs a sample-pinned
+    pN_target_<new-direction> event — i.e. the marker names the NEW instruction,
+    so the completed sweep is the marker's opposite.
+    """
+    kbd_moves = NO_BOARD_MODE or not (EOG_MODE or TWO_PLAYER_MODE)
+    state['balls'], state['powerups'] = [], []   # never a ball in training
+    # Forced every tick, not trusted from the entry reset: a physics tick already in
+    # flight when Training was clicked can write the OLD game state (with its scores)
+    # after manage_app_flow's get_initial_game_state reset lands, and it would stick.
+    state['player_score'], state['ai_score'], state['winner'] = 0, 0, None
+
+    # --- P1 keys + EOG (mirrors the PLAYING path) ---
+    zone_idx = state.get('zone_idx', CENTER_ZONE)
+    p1_seq = key_data.get('p1_seq', 0)
+    prev_p1_seq = state.get('last_label_seq')
+    if prev_p1_seq is None:                       # first tick: adopt without logging
+        state['last_label_seq'] = p1_seq
+    elif p1_seq != prev_p1_seq:
+        state['last_label_seq'] = p1_seq
+        intent = key_data.get('p1_last', 'None')
+        if intent in ('left', 'right', 'blink'):
+            _log_event(f'p1_{intent}')
+            if kbd_moves and intent == 'left':    zone_idx = max(0, zone_idx - 1)
+            elif kbd_moves and intent == 'right': zone_idx = min(MAX_ZONE, zone_idx + 1)
+    zone_idx, state['last_bci_seq'] = advance_paddle_zone(
+        zone_idx, bci_command, state.get('last_bci_seq'), min_zone=0, max_zone=MAX_ZONE)
+    state['zone_idx'] = zone_idx
+    state['player_x'] = PADDLE_POSITIONS[zone_idx]
+    new_target = next_training_target(zone_idx, state.get('train_target', 'left'),
+                                      min_zone=0, max_zone=MAX_ZONE)
+    if new_target != state.get('train_target'):
+        _log_event(f'p1_target_{new_target}')
+        state['train_target'] = new_target
+
+    # --- P2 (human in 2-player only; in single-player the AI paddle just idles —
+    #     there is no ball to chase, and it gets no prompt) ---
+    if TWO_PLAYER_MODE:
+        zone_idx_p2 = state.get('zone_idx_p2', CENTER_ZONE)
+        p2_seq = key_data.get('p2_seq', 0)
+        prev_p2_seq = state.get('last_label_seq_p2')
+        if prev_p2_seq is None:                   # first tick: adopt without logging
+            state['last_label_seq_p2'] = p2_seq
+        elif p2_seq != prev_p2_seq:
+            state['last_label_seq_p2'] = p2_seq
+            intent = key_data.get('p2_last', 'None')
+            if intent in ('left', 'right', 'blink'):
+                _log_event(f'p2_{intent}')
+                if kbd_moves and intent == 'left':    zone_idx_p2 = max(0, zone_idx_p2 - 1)
+                elif kbd_moves and intent == 'right': zone_idx_p2 = min(MAX_ZONE, zone_idx_p2 + 1)
+        zone_idx_p2, state['last_bci_seq_p2'] = advance_paddle_zone(
+            zone_idx_p2, bci_command_p2, state.get('last_bci_seq_p2'),
+            min_zone=0, max_zone=MAX_ZONE)
+        state['zone_idx_p2'] = zone_idx_p2
+        state['ai_x']        = PADDLE_POSITIONS[zone_idx_p2]
+        new_target_p2 = next_training_target(zone_idx_p2, state.get('train_target_p2', 'left'),
+                                             min_zone=0, max_zone=MAX_ZONE)
+        if new_target_p2 != state.get('train_target_p2'):
+            _log_event(f'p2_target_{new_target_p2}')
+            state['train_target_p2'] = new_target_p2
+
+    return state
+
+
 @app.callback(
     Output('game-state-store', 'data', allow_duplicate=True),
     Input('game-interval', 'n_intervals'),
@@ -638,6 +749,8 @@ def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, detector):
     prevent_initial_call=True,
 )
 def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_data, settings):
+    if app_status.get('status') == 'TRAINING':
+        return _advance_training(state, bci_command, bci_command_p2, key_data)
     if app_status.get('status') != 'PLAYING':
         return no_update
 
@@ -899,21 +1012,37 @@ def check_winner(game_state, app_status):
     Input('status-interval', 'n_intervals'),
     Input('pause-button', 'n_clicks'),
     Input('start-button', 'n_clicks'),
+    Input('training-button', 'n_clicks'),
     State('app-status-store', 'data'),
     prevent_initial_call=True,
 )
-def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
-    triggered_id   = ctx.triggered_id or 'status-interval'
+def manage_app_flow(status_n, pause_clicks, start_clicks, training_clicks, app_status):
+    # ctx.triggered can hold MORE than one prop: under this app's constant 16 ms
+    # callback churn the renderer can coalesce a button click with a 500 ms interval
+    # tick into ONE dispatch, and branching on the single ctx.triggered_id then lets
+    # the interval mask the click (observed live: a swallowed Training click).
+    # Collect every trigger and give buttons priority — the interval's countdown work
+    # just waits for its next tick.
+    triggered      = {t['prop_id'].split('.')[0] for t in (ctx.triggered or [])}
     status         = app_status.get('status', 'STARTING')
     countdown      = app_status.get('countdown', 0)
-    new_status     = status
+    mode           = app_status.get('mode', 'game')   # 'game' | 'training' — where the
+    new_status     = status                           # calibration countdown lands
     new_game_state = no_update
 
     needs_eog_flow = EOG_MODE or (TWO_PLAYER_MODE and not NO_BOARD_MODE)
+    # Already in training, or counting down toward it? (used by the button guards)
+    in_training_flow = (status == 'TRAINING' or
+                        (mode == 'training' and status in ('INSTRUCTIONS', 'CALIBRATING')))
 
-    if triggered_id == 'pause-button' and pause_clicks > 0:
-        new_status = 'PAUSED' if status != 'PAUSED' else 'PLAYING'
-    elif triggered_id == 'start-button' and start_clicks > 0:
+    if 'pause-button' in triggered and pause_clicks > 0:
+        # Pause is inert in training (and on the way into it): there is nothing to
+        # pause — no ball, no score — and PAUSED's toggle always resumes to PLAYING,
+        # which would silently eject the players from training.
+        if not in_training_flow:
+            new_status = 'PAUSED' if status != 'PAUSED' else 'PLAYING'
+    elif 'start-button' in triggered and start_clicks > 0:
+        mode           = 'game'
         new_game_state = get_initial_game_state()
         if needs_eog_flow:
             new_status = 'INSTRUCTIONS'
@@ -923,7 +1052,21 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
                 _reset_eog_st(st)
         else:
             new_status = 'PLAYING'
-    elif triggered_id == 'status-interval':
+    elif 'training-button' in triggered and training_clicks > 0:
+        # Re-clicking while already in (or counting down into) training does nothing;
+        # from anywhere else it behaves like New Game but lands in TRAINING.
+        if not in_training_flow:
+            mode           = 'training'
+            new_game_state = get_initial_game_state()
+            if needs_eog_flow:
+                new_status = 'INSTRUCTIONS'
+                countdown  = INSTRUCTIONS_S
+                states_to_reset = [eog_state, eog_state_p2] if TWO_PLAYER_MODE else [eog_state]
+                for st in states_to_reset:
+                    _reset_eog_st(st)
+            else:
+                new_status = 'TRAINING'
+    else:   # status-interval tick (or the pre-ctx fallback)
         if status == 'STARTING':
             new_status = 'PLAYING' if not needs_eog_flow else status
         elif status == 'INSTRUCTIONS':
@@ -934,7 +1077,7 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
         elif status == 'CALIBRATING':
             countdown -= 0.5
             if countdown <= 0:
-                new_status = 'PLAYING'
+                new_status = 'TRAINING' if mode == 'training' else 'PLAYING'
 
     if new_status == 'INSTRUCTIONS':
         msg = html.Div([
@@ -960,15 +1103,17 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, app_status):
             msg = "PLAYING — glance left/right to move  |  🔇 no talking  |  ←/→ to override"
         else:
             msg = "PLAYING — ←/→ keys"
+    elif new_status == 'TRAINING':
+        msg = "TRAINING — follow the on-field prompts (no ball, no score)"
     elif new_status == 'PAUSED':
         msg = "PAUSED"
     else:
         msg = ""
 
-    bci_disabled  = NO_BOARD_MODE or (new_status not in ('PLAYING', 'CALIBRATING'))
+    bci_disabled  = NO_BOARD_MODE or (new_status not in ('PLAYING', 'CALIBRATING', 'TRAINING'))
     game_disabled = new_status in ('PAUSED', 'GAME_OVER')
 
-    new_app_status = {'status': new_status, 'countdown': countdown}
+    new_app_status = {'status': new_status, 'countdown': countdown, 'mode': mode}
     if app_status.get('winner') and new_status == 'GAME_OVER':
         new_app_status['winner'] = app_status['winner']
 
@@ -993,19 +1138,20 @@ def _rec_boards():
     return out
 
 
-def _start_recording(p1_name, p2_name):
-    """Snapshot per-player metadata + live config at New Game.
+def _start_recording(p1_name, p2_name, mode='game'):
+    """Snapshot per-player metadata + live config at New Game / Training.
 
     Save-and-restart: if a recording is still in progress (a game abandoned via New
-    Game without reaching GAME_OVER), flush it to disk FIRST so no electrode data is
-    lost, then start the fresh block. _stop_and_save_recording is a no-op when nothing
-    is active (first game of the session, or already saved at GAME_OVER), so this never
-    double-saves."""
+    Game without reaching GAME_OVER — or any training session, which never reaches
+    GAME_OVER), flush it to disk FIRST so no electrode data is lost, then start the
+    fresh block. _stop_and_save_recording is a no-op when nothing is active (first
+    game of the session, or already saved at GAME_OVER), so this never double-saves."""
     if _rec['active']:
         _stop_and_save_recording()
     boards = _rec_boards()
     if not boards:
         return
+    _rec['mode'] = mode
     names = {'P1': (p1_name or 'P1').strip() or 'P1',
              'P2': (p2_name or 'P2').strip() or 'P2'}
     players = [{
@@ -1021,7 +1167,7 @@ def _start_recording(p1_name, p2_name):
     _rec['players']    = players
     _rec['events']     = []
     summary = ', '.join(f"{p['slot']}={p['subject']}(v{p['version']})" for p in players)
-    print(f"[rec] started — {len(players)} player(s): {summary}")
+    print(f"[rec] started ({_rec['mode']}) — {len(players)} player(s): {summary}")
 
 
 def _log_event(label):
@@ -1063,14 +1209,21 @@ def _save_one_recording(p, start_t, stop_t, n_players, stamp):
                       np.ascontiguousarray(span[p['ch_R']].astype(np.float64))])   # (2,N)
     n_samp = eeg.shape[1]
     detector = p.get('detector', 'velocity')
-    notes = (f"in-game pong recording ({n_players}-player); board v{p['version']} on "
+    training = _rec.get('mode') == 'training'
+    session  = 'training-mode' if training else 'pong'
+    notes = (f"in-game {session} recording ({n_players}-player); board v{p['version']} on "
              f"{p['port']}; CH3-8 firmware-off so only the EOG pair stored "
              f"(row0=ch_L, row1=ch_R). {pipeline_description(detector)}")
+    if training:
+        notes += (" Training mode: no ball; on-field prompts cue full-width paddle sweeps."
+                  " pN_target_<dir> events mark each prompt flip (the NEW instruction;"
+                  " the just-completed sweep is its opposite); both prompts start LEFT"
+                  " at train_start.")
     path = save_eog_recording(
         REC_OUT_DIR, p['subject'], eeg, unix_start, sr,
         gain=REC_GAIN, board=f"CERELOG_X8 unit:v{p['version']}", montage=REC_MONTAGE,
         notes=notes, tags=['in-game', f'{n_players}-player', f"board-v{p['version']}",
-                           f"detector-{detector}"],
+                           f"detector-{detector}"] + (['training'] if training else []),
         ch_L=0, ch_R=1, n_players=n_players, board_version=p['version'],
         serial_port=p['port'], player_slot=p['slot'], sigma_thr=p['sigma_thr'],
         hpf_hz=p['hpf_hz'], lpf_hz=p['lpf_hz'], glance_window_s=p['glance_window_s'],
@@ -1090,16 +1243,30 @@ def manage_recording(app_status, p1_name, p2_name):
     if NO_BOARD_MODE or not (EOG_MODE or TWO_PLAYER_MODE):
         return no_update
     status = (app_status or {}).get('status')
+    mode   = (app_status or {}).get('mode', 'game')
     prev   = _rec['last_status']
     if status == prev:
+        # A mid-INSTRUCTIONS mode switch (Training clicked during a game's countdown,
+        # or New Game during training's) flips app-status mode WITHOUT a status
+        # transition, so the dedup above would keep _rec['mode'] stale and the npz
+        # would be saved with the wrong training/game identity. Retag the live block —
+        # the countdown restarted with the click, so its content matches the new mode.
+        if status == 'INSTRUCTIONS' and _rec['active'] and mode != _rec['mode']:
+            _rec['mode'] = mode
+            print(f"[rec] mode switched mid-countdown — block retagged '{mode}'")
         return no_update
     _rec['last_status'] = status
     if status == 'INSTRUCTIONS':
-        _start_recording(p1_name, p2_name)
+        _start_recording(p1_name, p2_name, mode=mode)
     elif status == 'CALIBRATING' and prev == 'INSTRUCTIONS':
         _log_event('calib_start')
     elif status == 'PLAYING' and prev == 'CALIBRATING':
         _log_event('play_start')
+    elif status == 'TRAINING' and prev == 'CALIBRATING':
+        _log_event('train_start')                  # both prompts start by asking LEFT
+        _log_event('p1_target_left')
+        if TWO_PLAYER_MODE:
+            _log_event('p2_target_left')
     elif status == 'GAME_OVER':
         _stop_and_save_recording()
     return no_update

@@ -142,6 +142,50 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         ctx.save(); ctx.shadowColor = COL_BALL; ctx.shadowBlur = 18; ctx.fillStyle = COL_BALL;
         for (const b of (gs.balls || [])) { ctx.beginPath(); ctx.arc(b.x, flipY(b.y), BALL_RADIUS, 0, 2 * Math.PI); ctx.fill(); }
         ctx.restore();
+        drawTrainingPrompts(ctx, W, H);
+    }
+
+    // ---- TRAINING mode: per-player prompt lines on the field (never the dimming
+    //      overlay — the field stays fully bright). P1's line sits in the upper half
+    //      near the purple top paddle, P2's in the lower half near the yellow bottom
+    //      paddle; each flips independently from gs.train_target / train_target_p2.
+    //      P2 gets a prompt only when the bottom paddle is a human (settings.two_player).
+    function drawTrainingPrompts(ctx, W, H) {
+        const gs = dashState.gameState, st = dashState.appStatus;
+        if (!gs || !st || st.status !== 'TRAINING') return;
+        drawPromptLine(ctx, W, H * 0.32, gs.train_target || 'left', COL_P1);
+        if (dashState.settings && dashState.settings.two_player) {
+            drawPromptLine(ctx, W, H * 0.68, gs.train_target_p2 || 'left', COL_P2);
+        }
+        ctx.save();                                  // small mode watermark, mid-field
+        ctx.globalAlpha = 0.55; ctx.fillStyle = COL_INK_DIM;
+        ctx.font = "24px 'm6x11', ui-monospace, monospace";
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('TRAINING', W / 2, H / 2);
+        ctx.restore();
+    }
+    function drawPromptLine(ctx, W, y, target, color) {
+        const left  = target === 'left';
+        const label = left ? 'MOVE ALL THE WAY LEFT' : 'MOVE ALL THE WAY RIGHT';
+        const AW = 30, AH = 17, GAP = 20;            // arrow width/half-height, gap to text
+        ctx.save();
+        ctx.font = "36px 'm6x11', ui-monospace, monospace";
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.shadowColor = color; ctx.shadowBlur = 14; ctx.fillStyle = color;
+        const tw = ctx.measureText(label).width;
+        // arrow sits on the side it points to; the arrow+gap+text block stays centered
+        const textCx = W / 2 + (left ? (AW + GAP) / 2 : -(AW + GAP) / 2);
+        ctx.fillText(label, textCx, y);
+        ctx.beginPath();
+        if (left) {
+            const ax = textCx - tw / 2 - GAP;        // arrow right edge
+            ctx.moveTo(ax - AW, y); ctx.lineTo(ax, y - AH); ctx.lineTo(ax, y + AH);
+        } else {
+            const ax = textCx + tw / 2 + GAP;        // arrow left edge
+            ctx.moveTo(ax + AW, y); ctx.lineTo(ax, y - AH); ctx.lineTo(ax, y + AH);
+        }
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
     }
     function recordTrails() {
         const gs = dashState.gameState;
@@ -173,9 +217,11 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         const stage = document.getElementById('game-stage');
         const status = (appStatus && appStatus.status) || 'STARTING';
         const cd = Math.max(0, Math.ceil((appStatus && appStatus.countdown) || 0));
-        if (status === 'PLAYING') { if (stage) stage.classList.remove('frozen'); return; }
+        // TRAINING renders like PLAYING: no overlay, no dim — the prompts live on the
+        // field canvas (drawTrainingPrompts) so the whole game stays bright.
+        if (status === 'PLAYING' || status === 'TRAINING') { if (stage) stage.classList.remove('frozen'); return; }
         if (status === 'STARTING') {
-            setOverlay('BrainPong', '2-player EOG · glance to move', 'press ↻ to start', COL_INK);
+            setOverlay('BrainPong', '2-player EOG · glance to move', 'press ↻ to start · dumbbell to train', COL_INK);
         } else if (status === 'INSTRUCTIONS') {
             setOverlay('Get Ready', 'Hands off the keyboard', 'calibrating in ' + cd + 's', COL_P1);
         } else if (status === 'CALIBRATING') {
@@ -205,7 +251,8 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
             if (p2) p2.textContent = String(gameState.ai_score || 0).padStart(2, '0');
         }
         updateOverlay(appStatus, gameState);
-        const playing = appStatus && appStatus.status === 'PLAYING';
+        // movement tones play in TRAINING too — same audio feedback as a real rally
+        const playing = appStatus && (appStatus.status === 'PLAYING' || appStatus.status === 'TRAINING');
         if (gameState && playing) {
             const z = gameState.zone_idx;
             if (prevZoneIdx !== null && z !== prevZoneIdx) playTone(z < prevZoneIdx ? FREQ_LEFT : FREQ_RIGHT);

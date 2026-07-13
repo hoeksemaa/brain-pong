@@ -117,14 +117,21 @@ keying on that signature (not raw amplitude) keeps it robust to drift. Velocity 
 itself a high-pass, so slow drift and HPF-recovery tails self-reject.
 
 **Dash intervals**: `game-interval` 16 ms (physics + render), `bci-interval` 100 ms
-(EOG poll → detector, enabled only in PLAYING/CALIBRATING), `status-interval` 500 ms
-(app-flow SM, countdowns, live plots, recording driver).
+(EOG poll → detector, enabled only in PLAYING/CALIBRATING/TRAINING), `status-interval`
+500 ms (app-flow SM, countdowns, live plots, recording driver).
 
 ## State machines
 
 **App/UI flow** (500 ms tick): `STARTING → INSTRUCTIONS (5 s) → CALIBRATING (~5.5 s)
 → PLAYING ⇄ PAUSED → GAME_OVER` (first to `POINTS_TO_WIN = 10`). Keyboard-only modes
-skip INSTRUCTIONS/CALIBRATING.
+skip INSTRUCTIONS/CALIBRATING. **TRAINING** is a sibling of PLAYING: the dumbbell
+button runs the same INSTRUCTIONS→CALIBRATING flow (app-status `mode: game|training`
+picks the landing state) into a no-ball, no-score drill where on-field prompts cue
+each player to sweep their paddle full-left then full-right in a loop
+(`game_logic.next_training_target`; prompts drawn by render.js, never the dimming
+overlay). Pause is inert in training; New Game exits it; re-clicking Training is a
+no-op. Training sessions record normally, tagged `training`, with `train_start` +
+`pN_target_<dir>` prompt-flip event markers.
 
 **Per-player detector SM** (`_run_eog_sm`): `CALIBRATING → IDLE → ARMED →
 REFRACTORY → IDLE`.
