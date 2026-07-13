@@ -9,6 +9,14 @@
   font-family: 'm6x11';
   src: url('/assets/fonts/m6x11.ttf') format('truetype');
   font-display: block;
+  /* m6x11 declares its ascent at EXACTLY the cap-glyph top (hhea/win 704 of 1024
+     upm) — zero headroom, so any metrics-derived clip box (notably <input>) puts
+     letter tops flush against its edge and rounding shaves them. Override the
+     metrics the browser lays out with: caps top out at 68.75% em, so 82% ascent
+     buys ~0.13em of real headroom in every engine; descent floor is 18.75%. */
+  ascent-override: 82%;
+  descent-override: 22%;
+  line-gap-override: 0%;
 }
 
 :root { color-scheme: dark; }
@@ -76,11 +84,13 @@ html, body {
   background: radial-gradient(135% 120% at 50% 42%, transparent 46%, rgba(0,0,0,.6) 100%);
 }
 
-/* grid height is set by render.js (sizeLayout) to the field's square side, so the
-   left / center / right columns all share that height and their tops+bottoms line up. */
+/* grid height AND side-column widths are set by render.js (sizeLayout): the field
+   gets the biggest square that fits, the side columns split the leftover width, and
+   every card is aspect-ratio 1 — so all six panels are true squares that line up.
+   The width here is only a pre-JS fallback for the first paint. */
 .grid { position: relative; z-index: 3; display: flex; gap: var(--gap); align-items: stretch; }
 .col { display: flex; flex-direction: column; justify-content: space-between; min-height: 0; }
-.col.left, .col.right { width: clamp(190px, 15vw, 264px); }   /* equal widths */
+.col.left, .col.right { width: clamp(190px, 15vw, 264px); }   /* equal widths (fallback) */
 .col.center { flex: 0 0 auto; align-items: center; justify-content: center; }
 
 /* ---- cards ---- */
@@ -91,7 +101,7 @@ html, body {
 }
 
 .player {
-  flex: 0 0 32%; min-height: 0;
+  flex: 0 0 auto; width: 100%; aspect-ratio: 1;   /* square card; column width from sizeLayout */
   display: flex; flex-direction: column; align-items: center; justify-content: space-evenly;
   gap: clamp(8px, 2vh, 22px); padding: clamp(14px, 2.4vh, 28px); text-align: center;
 }
@@ -101,9 +111,13 @@ html, body {
 /* Name field. NOTE: dcc.Input renders a WRAPPER div (.dash-input-container, which
    carries our className) around the real <input class="dash-input-element">. The
    wrapper defaults to a white background, so make it transparent + full width; the
-   inner <input> (targeted by position below) gets the text/centering/font. */
+   inner <input> (targeted by position below) gets the text/centering/font.
+   CRITICAL: dcc's injected stylesheet pins this wrapper to height:34px with
+   overflow:hidden — a fixed porthole that CLIPPED the ~45px name text top/bottom
+   at large window sizes. It must grow with the input and never clip. */
 .player .dash-input-container {
   background: transparent; width: 100%; border: none; box-shadow: none; margin: 0; padding: 0;
+  height: auto; overflow: visible;
 }
 .player input {
   width: 100%; box-sizing: border-box; border: none; background: transparent; text-align: center;
@@ -111,10 +125,12 @@ html, body {
   color: var(--accent); caret-color: var(--accent);
   font-family: 'm6x11', ui-monospace, monospace; text-transform: uppercase; letter-spacing: .04em;
   font-size: clamp(26px, 4.6vh, 52px);
-  /* Give the single-line box ~2x the glyph height and let the input vertically
-     centre the text in it, so m6x11's tall ascenders always have headroom — no
-     top clipping even when the layout stretches to full height. */
-  line-height: 2.3; height: auto; padding: 4px; border-radius: 8px;
+  /* Headroom via PADDING, not line-height: Safari/Firefox IGNORE line-height on
+     single-line inputs, and m6x11's caps reach exactly the font ascent (zero
+     built-in headroom), so at big sizes the glyph tops got shaved. Inputs clip at
+     the padding box, so em padding is real, engine-proof room; a touch more on top
+     than bottom optically centres caps-only text (the descent space sits empty). */
+  line-height: normal; height: auto; padding: 0.38em 0.15em 0.22em; border-radius: 8px;
   cursor: text; transition: background .12s;
 }
 .player input::placeholder { color: color-mix(in srgb, var(--accent) 50%, transparent); opacity: 1; }
@@ -158,7 +174,8 @@ html, body {
 .cabinet canvas { width: 100%; height: 100%; display: block; border-radius: 6px; }
 
 /* ---- waveform feeds ---- */
-.wave { flex: 0 0 32%; min-height: 0; padding: 8px; border-radius: 13px; background: var(--screen); border: 2px solid var(--edge); }
+.wave { flex: 0 0 auto; width: 100%; aspect-ratio: 1;   /* square card; column width from sizeLayout */
+        padding: 8px; border-radius: 13px; background: var(--screen); border: 2px solid var(--edge); }
 .wave.p1 { border-color: var(--p1); box-shadow: 0 6px 0 var(--p1-deep), 0 12px 22px rgba(0,0,0,.5); }
 .wave.p2 { border-color: var(--p2); box-shadow: 0 6px 0 var(--p2-deep), 0 12px 22px rgba(0,0,0,.5); }
 .wave .screen { height: 100%; border-radius: 8px; overflow: hidden; background: var(--screen); }

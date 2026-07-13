@@ -287,8 +287,11 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     }
 
     // ==========================================================
-    //  RESPONSIVE LAYOUT — size the field to the biggest square that fits, and pin
-    //  the grid height to that side so the left / center / right boxes line up.
+    //  RESPONSIVE LAYOUT — every panel is a true SQUARE. The field gets the biggest
+    //  square that fits while reserving MIN_W per side column; the side columns then
+    //  split the leftover width, capped so their two square cards (plus the controls
+    //  row on the left) still stack inside the field's height. Cards themselves are
+    //  aspect-ratio 1 in CSS, so column width alone fixes their size.
     // ==========================================================
     function sizeLayout() {
         const stage = document.getElementById('game-stage');
@@ -302,10 +305,18 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         const availW = stage.clientWidth  - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
         const availH = stage.clientHeight - parseFloat(cs.paddingTop)  - parseFloat(cs.paddingBottom);
         const gap = parseFloat(getComputedStyle(grid).columnGap) || 24;
-        const side = Math.max(80, Math.min(availH, availW - leftCol.offsetWidth - rightCol.offsetWidth - 2 * gap));
-        grid.style.height   = Math.floor(side) + 'px';
-        cabinet.style.width = Math.floor(side) + 'px';
+        const MIN_W = 170;                                   // width reserved per side column
+        const controls = stage.querySelector('.controls');
+        const ctrlH = (controls ? controls.offsetHeight : 128) + 24;   // + breathing room
+        const side = Math.max(80, Math.min(availH, availW - 2 * MIN_W - 2 * gap));
+        // Column width floor is LOWER than the reservation: in very short windows the
+        // (side - ctrlH)/2 cap wins, and small squares beat overflowing the column.
+        const w = Math.max(96, Math.min((availW - side - 2 * gap) / 2, (side - ctrlH) / 2));
+        grid.style.height    = Math.floor(side) + 'px';
+        cabinet.style.width  = Math.floor(side) + 'px';
         cabinet.style.height = Math.floor(side) + 'px';
+        leftCol.style.width  = Math.floor(w) + 'px';
+        rightCol.style.width = Math.floor(w) + 'px';
     }
     let _layoutObs = null;
     function initLayout() {
