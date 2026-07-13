@@ -86,6 +86,8 @@ def _make_eog_state():
         'last_cmd_time': 0.0,
         'cmd_seq': 0,
         'settle_until': 0.0,                 # wallclock until which fires are muted (startup guard)
+        'fire_log': [],                      # recent committed fires [{'t': wallclock_s, 'cmd': 'LEFT'|'RIGHT'}]
+                                             # for the live-feed detection overlay (display only)
         # ── tunable config (set at board setup; survive recalibration) ──────────
         'sigma_thr': EOG_SIGMA_THR,          # ×; a glance must exceed this MULTIPLE of baseline σ
         'glance_window_s': GLANCE_WINDOW_S,  # s; max gap between the two glances of a pair
@@ -112,6 +114,7 @@ def _reset_eog_st(eog_st):
     eog_st['last_cmd_time']  = 0.0
     eog_st['settle_until']   = 0.0
     eog_st['cmd_seq']        = 0
+    eog_st['fire_log']       = []
 
 
 def begin_play_settle(eog_st, now, settle_s=PLAY_SETTLE_S):
@@ -122,6 +125,7 @@ def begin_play_settle(eog_st, now, settle_s=PLAY_SETTLE_S):
     eog_st['sm']           = 'IDLE'
     eog_st['first_dir']    = None
     eog_st['settle_until'] = now + settle_s
+    eog_st['fire_log']     = []            # drop calibration-tail fires from the overlay
 
 
 # ── Differential + filter (pure DSP) ────────────────────────────────────────────
@@ -297,6 +301,13 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
                 eog_st['last_cmd_time'] = now
                 eog_st['sm']            = 'REFRACTORY'
                 eog_st['first_dir']     = None
+                # log the committed fire for the live-feed detection overlay (display
+                # only; never read back by the detector). Capped so it can't grow
+                # unbounded if the wave payload isn't being pulled.
+                log = eog_st.setdefault('fire_log', [])
+                log.append({'t': now, 'cmd': cmd})
+                if len(log) > 64:
+                    del log[:-64]
                 print(f"[{label}] command={cmd}  seq={eog_st['cmd_seq']}")
                 return {'command': cmd, 'seq': eog_st['cmd_seq']}
     return None

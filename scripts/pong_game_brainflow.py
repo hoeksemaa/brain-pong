@@ -609,9 +609,24 @@ def _wave_payload(eog_st, brd):
     sigma   = eog_st['baseline_sigma']
     sig_thr = eog_st.get('sigma_thr', EOG_SIGMA_THR)
     thr = round(float(sig_thr * sigma), 1) if sigma else None
+    # Real committed detections, mapped onto this window's time axis. The window's
+    # right edge is ~now (newest sample); a fire at wallclock t_fire sits at
+    # x = 1 - (now - t_fire)/WAVE_WINDOW_S, so bands scroll left with the trace and
+    # drop off once older than the window. This overlays the ACTUAL detector fires
+    # (glance-pair state machine), not raw σ crossings — see render.js. Prune in
+    # place so fire_log stays bounded to the visible window (+ small margin).
+    now = time.time()
+    log = eog_st.get('fire_log')
+    fires = []
+    if log:
+        log[:] = [f for f in log if now - f['t'] <= WAVE_WINDOW_S + 1.0]
+        for f in log:
+            x = 1.0 - (now - f['t']) / WAVE_WINDOW_S
+            if 0.0 <= x <= 1.0:
+                fires.append({'x': round(x, 4), 'dir': f['cmd']})
     return {'y': _decimate_peak(sig, WAVE_POINTS), 'thr': thr,
             'sigma_thr': round(float(sig_thr), 1), 'win_s': WAVE_WINDOW_S,
-            'ymax': eog_st.get('wave_ymax', WAVE_YMAX_DEFAULT)}
+            'ymax': eog_st.get('wave_ymax', WAVE_YMAX_DEFAULT), 'fires': fires}
 
 
 # Live-feed store fills, on the BCI tick (100 ms, enabled only in CALIBRATING/PLAYING),
