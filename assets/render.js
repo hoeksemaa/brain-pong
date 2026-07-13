@@ -343,11 +343,11 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         const thr = waveData && waveData.thr;
         const winS = (waveData && waveData.win_s) || 5;
 
-        // Detection bands — one per REAL committed fire from the glance-pair state
-        // machine (waveData.fires = [{x, dir}], x in [0,1] along the window). These
-        // are actual paddle-moving detections, NOT raw σ crossings: green = LEFT,
-        // red = RIGHT (committed command direction). Uniform strength, fixed width,
-        // hard edges — no center-weighted fade.
+        // Detection bands — one per directional motion the glance-pair state machine
+        // COUNTED (waveData.fires = [{x, dir}], x in [0,1] along the window): each
+        // arming saccade and each return saccade, banded by its own detected
+        // direction. NOT raw σ crossings: green = LEFT, red = RIGHT. Uniform
+        // strength, fixed width, hard edges — no center-weighted fade.
         const fires = (waveData && waveData.fires) || [];
         if (fires.length) {
             const half = Math.max(w * 0.015, 8);   // fixed band half-width

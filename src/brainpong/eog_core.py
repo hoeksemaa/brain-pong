@@ -86,8 +86,10 @@ def _make_eog_state():
         'last_cmd_time': 0.0,
         'cmd_seq': 0,
         'settle_until': 0.0,                 # wallclock until which fires are muted (startup guard)
-        'fire_log': [],                      # recent committed fires [{'t': wallclock_s, 'cmd': 'LEFT'|'RIGHT'}]
-                                             # for the live-feed detection overlay (display only)
+        'fire_log': [],                      # recent detected motions [{'t': wallclock_s, 'cmd': 'LEFT'|'RIGHT'}]
+                                             # every sustained crossing the SM counts as a directional
+                                             # motion (arming saccade + return saccade), for the live-feed
+                                             # detection overlay (display only)
         # ── tunable config (set at board setup; survive recalibration) ──────────
         'sigma_thr': EOG_SIGMA_THR,          # ×; a glance must exceed this MULTIPLE of baseline σ
         'glance_window_s': GLANCE_WINDOW_S,  # s; max gap between the two glances of a pair
@@ -241,6 +243,18 @@ def _sustained_crossing(signal, sigma, sr, sigma_thr=EOG_SIGMA_THR,
 
 # ── Glance-pair state machine (deterministic given `now`) ────────────────────────
 
+def _log_motion(eog_st, now, direction):
+    """Record a single directional motion the detector counted, for the live-feed
+    overlay (display only; never read back by the detector). One entry per sustained
+    crossing the SM acts on — the arming saccade and the return saccade of a glance
+    pair each get one. Capped so it can't grow unbounded if the wave payload isn't
+    being pulled."""
+    log = eog_st.setdefault('fire_log', [])
+    log.append({'t': now, 'cmd': direction})
+    if len(log) > 64:
+        del log[:-64]
+
+
 def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
     """Advance one EOG state machine tick. Returns a command dict or None.
 
@@ -288,6 +302,8 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
             eog_st['sm']        = 'ARMED'
             eog_st['first_dir'] = crossing
             eog_st['arm_time']  = now
+            # the arming saccade is a directional motion the detector counted — band it
+            _log_motion(eog_st, now, crossing)
 
     elif eog_st['sm'] == 'ARMED':
         if now - eog_st['arm_time'] > eog_st.get('glance_window_s', GLANCE_WINDOW_S):
@@ -301,13 +317,9 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
                 eog_st['last_cmd_time'] = now
                 eog_st['sm']            = 'REFRACTORY'
                 eog_st['first_dir']     = None
-                # log the committed fire for the live-feed detection overlay (display
-                # only; never read back by the detector). Capped so it can't grow
-                # unbounded if the wave payload isn't being pulled.
-                log = eog_st.setdefault('fire_log', [])
-                log.append({'t': now, 'cmd': cmd})
-                if len(log) > 64:
-                    del log[:-64]
+                # the return saccade that completes the pair is itself a directional
+                # motion the detector counted — band it (display only; never read back).
+                _log_motion(eog_st, now, crossing)
                 print(f"[{label}] command={cmd}  seq={eog_st['cmd_seq']}")
                 return {'command': cmd, 'seq': eog_st['cmd_seq']}
     return None
