@@ -40,3 +40,19 @@ def advance_paddle_zone(zone_idx, command, last_seq, *, min_zone, max_zone):
     elif move == 'RIGHT':
         zone_idx = min(max_zone, zone_idx + 1)
     return zone_idx, seq
+
+
+def next_training_target(zone_idx, target, *, min_zone, max_zone):
+    """Advance one player's TRAINING-mode prompt target given their paddle zone.
+
+    ``target`` is the direction the on-field prompt is currently asking for
+    (``'left'`` or ``'right'``). Once the paddle reaches the commanded edge the
+    prompt flips to the opposite direction; anywhere else — including sitting on
+    the *un*-commanded edge — it holds. Each player's prompt therefore loops
+    left ↔ right forever, independently of the other player's.
+    """
+    if target == 'left' and zone_idx <= min_zone:
+        return 'right'
+    if target == 'right' and zone_idx >= max_zone:
+        return 'left'
+    return target

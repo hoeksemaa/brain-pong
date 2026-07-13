@@ -149,9 +149,11 @@ html, body {
 .score { color: var(--accent); font-size: clamp(44px, 8vh, 92px); line-height: .85; }
 
 /* ---- controls (stay bright over the dim) ---- */
-.controls { display: flex; gap: clamp(14px, 1.8vw, 22px); justify-content: center; align-items: center; z-index: 30; }
+/* Sized for THREE buttons (pause / new game / training): each is smaller than the
+   old two-button size so the row's total footprint stays roughly the same. */
+.controls { display: flex; gap: clamp(10px, 1.3vw, 16px); justify-content: center; align-items: center; z-index: 30; }
 .btn {
-  width: clamp(88px, 10vh, 128px); aspect-ratio: 1; border-radius: 18px; cursor: pointer;
+  width: clamp(62px, 7.2vh, 92px); aspect-ratio: 1; border-radius: 16px; cursor: pointer;
   border: 2px solid var(--edge);
   background: linear-gradient(180deg, var(--panel-hi), var(--panel));
   box-shadow: 0 5px 0 var(--edge), inset 0 2px 0 var(--edge-hi);
@@ -161,6 +163,7 @@ html, body {
 .btn:hover { border-color: var(--ink); }
 .btn:active { transform: translateY(4px); box-shadow: 0 1px 0 var(--edge), inset 0 2px 0 var(--edge-hi); }
 .btn svg, .btn img { width: 46%; height: 46%; }
+.btn.training img { width: 69%; height: 69%; }   /* dumbbell art is visually lighter — 1.5× */
 .btn .ic-fill { fill: var(--ink); } .btn .ic-stroke { stroke: var(--ink); fill: none; }
 .btn.pause:hover .ic-fill { fill: var(--p1); }
 .btn.newgame:hover .ic-stroke { stroke: var(--p2); }
