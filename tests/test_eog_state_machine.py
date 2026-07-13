@@ -69,7 +69,7 @@ def test_glance_pair_fires_first_direction():
     st = calibrated_state()
     assert _run_eog_sm(st, RIGHT_SIG, now=0.0) is None   # arm RIGHT
     assert st['sm'] == 'ARMED' and st['first_dir'] == 'RIGHT'
-    cmd = _run_eog_sm(st, LEFT_SIG, now=0.2)             # opposite within window
+    cmd = _run_eog_sm(st, LEFT_SIG, now=0.3)             # opposite past min-wait, within window
     assert cmd == {'command': 'RIGHT', 'seq': 1}
     assert st['sm'] == 'REFRACTORY'
 
@@ -77,7 +77,7 @@ def test_glance_pair_fires_first_direction():
 def test_left_then_right_fires_left():
     st = calibrated_state()
     _run_eog_sm(st, LEFT_SIG, now=0.0)
-    cmd = _run_eog_sm(st, RIGHT_SIG, now=0.2)
+    cmd = _run_eog_sm(st, RIGHT_SIG, now=0.3)
     assert cmd['command'] == 'LEFT'
 
 
@@ -109,7 +109,7 @@ def test_opposite_too_soon_does_not_fire():
 def test_refractory_blocks_then_clears():
     st = calibrated_state()
     _run_eog_sm(st, RIGHT_SIG, now=0.0)
-    fire_t = 0.2
+    fire_t = 0.3
     assert _run_eog_sm(st, LEFT_SIG, now=fire_t)['seq'] == 1
     # Within refractory: input ignored.
     assert _run_eog_sm(st, RIGHT_SIG, now=fire_t + REFRACTORY_S / 2) is None
@@ -119,7 +119,7 @@ def test_refractory_blocks_then_clears():
     assert st['sm'] == 'IDLE'
     # ...and a fresh pair fires again with an incremented seq.
     _run_eog_sm(st, RIGHT_SIG, now=fire_t + REFRACTORY_S + 0.2)
-    cmd = _run_eog_sm(st, LEFT_SIG, now=fire_t + REFRACTORY_S + 0.4)
+    cmd = _run_eog_sm(st, LEFT_SIG, now=fire_t + REFRACTORY_S + 0.5)
     assert cmd == {'command': 'RIGHT', 'seq': 2}
 
 
@@ -135,7 +135,7 @@ def test_two_players_do_not_interfere():
 
     # Drive a full LEFT-pair on P2.
     _run_eog_sm(p2, LEFT_SIG, now=0.0, label='P2')
-    cmd2 = _run_eog_sm(p2, RIGHT_SIG, now=0.2, label='P2')
+    cmd2 = _run_eog_sm(p2, RIGHT_SIG, now=0.3, label='P2')
 
     assert cmd2 == {'command': 'LEFT', 'seq': 1}
     # P1 is untouched by anything P2 did.

@@ -105,16 +105,30 @@ Per player, per BCI tick (all DSP lives in `eog_core.py`):
   → differential: (ch_R − ch_L) × 1e6  → HEOG in µV, rightward +
   → detrend → Butterworth LP(30 Hz) → notch(48–52, 58–62) → Butterworth HP(0.1 Hz)
   → Engbert–Kliegl 5-point velocity (µV/s)                  [the detector statistic]
-  → detector signal: 'velocity' (default) OR 'matched' (UI toggle; ~120 ms Hann
-    velocity template, cross-correlated)
+  → detector signal: 'matched' (default; ~120 ms Hann velocity template,
+    cross-correlated — integrates over the saccade shape, rescues weak-signal
+    players velocity misses) OR 'velocity' (UI toggle)
   → sustained crossing: first run where |signal| > sigma_thr·σ persists ≥ 12 ms
   → glance-PAIR state machine (look-one-way-then-back) → {LEFT, RIGHT}
-  → paddle snaps one of N_PANELS=5 discrete slots (clamped)
+  → v3 commitment gates (see below) → paddle snaps one of N_PANELS=5 slots (clamped)
 ```
 
 A **glance pair** = the outgoing saccade + the return saccade of a deliberate look;
 keying on that signature (not raw amplitude) keeps it robust to drift. Velocity is
 itself a high-pass, so slow drift and HPF-recovery tails self-reject.
+
+**pipeline-v3 "committed, glance-shaped out-and-back" gates** (`eog_core`, 2026-07-13
+tuning analysis): on top of the pair machine, a fired command must also clear
+(1) **run-count ≤ `RUN_COUNT_MAX`=2** threshold lobes since arming (rejects oscillating
+noise / continuous sweeps — the min-wait delays the fire past the extra lobes);
+(2) a **per-player self-calibrating amplitude floor** (`AMP_CONFIRM_FRAC`=0.55 × running
+median committed-glance peak; rejects casual look-around saccades ~14σ vs committed
+glances ~37σ — cuts drift ~73%; never binds below the σ threshold, so weak rigs are
+unaffected); and (3) a **baseline-σ quality gate** (`SIGMA_QUALITY_CEIL`=3000: a railing
+electrode calibrates to σ 50k+ and is suppressed, not fired on). Direction stays
+velocity crossing-order (filtered-position sign is corrupted by the short-window HPF
+edge transient). Defaults: `matched` / `GLANCE_WINDOW_S`=0.7 / `ARMED_MIN_WAIT_S`=0.2 /
+`REFRACTORY_S`=0.6.
 
 **Dash intervals**: `game-interval` 16 ms (physics + render), `bci-interval` 100 ms
 (EOG poll → detector, enabled only in PLAYING/CALIBRATING/TRAINING), `status-interval`
@@ -133,10 +147,15 @@ overlay). Pause is inert in training; New Game exits it; re-clicking Training is
 no-op. Training sessions record normally, tagged `training`, with `train_start` +
 `pN_target_<dir>` prompt-flip event markers. **Serve holds** (state-level, not app
 statuses — a `serve_hold` frame counter the 16 ms physics tick decrements while the
-ball stays parked and paddles remain live): PLAYING/TRAINING open with a 1.5 s
-READY→SET→GO! word countdown (ball launches / prompts appear ON the GO), and every
-post-point serve holds a plain 1 s beat; render.js draws the words and plays the
-tick/launch tones off `serve_hold`/`hold_kind`.
+ball stays parked and paddles remain live): PLAYING opens with a 1.5 s
+READY→SET→GO! word countdown (ball launches ON the GO), and every post-point serve
+holds a plain 1 s beat; render.js draws the words and plays the tick/launch tones
+off `serve_hold`/`hold_kind`. TRAINING has **no** countdown — prompts are live the
+moment it begins (`_advance_training` forces `serve_hold` to 0). Game resets are
+**single-writer**: New Game/Training clicks only bump `game_id` in app-status;
+`update_game_physics` (the sole game-state writer) sees the mismatch and rebuilds
+the state itself, so an in-flight stale physics write can never clobber a fresh
+game (this race previously ate scores/countdowns).
 
 **Per-player detector SM** (`_run_eog_sm`): `CALIBRATING → IDLE → ARMED →
 REFRACTORY → IDLE`.
@@ -145,16 +164,18 @@ REFRACTORY → IDLE`.
   *omnidirectional* baseline — there is **no** per-direction (left/right/rest)
   calibration.
 - **IDLE→ARMED**: a sustained crossing arms on `first_dir`.
-- **ARMED→FIRE**: an opposite-direction crossing within `GLANCE_WINDOW_S = 0.5 s`
-  (after `ARMED_MIN_WAIT_S = 0.05 s`) fires the command → REFRACTORY. Timeout → IDLE.
-- **REFRACTORY**: `REFRACTORY_S = 0.8 s` dead time → IDLE.
+- **ARMED→FIRE**: an opposite-direction crossing within `GLANCE_WINDOW_S = 0.7 s`
+  (after `ARMED_MIN_WAIT_S = 0.2 s`) fires the command → REFRACTORY. Timeout → IDLE.
+- **REFRACTORY**: `REFRACTORY_S = 0.6 s` dead time → IDLE.
 
 ## Detection tuning knobs (live, in-browser sliders — not CLI)
 
-`sigma_thr` (default **6.0**, crossing threshold in σ), `glance_window_s` (0.5),
-HPF/LPF corners (0.1 / 30 Hz), and the **detector toggle** (velocity | matched).
-All are captured into each recording's eog-v3 metadata so a session is
-reconstructable. Tune these against recorded corpora, not by feel alone.
+`sigma_thr` (default **6.0**, crossing threshold in σ), `glance_window_s` (**0.7**),
+HPF/LPF corners (0.1 / 30 Hz), and the **detector toggle** (default **matched** |
+velocity). All are captured into each recording's eog-v3 metadata so a session is
+reconstructable. Tune these against recorded corpora, not by feel alone. The v3
+commitment gates (run-count / amplitude / quality) are not sliders — they are
+constants in `eog_core`.
 
 ## Recording & data integrity — CRITICAL
 
@@ -162,7 +183,7 @@ reconstructable. Tune these against recorded corpora, not by feel alone.
   (`recording.save_eog_recording`): the 2 EOG channels `(2, N)` in volts, plus
   session metadata + the live detector config + sample-pinned event markers
   (calib_start / play_start). `record_eog.py` is the separate *cued* recorder
-  (saves all 11 board rows). Detector version tag: `pipeline-v2`.
+  (saves all 11 board rows). Detector version tag: `pipeline-v3`.
 - **All `.npz` recordings are committed to git and are read-only ground truth.**
   They back benchmarks, ML training, and every algorithm comparison. Never mutate;
   never re-save over a session file.
@@ -179,11 +200,13 @@ timestamps — USB bursts make arrival times lumpy and would smear any PSD.
 
 ## Known current issues (EOG game — not features)
 
-- **Oscillating-noise false fires.** `_sustained_crossing` gates on persistence but
-  does **not** reject oscillation, so periodic noise can phantom-fire. Reproduced
-  end-to-end in `tests/test_oscillation_noise.py` (a run-count discriminator is a
-  candidate mitigation, **not** shipped). Related: the 60 Hz / CMRR-asymmetry hunt
-  documented in the electrode-comparison docs — system CMRR degrades with
+- **Oscillating-noise false fires — largely mitigated (pipeline-v3).** `_sustained_crossing`
+  itself still doesn't reject oscillation, but the v3 gates do: the run-count gate
+  catches the mid-band and, once a few real glances prime the per-player amplitude gate,
+  supra-threshold oscillation weaker than a committed glance is fully rejected (0 fires
+  in `tests/test_oscillation_noise.py`). Residual: **unprimed** slow/fast oscillation can
+  still leak a few fires before the first committed glance is seen. Related: the 60 Hz /
+  CMRR-asymmetry hunt in the electrode-comparison docs — system CMRR degrades with
   electrode-impedance mismatch (ΔZ) between the two canthi, so verdicts must be
   reproduced on the real montage, not a matched bench rig.
 - **Default (no-flag) mode opens the P1 board but never uses the detector** — a

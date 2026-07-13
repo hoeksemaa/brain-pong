@@ -58,9 +58,17 @@ EOG_SIGMA_THR    = 6.0     # crossing threshold in units of baseline σ. Raised 
                            # phantom pair-commands drop. Drop toward 5.5 (live slider) if a noisy rig starts
                            # missing real glances — an under-firing rig wants a lower multiplier, not this.
 EOG_MIN_DUR_MS   = 12.0    # a crossing must persist this long (kills single spikes)
-GLANCE_WINDOW_S  = 0.5     # max time between the two glances of a pair
-ARMED_MIN_WAIT_S = 0.05    # min time before the opposite glance counts
-REFRACTORY_S     = 0.8     # dead time after a fired command
+GLANCE_WINDOW_S  = 0.7     # max time between the two glances of a pair. 0.7 (was 0.5): the measured
+                           # glance return-gap is 430–700 ms (cued) / ~370 ms (gameplay), so 0.5 s
+                           # times out the return on ~half of deliberate glances. 0.7 improved or
+                           # tied correct-command for all 12 cued subjects and raised direction
+                           # accuracy. See docs/eog-detector-tuning-analysis-2026-07-13.md.
+ARMED_MIN_WAIT_S = 0.2     # min time before the opposite glance counts. 0.2 (was 0.05): blink
+                           # twin-spikes complete in ~70–85 ms, real glance returns in >220 ms, so
+                           # a 0.2 s floor rejects blinks/oscillation at ~1 pp recall cost.
+REFRACTORY_S     = 0.6     # dead time after a fired command. 0.6 (was 0.8): 0.8 caps the repeat
+                           # rate at ~1/s (blocks rapid same-direction glances); 0.6 roughly doubles
+                           # repeat capability at negligible false-fire cost.
 PLAY_SETTLE_S    = 0.7     # detector muted for this long after PLAY begins, so the
                            # filter/velocity startup transient (a large edge artifact
                            # on the first freshly-filtered window) can't phantom-fire
@@ -68,6 +76,27 @@ PLAY_SETTLE_S    = 0.7     # detector muted for this long after PLAY begins, so 
                            # the root-cause edge-artifact fix lives in the offline eval.
 EOG_BASELINE_S   = 5.0     # baseline collected before σ is fixed
 MATCHED_TEMPLATE_MS = 120.0  # saccade-velocity template width for the matched-filter detector
+
+# ── "Committed, glance-shaped out-and-back" gates (pipeline-v3) ──────────────────
+# The pair machine alone fires on anything that looks vaguely out-and-back. Three
+# gates make it demand a *committed, glance-shaped* pair. See the 2026-07-13 analysis.
+RUN_COUNT_MAX    = 2       # a real glance is 2 threshold lobes (out + back). A continuous
+                           # left-right sweep / oscillation shows ≥4 (median 4, up to 24), and the
+                           # pair machine otherwise locks onto an arbitrary phase and fires the WRONG
+                           # direction. Reject a pair whose ARMED span crossed threshold > this many
+                           # times → the direction-flip + oscillating-noise fix.
+AMP_CONFIRM_FRAC = 0.55    # a pair must peak ≥ this fraction of the player's own committed-glance
+                           # scale (in σ). Casual look-around saccades are ~14σ vs committed glances
+                           # ~37σ, so ~0.55× median cuts unintended paddle moves ~73% while keeping
+                           # every committed glance. Self-calibrating (below) and never binds below
+                           # the σ-crossing threshold, so weak-signal rigs are unaffected.
+AMP_CONFIRM_MIN_N = 4      # accepted glances needed before the amplitude gate engages (bootstrap:
+                           # until then only the σ threshold gates, so the scale can be learned).
+AMP_SCALE_KEEP    = 20     # running committed-glance scale = median of the last N accepted peaks.
+SIGMA_QUALITY_CEIL = 3000.0  # baseline σ (detector-signal units) above this = a railing / saturated
+                           # electrode (legit rigs sit ~200–1100; a railing channel calibrated to
+                           # 58 000–226 000). Flag it and suppress detection rather than firing on
+                           # garbage — a σ-relative threshold scales *with* the garbage and can't.
 
 
 # ── State factory ───────────────────────────────────────────────────────────────
@@ -90,12 +119,21 @@ def _make_eog_state():
                                              # every sustained crossing the SM counts as a directional
                                              # motion (arming saccade + return saccade), for the live-feed
                                              # detection overlay (display only)
+        # ── per-arm accumulators (pipeline-v3 gates; reset on each ARM) ──────────
+        'arm_peak': 0.0,                     # max |detector signal| / σ seen since ARM (commitment amplitude)
+        'arm_runs': 0,                       # threshold-crossing lobes counted since ARM (oscillation gate)
+        'arm_last_dir': None,                # last lobe direction, to count run transitions
+        'glance_scale': [],                  # running list of accepted committed-glance peaks (σ units)
+        'quality_ok': True,                  # False once baseline σ exceeds SIGMA_QUALITY_CEIL (railing rig)
         # ── tunable config (set at board setup; survive recalibration) ──────────
         'sigma_thr': EOG_SIGMA_THR,          # ×; a glance must exceed this MULTIPLE of baseline σ
         'glance_window_s': GLANCE_WINDOW_S,  # s; max gap between the two glances of a pair
         'lpf_hz': EOG_LPF_HZ,                # Hz; low-pass corner of the filter chain
         'hpf_hz': EOG_HPF_HZ,                # Hz; high-pass corner of the filter chain
-        'detector': 'velocity',             # 'velocity' | 'matched' — detection method (UI toggle)
+        'detector': 'matched',              # 'velocity' | 'matched' — detection method (UI toggle).
+                                             # matched is default (pipeline-v3): it integrates over the
+                                             # saccade shape (~√len SNR gain) and rescues weak-signal
+                                             # players velocity misses (german/xiq/aaron 10%→85-95%).
         'mf_template': None,                 # saccade template for the matched filter (set at board setup)
     }
 
@@ -117,6 +155,16 @@ def _reset_eog_st(eog_st):
     eog_st['settle_until']   = 0.0
     eog_st['cmd_seq']        = 0
     eog_st['fire_log']       = []
+    eog_st['glance_scale']   = []           # relearn the committed-glance scale each game
+    eog_st['quality_ok']     = True
+    _clear_arm(eog_st)
+
+
+def _clear_arm(eog_st):
+    """Zero the per-arm accumulators (called on ARM and whenever we drop to IDLE)."""
+    eog_st['arm_peak']     = 0.0
+    eog_st['arm_runs']     = 0
+    eog_st['arm_last_dir'] = None
 
 
 def begin_play_settle(eog_st, now, settle_s=PLAY_SETTLE_S):
@@ -128,6 +176,7 @@ def begin_play_settle(eog_st, now, settle_s=PLAY_SETTLE_S):
     eog_st['first_dir']    = None
     eog_st['settle_until'] = now + settle_s
     eog_st['fire_log']     = []            # drop calibration-tail fires from the overlay
+    _clear_arm(eog_st)
 
 
 # ── Differential + filter (pure DSP) ────────────────────────────────────────────
@@ -255,12 +304,28 @@ def _log_motion(eog_st, now, direction):
         del log[:-64]
 
 
+def _amp_gate_floor(eog_st):
+    """The committed-glance amplitude floor (in σ) a pair must clear, or None until the
+    running scale is learned. Median of recent accepted-glance peaks × AMP_CONFIRM_FRAC.
+    Self-calibrating and per-player, so a casual look-around (~14σ) is rejected while a
+    committed glance (~37σ) passes — and for a weak-signal rig the floor lands below the
+    σ-crossing threshold, so it never binds (the σ threshold already gates)."""
+    scale = eog_st.get('glance_scale', [])
+    if len(scale) < AMP_CONFIRM_MIN_N:
+        return None
+    return AMP_CONFIRM_FRAC * float(np.median(scale))
+
+
 def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
     """Advance one EOG state machine tick. Returns a command dict or None.
 
     `now` is injected (wallclock seconds) rather than read from time.time(), so
     the machine is fully deterministic and testable: drive it with crafted
     `new_sig` windows and explicit timestamps.
+
+    pipeline-v3 gates a fired pair on: (a) ≤ RUN_COUNT_MAX threshold lobes since ARM
+    (rejects oscillating noise — min-wait delays the fire past the extra lobes), and
+    (b) peak amplitude ≥ the player's committed-glance floor (rejects casual saccades).
     """
     if eog_st['sm'] == 'CALIBRATING':
         eog_st['baseline_acc'].append(new_sig.copy())
@@ -276,13 +341,20 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
             if sigma < 1e-9:
                 sigma = float(np.std(total))
             eog_st['baseline_sigma'] = sigma or 1e-6
+            # Signal-quality gate: a railing / saturated electrode calibrates to an
+            # absurd σ (58k–226k seen live) and a σ-relative threshold scales *with*
+            # the garbage. Flag it so the game can warn + suppress detection.
+            eog_st['quality_ok'] = eog_st['baseline_sigma'] < SIGMA_QUALITY_CEIL
             eog_st['sm'] = 'IDLE'
-            print(f"[{label}] baseline σ = {eog_st['baseline_sigma']:.2f} — ready")
+            _clear_arm(eog_st)
+            q = '' if eog_st['quality_ok'] else '  ⚠ railing electrode — check contact'
+            print(f"[{label}] baseline σ = {eog_st['baseline_sigma']:.2f} — ready{q}")
         return None
 
     if eog_st['sm'] == 'REFRACTORY':
         if now - eog_st['last_cmd_time'] > REFRACTORY_S:
             eog_st['sm'] = 'IDLE'
+            _clear_arm(eog_st)
         return None
 
     # Startup-transient guard: for the first PLAY_SETTLE_S of play, stay muted and
@@ -291,17 +363,35 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
         if eog_st['sm'] == 'ARMED':
             eog_st['sm']        = 'IDLE'
             eog_st['first_dir'] = None
+            _clear_arm(eog_st)
+        return None
+
+    # Railing electrode: don't drive the paddle off garbage (game warns separately).
+    if not eog_st.get('quality_ok', True):
         return None
 
     sigma    = eog_st['baseline_sigma']
     crossing = _sustained_crossing(new_sig, sigma, eog_st['sr'],
                                    sigma_thr=eog_st.get('sigma_thr', EOG_SIGMA_THR))
 
+    # Per-arm accumulators (commitment amplitude, lobe count).
+    if eog_st['sm'] == 'ARMED':
+        peak = float(np.max(np.abs(new_sig))) / sigma if new_sig.size else 0.0
+        if peak > eog_st['arm_peak']:
+            eog_st['arm_peak'] = peak
+        if crossing is not None and crossing != eog_st['arm_last_dir']:
+            eog_st['arm_runs']    += 1               # a new threshold lobe
+            eog_st['arm_last_dir'] = crossing
+
     if eog_st['sm'] == 'IDLE':
         if crossing is not None:
             eog_st['sm']        = 'ARMED'
             eog_st['first_dir'] = crossing
             eog_st['arm_time']  = now
+            _clear_arm(eog_st)
+            eog_st['arm_runs']     = 1               # the arming lobe
+            eog_st['arm_last_dir'] = crossing
+            eog_st['arm_peak']     = float(np.max(np.abs(new_sig))) / sigma if new_sig.size else 0.0
             # the arming saccade is a directional motion the detector counted — band it
             _log_motion(eog_st, now, crossing)
 
@@ -309,17 +399,35 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
         if now - eog_st['arm_time'] > eog_st.get('glance_window_s', GLANCE_WINDOW_S):
             eog_st['sm']        = 'IDLE'
             eog_st['first_dir'] = None
+            _clear_arm(eog_st)
         elif now - eog_st['arm_time'] > ARMED_MIN_WAIT_S and crossing is not None:
             opposite = {'LEFT': 'RIGHT', 'RIGHT': 'LEFT'}
             if crossing == opposite.get(eog_st['first_dir']):
+                # ── pipeline-v3 gates ────────────────────────────────────────────
+                # (a) oscillation: more than out+back lobes → noise/sweep, not a glance.
+                if eog_st['arm_runs'] > RUN_COUNT_MAX:
+                    eog_st['sm'] = 'IDLE'; eog_st['first_dir'] = None; _clear_arm(eog_st)
+                    return None
+                # (b) commitment: peak must clear the player's committed-glance floor.
+                floor = _amp_gate_floor(eog_st)
+                if floor is not None and eog_st['arm_peak'] < floor:
+                    eog_st['sm'] = 'IDLE'; eog_st['first_dir'] = None; _clear_arm(eog_st)
+                    return None
+                # Direction = the arming (outgoing) lobe. Velocity crossing-order is used,
+                # NOT filtered-position sign: the live 125-sample window filters position
+                # with an unsettled HP edge transient that corrupts its sign (measured:
+                # direction 86%→65%), the very drift artifact velocity was chosen to reject.
                 cmd = eog_st['first_dir']
+                eog_st['glance_scale'].append(eog_st['arm_peak'])   # learn the scale
+                if len(eog_st['glance_scale']) > AMP_SCALE_KEEP:
+                    del eog_st['glance_scale'][:-AMP_SCALE_KEEP]
                 eog_st['cmd_seq']      += 1
                 eog_st['last_cmd_time'] = now
                 eog_st['sm']            = 'REFRACTORY'
                 eog_st['first_dir']     = None
                 # the return saccade that completes the pair is itself a directional
                 # motion the detector counted — band it (display only; never read back).
-                _log_motion(eog_st, now, crossing)
+                _log_motion(eog_st, now, cmd)
                 print(f"[{label}] command={cmd}  seq={eog_st['cmd_seq']}")
                 return {'command': cmd, 'seq': eog_st['cmd_seq']}
     return None
@@ -332,10 +440,10 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
 # their own fields). The parameterised bits (notch bands) are derived from the
 # constants above so they can't drift; the method prose is hand-maintained and
 # names the exact functions, so the CODE stays the source of truth for a reader.
-PIPELINE_VERSION = "pipeline-v2"
+PIPELINE_VERSION = "pipeline-v3"
 
 
-def pipeline_description(detector='velocity'):
+def pipeline_description(detector='matched'):
     """One-line English description of the current live preprocessing + detection
     METHOD (for the requested `detector`), embedded in each recording's notes so the
     pipeline is reconstructable from the file alone. Omits the numeric cutoffs/
@@ -365,6 +473,12 @@ def pipeline_description(detector='velocity'):
             "glance_window fires, then a refractory dead-time. "
         )
         code = "_eog_filter / _eog_velocity / _sustained_crossing / _run_eog_sm"
+    gates = ("GATES (v3, 'committed glance-shaped out-and-back'): the fired pair is "
+             "additionally gated on <= RUN_COUNT_MAX threshold lobes since arming "
+             "(rejects oscillating noise/sweeps), a per-player self-calibrating "
+             "amplitude floor (AMP_CONFIRM_FRAC x median committed-glance peak; rejects "
+             "casual look-around saccades), and a baseline-sigma quality gate (railing "
+             "electrodes suppressed). ")
     tail = ("Cutoff/threshold values are in the lpf_hz/hpf_hz/sigma_thr/"
             f"glance_window_s fields. Code: eog_core.{code}. [{PIPELINE_VERSION}]")
-    return pre + det + tail
+    return pre + det + gates + tail
