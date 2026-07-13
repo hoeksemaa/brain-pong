@@ -105,6 +105,7 @@ REC_OUT_DIR          = Path(__file__).resolve().parent.parent / "data" / "eog"
 REC_MONTAGE          = "2 electrodes at outer canthi (differential) + active bias on ear clip, no ground"
 REC_GAIN             = 24         # Cerelog X8 default (assumed, not read from board); matches the corpus
 INITIAL_BALL_SPEED_Y = -4
+WAVE_YMAX_DEFAULT    = 15000  # µV; fixed waveform half-range (live slider: 5k–50k)
 GAME_INTERVAL_MS     = 16
 GAME_WIDTH           = 800
 GAME_HEIGHT          = 800   # square play field (UI revamp). Was 600; N_PANELS still
@@ -231,6 +232,10 @@ _P2_LABEL = 'P2' if TWO_PLAYER_MODE else 'AI'
 
 def get_initial_game_state():
     return {
+        # Bumped in app-status by New Game / Training clicks; update_game_physics —
+        # the SOLE game-state writer — sees the mismatch and performs the reset
+        # itself, so an in-flight stale physics write can never clobber a fresh game.
+        'game_id': 0,
         'player_x': GAME_WIDTH / 2, 'ai_x': GAME_WIDTH / 2,
         'balls': [{'x': GAME_WIDTH / 2, 'y': GAME_HEIGHT / 2,
                    'vx': 0, 'vy': random.choice((-1, 1)) * abs(INITIAL_BALL_SPEED_Y)}],
@@ -374,14 +379,19 @@ app.layout = html.Div(
             _tuning_row('Low-pass (Hz)', dcc.Slider(
                 id='lpf-slider', min=10, max=100, step=5, value=EOG_LPF_HZ,
                 marks={v: _MK(v) for v in (10, 30, 50, 70, 100)})),
+            _tuning_row('Waveform ±µV', dcc.Slider(
+                id='wave-ymax-slider', min=5000, max=50000, step=5000, value=WAVE_YMAX_DEFAULT,
+                marks={v: _MK(f'{v // 1000}k') for v in (5000, 15000, 30000, 50000)})),
         ]),
         # ── stores + intervals (unchanged) + two new waveform-display stores ──
         dcc.Store(id='settings-store',       data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH,
                                                     'two_player': TWO_PLAYER_MODE}),
         dcc.Store(id='eog-tuning-store',      data={'sigma_thr': EOG_SIGMA_THR, 'glance_window_s': GLANCE_WINDOW_S,
-                                                    'lpf_hz': EOG_LPF_HZ, 'hpf_hz': EOG_HPF_HZ, 'detector': 'velocity'}),
+                                                    'lpf_hz': EOG_LPF_HZ, 'hpf_hz': EOG_HPF_HZ, 'detector': 'velocity',
+                                                    'wave_ymax': WAVE_YMAX_DEFAULT}),
         dcc.Store(id='game-state-store',     data=get_initial_game_state()),
-        dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0, 'mode': 'game'}),
+        dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0, 'mode': 'game',
+                                                    'game_id': 0}),
         dcc.Store(id='bci-command-store',    data={'command': 'NEUTRAL', 'seq': 0}),
         dcc.Store(id='bci-command-store-p2', data={'command': 'NEUTRAL', 'seq': 0}),
         dcc.Store(id='key-press-store',      data={'p1_last': 'None', 'p1_seq': 0, 'p2_last': 'None', 'p2_seq': 0}),
@@ -600,7 +610,8 @@ def _wave_payload(eog_st, brd):
     sig_thr = eog_st.get('sigma_thr', EOG_SIGMA_THR)
     thr = round(float(sig_thr * sigma), 1) if sigma else None
     return {'y': _decimate_peak(sig, WAVE_POINTS), 'thr': thr,
-            'sigma_thr': round(float(sig_thr), 1), 'win_s': WAVE_WINDOW_S}
+            'sigma_thr': round(float(sig_thr), 1), 'win_s': WAVE_WINDOW_S,
+            'ymax': eog_st.get('wave_ymax', WAVE_YMAX_DEFAULT)}
 
 
 # Live-feed store fills, on the BCI tick (100 ms, enabled only in CALIBRATING/PLAYING),
@@ -658,8 +669,9 @@ def update_settings(ball_speed):
     Input('hpf-slider', 'value'),
     Input('lpf-slider', 'value'),
     Input('detector-toggle', 'value'),
+    Input('wave-ymax-slider', 'value'),
 )
-def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, detector):
+def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, detector, wave_ymax):
     """Live-apply the detector knobs from the browser controls.
 
     Writes straight into both players' state dicts (mutated in place). _run_eog_sm
@@ -677,8 +689,10 @@ def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, detector):
         st['hpf_hz']          = hpf_hz
         st['lpf_hz']          = lpf_hz
         st['detector']        = detector
+        st['wave_ymax']       = wave_ymax
     return {'sigma_thr': sigma_thr, 'glance_window_s': glance_window,
-            'hpf_hz': hpf_hz, 'lpf_hz': lpf_hz, 'detector': detector}
+            'hpf_hz': hpf_hz, 'lpf_hz': lpf_hz, 'detector': detector,
+            'wave_ymax': wave_ymax}
 
 
 def _advance_training(state, bci_command, bci_command_p2, key_data):
@@ -694,16 +708,13 @@ def _advance_training(state, bci_command, bci_command_p2, key_data):
     so the completed sweep is the marker's opposite.
     """
     kbd_moves = NO_BOARD_MODE or not (EOG_MODE or TWO_PLAYER_MODE)
-    state['balls'], state['powerups'] = [], []   # never a ball in training
-    # Forced every tick, not trusted from the entry reset: a physics tick already in
-    # flight when Training was clicked can write the OLD game state (with its scores)
-    # after manage_app_flow's get_initial_game_state reset lands, and it would stick.
+    # Belt-and-suspenders invariants, forced EVERY tick (the game_id reset in
+    # update_game_physics already guarantees a fresh state on entry, but these must
+    # hold unconditionally in training no matter what state arrives): never a ball,
+    # never a score, and NO countdown — prompts are live from the first tick.
+    state['balls'], state['powerups'] = [], []
     state['player_score'], state['ai_score'], state['winner'] = 0, 0, None
-    # READY/SET/GO hold at training entry: paddles stay live below, but the prompts
-    # only appear (and targets only start flipping) once the countdown hits GO.
-    hold = state.get('serve_hold', 0)
-    if hold > 0:
-        state['serve_hold'] = hold - 1
+    state['serve_hold'] = 0
 
     # --- P1 keys + EOG (mirrors the PLAYING path) ---
     zone_idx = state.get('zone_idx', CENTER_ZONE)
@@ -722,16 +733,14 @@ def _advance_training(state, bci_command, bci_command_p2, key_data):
         zone_idx, bci_command, state.get('last_bci_seq'), min_zone=0, max_zone=MAX_ZONE)
     state['zone_idx'] = zone_idx
     state['player_x'] = PADDLE_POSITIONS[zone_idx]
-    if hold == 0:
-        new_target = next_training_target(zone_idx, state.get('train_target', 'left'),
-                                          min_zone=0, max_zone=MAX_ZONE)
-        if new_target != state.get('train_target'):
-            _log_event(f'p1_target_{new_target}')
-            state['train_target'] = new_target
+    new_target = next_training_target(zone_idx, state.get('train_target', 'left'),
+                                      min_zone=0, max_zone=MAX_ZONE)
+    if new_target != state.get('train_target'):
+        _log_event(f'p1_target_{new_target}')
+        state['train_target'] = new_target
 
     # --- P2 (human in 2-player only; in single-player the AI paddle idles at HOME —
-    #     forced every tick like the scores above, else a stale physics write can
-    #     strand it wherever the last rally left it — and it gets no prompt) ---
+    #     forced every tick like the invariants above — and it gets no prompt) ---
     if not TWO_PLAYER_MODE:
         state['ai_zone_idx'] = CENTER_ZONE
         state['ai_x']        = PADDLE_POSITIONS[CENTER_ZONE]
@@ -753,12 +762,11 @@ def _advance_training(state, bci_command, bci_command_p2, key_data):
             min_zone=0, max_zone=MAX_ZONE)
         state['zone_idx_p2'] = zone_idx_p2
         state['ai_x']        = PADDLE_POSITIONS[zone_idx_p2]
-        if hold == 0:
-            new_target_p2 = next_training_target(zone_idx_p2, state.get('train_target_p2', 'left'),
-                                                 min_zone=0, max_zone=MAX_ZONE)
-            if new_target_p2 != state.get('train_target_p2'):
-                _log_event(f'p2_target_{new_target_p2}')
-                state['train_target_p2'] = new_target_p2
+        new_target_p2 = next_training_target(zone_idx_p2, state.get('train_target_p2', 'left'),
+                                             min_zone=0, max_zone=MAX_ZONE)
+        if new_target_p2 != state.get('train_target_p2'):
+            _log_event(f'p2_target_{new_target_p2}')
+            state['train_target_p2'] = new_target_p2
 
     return state
 
@@ -775,6 +783,18 @@ def _advance_training(state, bci_command, bci_command_p2, key_data):
     prevent_initial_call=True,
 )
 def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_data, settings):
+    # A New Game / Training click bumps app-status game_id; the reset happens HERE,
+    # in the sole game-state writer, so it applies race-free within one 16 ms tick
+    # (an in-flight stale tick can no longer clobber a fresh game — the next tick
+    # sees the id mismatch and rebuilds). Runs in ANY status so the scoreboard is
+    # already fresh behind the INSTRUCTIONS/CALIBRATING overlay.
+    gid = app_status.get('game_id', 0)
+    if state.get('game_id', 0) != gid:
+        state = get_initial_game_state()
+        state['game_id'] = gid
+        if app_status.get('mode') == 'training':   # training: no READY/SET/GO hold
+            state.update({'serve_hold': 0, 'serve_hold_total': 0})
+        return state
     if app_status.get('status') == 'TRAINING':
         return _advance_training(state, bci_command, bci_command_p2, key_data)
     if app_status.get('status') != 'PLAYING':
@@ -949,6 +969,7 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
         state = get_initial_game_state()
         state.update({
             'player_score': p, 'ai_score': a,
+            'game_id': gid,   # same game — MUST carry, or the next tick re-resets it
             'balls': [{'x': GAME_WIDTH / 2, 'y': GAME_HEIGHT / 2, 'vx': 0,
                        'vy': random.choice((-1, 1)) * ball_speed}],
             # point over → the short between-point hold, not the full READY/SET/GO
@@ -1044,7 +1065,6 @@ def check_winner(game_state, app_status):
 @app.callback(
     Output('status-display', 'children'),
     Output('app-status-store', 'data'),
-    Output('game-state-store', 'data', allow_duplicate=True),
     Output('bci-interval', 'disabled'),
     Output('game-interval', 'disabled'),
     Input('status-interval', 'n_intervals'),
@@ -1066,7 +1086,11 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, training_clicks, app_s
     countdown      = app_status.get('countdown', 0)
     mode           = app_status.get('mode', 'game')   # 'game' | 'training' — where the
     new_status     = status                           # calibration countdown lands
-    new_game_state = no_update
+    # This callback does NOT write game-state (a click's reset used to race the
+    # in-flight 16 ms physics write and could be clobbered — observed live as a
+    # skipped READY/SET/GO). Instead accepted clicks bump game_id and the physics
+    # tick, the sole game-state writer, performs the reset itself.
+    game_id        = app_status.get('game_id', 0)
 
     needs_eog_flow = EOG_MODE or (TWO_PLAYER_MODE and not NO_BOARD_MODE)
     # Already in training, or counting down toward it? (used by the button guards)
@@ -1080,8 +1104,8 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, training_clicks, app_s
         if not in_training_flow:
             new_status = 'PAUSED' if status != 'PAUSED' else 'PLAYING'
     elif 'start-button' in triggered and start_clicks > 0:
-        mode           = 'game'
-        new_game_state = get_initial_game_state()
+        mode     = 'game'
+        game_id += 1                       # physics performs the reset on this tick
         if needs_eog_flow:
             new_status = 'INSTRUCTIONS'
             countdown  = INSTRUCTIONS_S
@@ -1092,10 +1116,11 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, training_clicks, app_s
             new_status = 'PLAYING'
     elif 'training-button' in triggered and training_clicks > 0:
         # Re-clicking while already in (or counting down into) training does nothing;
-        # from anywhere else it behaves like New Game but lands in TRAINING.
+        # from anywhere else it behaves like New Game but lands in TRAINING (the
+        # physics reset sees mode=='training' and zeroes the READY/SET/GO hold).
         if not in_training_flow:
-            mode           = 'training'
-            new_game_state = get_initial_game_state()
+            mode     = 'training'
+            game_id += 1
             if needs_eog_flow:
                 new_status = 'INSTRUCTIONS'
                 countdown  = INSTRUCTIONS_S
@@ -1151,11 +1176,12 @@ def manage_app_flow(status_n, pause_clicks, start_clicks, training_clicks, app_s
     bci_disabled  = NO_BOARD_MODE or (new_status not in ('PLAYING', 'CALIBRATING', 'TRAINING'))
     game_disabled = new_status in ('PAUSED', 'GAME_OVER')
 
-    new_app_status = {'status': new_status, 'countdown': countdown, 'mode': mode}
+    new_app_status = {'status': new_status, 'countdown': countdown, 'mode': mode,
+                      'game_id': game_id}
     if app_status.get('winner') and new_status == 'GAME_OVER':
         new_app_status['winner'] = app_status['winner']
 
-    return msg, new_app_status, new_game_state, bci_disabled, game_disabled
+    return msg, new_app_status, bci_disabled, game_disabled
 
 
 # ==============================================================================
@@ -1252,9 +1278,10 @@ def _save_one_recording(p, start_t, stop_t, n_players, stamp):
     notes = (f"in-game {session} recording ({n_players}-player); board v{p['version']} on "
              f"{p['port']}; CH3-8 firmware-off so only the EOG pair stored "
              f"(row0=ch_L, row1=ch_R). {pipeline_description(detector)} "
-             f"Serve-hold: the first {START_COUNTDOWN_S:.1f}s after play_start/train_start "
-             f"is the READY/SET/GO countdown (ball parked, training prompts hidden); each "
-             f"post-point serve holds {SERVE_HOLD_S:.1f}s with the ball parked at center.")
+             f"Serve-hold: the first {START_COUNTDOWN_S:.1f}s after play_start is the "
+             f"READY/SET/GO countdown (ball parked); each post-point serve holds "
+             f"{SERVE_HOLD_S:.1f}s with the ball parked at center. Training has no "
+             f"countdown — prompts are live from train_start.")
     if training:
         notes += (" Training mode: no ball; on-field prompts cue full-width paddle sweeps."
                   " pN_target_<dir> events mark each prompt flip (the NEW instruction;"

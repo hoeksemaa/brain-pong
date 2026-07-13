@@ -37,7 +37,7 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     // READY/SET ticks E5, GO! C6; between-point ticks C5, launch G5.
     const FREQ_TICK_START = 659.25, FREQ_GO = 1046.50, FREQ_TICK_SERVE = 523.25, FREQ_LAUNCH = 783.99;
 
-    const WAVE_YMAX = 20000;   // fixed ±20k µV axis
+    const WAVE_YMAX_DEFAULT = 15000;   // ±µV waveform half-range (live slider: 5k–50k)
 
     const dashState = { gameState: null, appStatus: null, settings: null, canvasId: null };
     let started = false, prevZoneIdx = null, prevAiX = null, audioCtx = null, trails = [];
@@ -325,9 +325,9 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     }
 
     // ==========================================================
-    //  WAVEFORM  (fixed ±20k µV, dashed ±Nσ, second gridlines, soft
+    //  WAVEFORM  (fixed ±ymax µV, dashed ±Nσ, second gridlines, soft
     //  peak-centered glance bands: green = LEFT, red = RIGHT).
-    //  waveData = { y:[...velocity samples...], thr, sigma_thr, win_s }
+    //  waveData = { y:[...velocity samples...], thr, sigma_thr, win_s, ymax }
     // ==========================================================
     function renderWave(canvasId, waveData) {
         const canvas = document.getElementById(canvasId);
@@ -335,7 +335,8 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         const { ctx, w, h } = fit(canvas);
         ctx.clearRect(0, 0, w, h);
         ctx.font = '9px ui-monospace, monospace';
-        const yOf = v => h / 2 - (Math.max(-WAVE_YMAX, Math.min(WAVE_YMAX, v)) / WAVE_YMAX) * (h / 2 - 8);
+        const ymax = (waveData && waveData.ymax) || WAVE_YMAX_DEFAULT;
+        const yOf = v => h / 2 - (Math.max(-ymax, Math.min(ymax, v)) / ymax) * (h / 2 - 8);
         const y = (waveData && waveData.y) || [];
         const n = y.length;
         const xOf = i => (n > 1 ? i / (n - 1) : 0) * w;
@@ -379,9 +380,10 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
             ctx.fillStyle = COL_SIGMA; ctx.textBaseline = 'alphabetic';
             ctx.fillText('+' + st + 'σ', 4, yOf(thr) - 3); ctx.fillText('-' + st + 'σ', 4, yOf(-thr) + 10);
         }
-        // axis labels (µV on the left, with the ±20k)
-        ctx.fillStyle = COL_INK_DIM; ctx.textBaseline = 'top'; ctx.fillText('+20k µV', 4, 3);
-        ctx.textBaseline = 'bottom'; ctx.fillText('-20k µV', 4, h - 12);
+        // axis labels (µV on the left, with the ±ymax)
+        const ymaxLbl = (ymax / 1000) + 'k µV';
+        ctx.fillStyle = COL_INK_DIM; ctx.textBaseline = 'top'; ctx.fillText('+' + ymaxLbl, 4, 3);
+        ctx.textBaseline = 'bottom'; ctx.fillText('-' + ymaxLbl, 4, h - 12);
         // trace
         if (n) {
             ctx.lineJoin = 'round'; ctx.lineWidth = 1.6; ctx.strokeStyle = COL_TRACE;
