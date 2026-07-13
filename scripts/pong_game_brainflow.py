@@ -105,7 +105,7 @@ REC_OUT_DIR          = Path(__file__).resolve().parent.parent / "data" / "eog"
 REC_MONTAGE          = "2 electrodes at outer canthi (differential) + active bias on ear clip, no ground"
 REC_GAIN             = 24         # Cerelog X8 default (assumed, not read from board); matches the corpus
 INITIAL_BALL_SPEED_Y = -4
-WAVE_YMAX_DEFAULT    = 15000  # µV; fixed waveform half-range (live slider: 5k–50k)
+WAVE_YMAX_DEFAULT    = 10000  # µV; fixed waveform half-range (live slider: 5k–50k)
 GAME_INTERVAL_MS     = 16
 GAME_WIDTH           = 800
 GAME_HEIGHT          = 800   # square play field (UI revamp). Was 600; N_PANELS still
@@ -381,7 +381,7 @@ app.layout = html.Div(
                 marks={v: _MK(v) for v in (10, 30, 50, 70, 100)})),
             _tuning_row('Waveform ±µV', dcc.Slider(
                 id='wave-ymax-slider', min=5000, max=50000, step=5000, value=WAVE_YMAX_DEFAULT,
-                marks={v: _MK(f'{v // 1000}k') for v in (5000, 15000, 30000, 50000)})),
+                marks={v: _MK(f'{v // 1000}k') for v in (5000, 10000, 30000, 50000)})),
         ]),
         # ── stores + intervals (unchanged) + two new waveform-display stores ──
         dcc.Store(id='settings-store',       data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH,
@@ -609,12 +609,13 @@ def _wave_payload(eog_st, brd):
     sigma   = eog_st['baseline_sigma']
     sig_thr = eog_st.get('sigma_thr', EOG_SIGMA_THR)
     thr = round(float(sig_thr * sigma), 1) if sigma else None
-    # Real committed detections, mapped onto this window's time axis. The window's
-    # right edge is ~now (newest sample); a fire at wallclock t_fire sits at
-    # x = 1 - (now - t_fire)/WAVE_WINDOW_S, so bands scroll left with the trace and
-    # drop off once older than the window. This overlays the ACTUAL detector fires
-    # (glance-pair state machine), not raw σ crossings — see render.js. Prune in
-    # place so fire_log stays bounded to the visible window (+ small margin).
+    # Real detected motions, mapped onto this window's time axis. The window's
+    # right edge is ~now (newest sample); a motion at wallclock t sits at
+    # x = 1 - (now - t)/WAVE_WINDOW_S, so bands scroll left with the trace and
+    # drop off once older than the window. This overlays every directional motion
+    # the glance-pair state machine COUNTED (each arming saccade + each return
+    # saccade), not raw σ crossings — see render.js. Prune in place so fire_log
+    # stays bounded to the visible window (+ small margin).
     now = time.time()
     log = eog_st.get('fire_log')
     fires = []
