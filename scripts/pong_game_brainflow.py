@@ -215,7 +215,7 @@ def get_initial_game_state():
     return {
         'player_x': GAME_WIDTH / 2, 'ai_x': GAME_WIDTH / 2,
         'balls': [{'x': GAME_WIDTH / 2, 'y': GAME_HEIGHT / 2,
-                   'vx': 0, 'vy': INITIAL_BALL_SPEED_Y}],
+                   'vx': 0, 'vy': random.choice((-1, 1)) * abs(INITIAL_BALL_SPEED_Y)}],
         'powerups': [],
         'speed_mult': 1.0,
         'ai_zone_idx': CENTER_ZONE, 'ai_move_timer': 0,
@@ -801,7 +801,8 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
         state = get_initial_game_state()
         state.update({
             'player_score': p, 'ai_score': a,
-            'balls': [{'x': GAME_WIDTH / 2, 'y': GAME_HEIGHT / 2, 'vx': 0, 'vy': -ball_speed}],
+            'balls': [{'x': GAME_WIDTH / 2, 'y': GAME_HEIGHT / 2, 'vx': 0,
+                       'vy': random.choice((-1, 1)) * ball_speed}],
         })
         return state
 
