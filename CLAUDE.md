@@ -131,7 +131,12 @@ each player to sweep their paddle full-left then full-right in a loop
 (`game_logic.next_training_target`; prompts drawn by render.js, never the dimming
 overlay). Pause is inert in training; New Game exits it; re-clicking Training is a
 no-op. Training sessions record normally, tagged `training`, with `train_start` +
-`pN_target_<dir>` prompt-flip event markers.
+`pN_target_<dir>` prompt-flip event markers. **Serve holds** (state-level, not app
+statuses — a `serve_hold` frame counter the 16 ms physics tick decrements while the
+ball stays parked and paddles remain live): PLAYING/TRAINING open with a 1.5 s
+READY→SET→GO! word countdown (ball launches / prompts appear ON the GO), and every
+post-point serve holds a plain 1 s beat; render.js draws the words and plays the
+tick/launch tones off `serve_hold`/`hold_kind`.
 
 **Per-player detector SM** (`_run_eog_sm`): `CALIBRATING → IDLE → ARMED →
 REFRACTORY → IDLE`.
