@@ -343,23 +343,18 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         const thr = waveData && waveData.thr;
         const winS = (waveData && waveData.win_s) || 5;
 
-        // soft peak-centered glance bands (behind the trace)
-        if (thr && n) {
-            const minRun = 2, L = COL_LEFT, R = COL_RIGHT;
-            let i = 0;
-            while (i < n) {
-                const sgn = y[i] > thr ? 1 : (y[i] < -thr ? -1 : 0);
-                if (!sgn) { i++; continue; }
-                let j = i, peak = i, pv = Math.abs(y[i]);
-                while (j < n && Math.sign(y[j]) === sgn && Math.abs(y[j]) > thr * 0.5) { if (Math.abs(y[j]) > pv) { pv = Math.abs(y[j]); peak = j; } j++; }
-                if (j - i >= minRun) {
-                    const col = sgn < 0 ? L : R, cx = xOf(peak), half = Math.max((xOf(j) - xOf(i)) * 0.9, 10);
-                    const x0 = cx - half, x1 = cx + half;
-                    const g = ctx.createLinearGradient(x0, 0, x1, 0);
-                    g.addColorStop(0, 'transparent'); g.addColorStop(.5, col); g.addColorStop(1, 'transparent');
-                    ctx.globalAlpha = .45; ctx.fillStyle = g; ctx.fillRect(x0, 0, x1 - x0, h); ctx.globalAlpha = 1;
-                }
-                i = j;
+        // Detection bands — one per REAL committed fire from the glance-pair state
+        // machine (waveData.fires = [{x, dir}], x in [0,1] along the window). These
+        // are actual paddle-moving detections, NOT raw σ crossings: green = LEFT,
+        // red = RIGHT (committed command direction). Uniform strength, fixed width,
+        // hard edges — no center-weighted fade.
+        const fires = (waveData && waveData.fires) || [];
+        if (fires.length) {
+            const half = Math.max(w * 0.015, 8);   // fixed band half-width
+            for (const f of fires) {
+                const cx = f.x * w, col = f.dir === 'LEFT' ? COL_LEFT : COL_RIGHT;
+                ctx.globalAlpha = .32; ctx.fillStyle = col;
+                ctx.fillRect(cx - half, 0, 2 * half, h); ctx.globalAlpha = 1;
             }
         }
         // second gridlines (static)
