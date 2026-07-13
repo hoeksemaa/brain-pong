@@ -9,6 +9,14 @@
   font-family: 'm6x11';
   src: url('/assets/fonts/m6x11.ttf') format('truetype');
   font-display: block;
+  /* m6x11 declares its ascent at EXACTLY the cap-glyph top (hhea/win 704 of 1024
+     upm) — zero headroom, so any metrics-derived clip box (notably <input>) puts
+     letter tops flush against its edge and rounding shaves them. Override the
+     metrics the browser lays out with: caps top out at 68.75% em, so 82% ascent
+     buys ~0.13em of real headroom in every engine; descent floor is 18.75%. */
+  ascent-override: 82%;
+  descent-override: 22%;
+  line-gap-override: 0%;
 }
 
 :root { color-scheme: dark; }
