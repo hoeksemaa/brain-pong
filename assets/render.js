@@ -33,11 +33,15 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     const COL_INK        = '#f4ead2', COL_INK_DIM = '#90a4b0';
 
     const FREQ_LEFT = 880.00, FREQ_RIGHT = 987.77, FREQ_AI_LEFT = 1174.66, FREQ_AI_RIGHT = 1318.51;
+    // serve-hold cues (distinct from the four move tones above):
+    // READY/SET ticks E5, GO! C6; between-point ticks C5, launch G5.
+    const FREQ_TICK_START = 659.25, FREQ_GO = 1046.50, FREQ_TICK_SERVE = 523.25, FREQ_LAUNCH = 783.99;
 
     const WAVE_YMAX = 40000;   // fixed ±40k µV axis
 
     const dashState = { gameState: null, appStatus: null, settings: null, canvasId: null };
     let started = false, prevZoneIdx = null, prevAiX = null, audioCtx = null, trails = [];
+    let prevHold = null, goFlashUntil = 0;   // serve-hold audio bookkeeping + GO! flash
 
     // ---------------- audio ----------------
     function getAudioCtx() {
@@ -138,11 +142,40 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         paddle(ctx, gs.ai_x     - drawW / 2, H - PADDLE_HEIGHT, drawW, PADDLE_HEIGHT, COL_P2, COL_P2_DEEP);
         // powerups (flip position; icon upright)
         for (const pu of (gs.powerups || [])) drawPowerup(ctx, pu.x, flipY(pu.y), pu.type);
-        // balls (white + glow)
-        ctx.save(); ctx.shadowColor = COL_BALL; ctx.shadowBlur = 18; ctx.fillStyle = COL_BALL;
-        for (const b of (gs.balls || [])) { ctx.beginPath(); ctx.arc(b.x, flipY(b.y), BALL_RADIUS, 0, 2 * Math.PI); ctx.fill(); }
-        ctx.restore();
+        // balls (white + glow) — hidden during the READY/SET/GO start hold so the
+        // ball "appears" exactly on GO! (the between-point 'serve' hold keeps it
+        // visible, parked at center: that stationary beat IS the round separator).
+        if (!(gs.hold_kind === 'start' && (gs.serve_hold || 0) > 0)) {
+            ctx.save(); ctx.shadowColor = COL_BALL; ctx.shadowBlur = 18; ctx.fillStyle = COL_BALL;
+            for (const b of (gs.balls || [])) { ctx.beginPath(); ctx.arc(b.x, flipY(b.y), BALL_RADIUS, 0, 2 * Math.PI); ctx.fill(); }
+            ctx.restore();
+        }
         drawTrainingPrompts(ctx, W, H);
+        drawServeCountdown(ctx, W, H);
+    }
+
+    // ---- READY / SET / GO! — the start-of-game (and training) countdown words.
+    //      READY and SET each cover half the hold; GO! flashes AT the launch moment
+    //      (goFlashUntil is armed by the audio bookkeeping in renderPong) and fades
+    //      while the ball is already flying — racing-light semantics.
+    function drawServeCountdown(ctx, W, H) {
+        const gs = dashState.gameState, st = dashState.appStatus;
+        if (!gs || !st || (st.status !== 'PLAYING' && st.status !== 'TRAINING')) return;
+        const hold = gs.serve_hold || 0, total = gs.serve_hold_total || 0;
+        let word = null;
+        if (hold > 0 && total > 0 && gs.hold_kind === 'start') {
+            word = hold > total / 2 ? { t: 'READY', c: COL_P1 } : { t: 'SET', c: COL_P2 };
+        } else if (performance.now() < goFlashUntil) {
+            word = { t: 'GO!', c: COL_INK };
+        }
+        if (!word) return;
+        ctx.save();
+        ctx.font = "96px 'm6x11', ui-monospace, monospace";
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.shadowColor = word.c; ctx.shadowBlur = 26; ctx.fillStyle = word.c;
+        if (word.t === 'GO!') ctx.globalAlpha = Math.max(0, (goFlashUntil - performance.now()) / 450);
+        ctx.fillText(word.t, W / 2, H / 2);
+        ctx.restore();
     }
 
     // ---- TRAINING mode: per-player prompt lines on the field (never the dimming
@@ -153,6 +186,7 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     function drawTrainingPrompts(ctx, W, H) {
         const gs = dashState.gameState, st = dashState.appStatus;
         if (!gs || !st || st.status !== 'TRAINING') return;
+        if ((gs.serve_hold || 0) > 0) return;   // prompts appear on GO!, not during READY/SET
         drawPromptLine(ctx, W, H * 0.32, gs.train_target || 'left', COL_P1);
         if (dashState.settings && dashState.settings.two_player) {
             drawPromptLine(ctx, W, H * 0.68, gs.train_target_p2 || 'left', COL_P2);
@@ -190,7 +224,9 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     function recordTrails() {
         const gs = dashState.gameState;
         const playing = dashState.appStatus && dashState.appStatus.status === 'PLAYING';
-        if (!gs || !playing) { trails = []; return; }
+        // no trail while the ball is parked for a serve hold (it would pile up as a
+        // static glow at center — and the start-hold ball is hidden entirely)
+        if (!gs || !playing || (gs.serve_hold || 0) > 0) { trails = []; return; }
         const balls = gs.balls || [];
         if (trails.length !== balls.length) trails = balls.map(() => []);
         for (let i = 0; i < balls.length; i++) { trails[i].push({ x: balls[i].x, y: balls[i].y }); if (trails[i].length > 16) trails[i].shift(); }
@@ -260,7 +296,27 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
             const ax = gameState.ai_x;
             if (prevAiX !== null && ax !== prevAiX) playTone(ax < prevAiX ? FREQ_AI_LEFT : FREQ_AI_RIGHT);
             prevAiX = ax;
-        } else { prevZoneIdx = null; prevAiX = null; }
+            // serve-hold cues: READY/SET ticks + GO! note at game/training start;
+            // two low ticks + a launch tone around every between-point hold. Edge-
+            // triggered off serve_hold crossings so each cue fires exactly once.
+            const hold = gameState.serve_hold || 0, total = gameState.serve_hold_total || 0;
+            const kind = gameState.hold_kind;
+            if (hold > 0 && total > 0) {
+                if (kind === 'start') {
+                    if (prevHold === null || hold > prevHold) playTone(FREQ_TICK_START);            // READY
+                    else if (prevHold > total / 2 && hold <= total / 2) playTone(FREQ_TICK_START);  // SET
+                } else if (prevHold !== null && hold <= prevHold) {
+                    for (const b of [total * 2 / 3, total / 3]) {
+                        if (prevHold > b && hold <= b) playTone(FREQ_TICK_SERVE);
+                    }
+                }
+                prevHold = hold;
+            } else if (prevHold !== null && prevHold > 0) {
+                playTone(kind === 'start' ? FREQ_GO : FREQ_LAUNCH);
+                if (kind === 'start') goFlashUntil = performance.now() + 450;   // GO! flash
+                prevHold = 0;
+            }
+        } else { prevZoneIdx = null; prevAiX = null; prevHold = null; }
         dashState.gameState = gameState;
         if (!started) { started = true; requestAnimationFrame(fieldLoop); }
     }

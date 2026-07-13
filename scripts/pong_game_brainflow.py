@@ -127,6 +127,17 @@ AI_REACTION_FRAMES   = 31
 
 BCI_UPDATE_INTERVAL_MS = 100
 
+# Serve-hold countdowns — state-level, NOT app statuses: a frame counter in the game
+# state that the 16 ms physics tick decrements while the ball stays parked; paddles
+# remain fully live throughout. Game/training start gets READY→SET→GO! words (ball
+# launches / training prompts appear ON the GO); every post-point serve is a plain
+# stationary-ball hold. render.js draws the words and plays the audio ticks from
+# serve_hold / serve_hold_total / hold_kind in the game state.
+START_COUNTDOWN_S = 1.5   # New Game / Training entry: READY → SET → GO!
+SERVE_HOLD_S      = 1.0   # between points: stationary ball, ticks only
+START_HOLD_FRAMES = round(START_COUNTDOWN_S * 1000 / GAME_INTERVAL_MS)
+SERVE_HOLD_FRAMES = round(SERVE_HOLD_S      * 1000 / GAME_INTERVAL_MS)
+
 # EOG electrode slot indices into get_eeg_channels().
 # L/R inputs physically swapped PERMANENTLY 2026-07-02 (left-eye → pin2/CH2/row2, right-eye →
 # pin1/CH1/row1). Slots reflect that so diff = data[ch_R]-data[ch_L] is canonical (rightward → +).
@@ -231,6 +242,10 @@ def get_initial_game_state():
         # TRAINING-mode prompt targets (render.js draws them; harmless during play).
         # Both prompts always start by asking for LEFT.
         'train_target': 'left', 'train_target_p2': 'left',
+        # Fresh state = game/training start → the READY/SET/GO hold. The between-point
+        # reset in update_game_physics overrides these with the shorter 'serve' hold.
+        'serve_hold': START_HOLD_FRAMES, 'serve_hold_total': START_HOLD_FRAMES,
+        'hold_kind': 'start',
         'player_score': 0, 'ai_score': 0, 'winner': None,
     }
 
@@ -684,6 +699,11 @@ def _advance_training(state, bci_command, bci_command_p2, key_data):
     # flight when Training was clicked can write the OLD game state (with its scores)
     # after manage_app_flow's get_initial_game_state reset lands, and it would stick.
     state['player_score'], state['ai_score'], state['winner'] = 0, 0, None
+    # READY/SET/GO hold at training entry: paddles stay live below, but the prompts
+    # only appear (and targets only start flipping) once the countdown hits GO.
+    hold = state.get('serve_hold', 0)
+    if hold > 0:
+        state['serve_hold'] = hold - 1
 
     # --- P1 keys + EOG (mirrors the PLAYING path) ---
     zone_idx = state.get('zone_idx', CENTER_ZONE)
@@ -702,14 +722,19 @@ def _advance_training(state, bci_command, bci_command_p2, key_data):
         zone_idx, bci_command, state.get('last_bci_seq'), min_zone=0, max_zone=MAX_ZONE)
     state['zone_idx'] = zone_idx
     state['player_x'] = PADDLE_POSITIONS[zone_idx]
-    new_target = next_training_target(zone_idx, state.get('train_target', 'left'),
-                                      min_zone=0, max_zone=MAX_ZONE)
-    if new_target != state.get('train_target'):
-        _log_event(f'p1_target_{new_target}')
-        state['train_target'] = new_target
+    if hold == 0:
+        new_target = next_training_target(zone_idx, state.get('train_target', 'left'),
+                                          min_zone=0, max_zone=MAX_ZONE)
+        if new_target != state.get('train_target'):
+            _log_event(f'p1_target_{new_target}')
+            state['train_target'] = new_target
 
-    # --- P2 (human in 2-player only; in single-player the AI paddle just idles —
-    #     there is no ball to chase, and it gets no prompt) ---
+    # --- P2 (human in 2-player only; in single-player the AI paddle idles at HOME —
+    #     forced every tick like the scores above, else a stale physics write can
+    #     strand it wherever the last rally left it — and it gets no prompt) ---
+    if not TWO_PLAYER_MODE:
+        state['ai_zone_idx'] = CENTER_ZONE
+        state['ai_x']        = PADDLE_POSITIONS[CENTER_ZONE]
     if TWO_PLAYER_MODE:
         zone_idx_p2 = state.get('zone_idx_p2', CENTER_ZONE)
         p2_seq = key_data.get('p2_seq', 0)
@@ -728,11 +753,12 @@ def _advance_training(state, bci_command, bci_command_p2, key_data):
             min_zone=0, max_zone=MAX_ZONE)
         state['zone_idx_p2'] = zone_idx_p2
         state['ai_x']        = PADDLE_POSITIONS[zone_idx_p2]
-        new_target_p2 = next_training_target(zone_idx_p2, state.get('train_target_p2', 'left'),
-                                             min_zone=0, max_zone=MAX_ZONE)
-        if new_target_p2 != state.get('train_target_p2'):
-            _log_event(f'p2_target_{new_target_p2}')
-            state['train_target_p2'] = new_target_p2
+        if hold == 0:
+            new_target_p2 = next_training_target(zone_idx_p2, state.get('train_target_p2', 'left'),
+                                                 min_zone=0, max_zone=MAX_ZONE)
+            if new_target_p2 != state.get('train_target_p2'):
+                _log_event(f'p2_target_{new_target_p2}')
+                state['train_target_p2'] = new_target_p2
 
     return state
 
@@ -840,6 +866,15 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
         state['ai_move_timer'] = ai_move_timer
         state['ai_x']          = PADDLE_POSITIONS[ai_zone_idx]
 
+    # --- Serve hold: READY/SET/GO at game start, plain 1 s hold after every point ---
+    # The ball stays parked at center (its serve velocity is already set) until the
+    # counter runs out; everything above still ran, so paddles stay live and players
+    # can re-position during the hold. Nothing can score and no powerup moves.
+    hold = state.get('serve_hold', 0)
+    if hold > 0:
+        state['serve_hold'] = hold - 1
+        return state
+
     target_speed       = ball_speed * speed_mult
     balls_remaining    = []
     new_powerup_spawns = []
@@ -916,6 +951,9 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
             'player_score': p, 'ai_score': a,
             'balls': [{'x': GAME_WIDTH / 2, 'y': GAME_HEIGHT / 2, 'vx': 0,
                        'vy': random.choice((-1, 1)) * ball_speed}],
+            # point over → the short between-point hold, not the full READY/SET/GO
+            'serve_hold': SERVE_HOLD_FRAMES, 'serve_hold_total': SERVE_HOLD_FRAMES,
+            'hold_kind': 'serve',
         })
         return state
 
@@ -1213,7 +1251,10 @@ def _save_one_recording(p, start_t, stop_t, n_players, stamp):
     session  = 'training-mode' if training else 'pong'
     notes = (f"in-game {session} recording ({n_players}-player); board v{p['version']} on "
              f"{p['port']}; CH3-8 firmware-off so only the EOG pair stored "
-             f"(row0=ch_L, row1=ch_R). {pipeline_description(detector)}")
+             f"(row0=ch_L, row1=ch_R). {pipeline_description(detector)} "
+             f"Serve-hold: the first {START_COUNTDOWN_S:.1f}s after play_start/train_start "
+             f"is the READY/SET/GO countdown (ball parked, training prompts hidden); each "
+             f"post-point serve holds {SERVE_HOLD_S:.1f}s with the ball parked at center.")
     if training:
         notes += (" Training mode: no ball; on-field prompts cue full-width paddle sweeps."
                   " pN_target_<dir> events mark each prompt flip (the NEW instruction;"
