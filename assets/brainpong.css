@@ -111,9 +111,13 @@ html, body {
 /* Name field. NOTE: dcc.Input renders a WRAPPER div (.dash-input-container, which
    carries our className) around the real <input class="dash-input-element">. The
    wrapper defaults to a white background, so make it transparent + full width; the
-   inner <input> (targeted by position below) gets the text/centering/font. */
+   inner <input> (targeted by position below) gets the text/centering/font.
+   CRITICAL: dcc's injected stylesheet pins this wrapper to height:34px with
+   overflow:hidden — a fixed porthole that CLIPPED the ~45px name text top/bottom
+   at large window sizes. It must grow with the input and never clip. */
 .player .dash-input-container {
   background: transparent; width: 100%; border: none; box-shadow: none; margin: 0; padding: 0;
+  height: auto; overflow: visible;
 }
 .player input {
   width: 100%; box-sizing: border-box; border: none; background: transparent; text-align: center;
