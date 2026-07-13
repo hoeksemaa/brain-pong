@@ -37,7 +37,7 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     // READY/SET ticks E5, GO! C6; between-point ticks C5, launch G5.
     const FREQ_TICK_START = 659.25, FREQ_GO = 1046.50, FREQ_TICK_SERVE = 523.25, FREQ_LAUNCH = 783.99;
 
-    const WAVE_YMAX = 40000;   // fixed ±40k µV axis
+    const WAVE_YMAX = 20000;   // fixed ±20k µV axis
 
     const dashState = { gameState: null, appStatus: null, settings: null, canvasId: null };
     let started = false, prevZoneIdx = null, prevAiX = null, audioCtx = null, trails = [];
@@ -154,13 +154,14 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         drawServeCountdown(ctx, W, H);
     }
 
-    // ---- READY / SET / GO! — the start-of-game (and training) countdown words.
-    //      READY and SET each cover half the hold; GO! flashes AT the launch moment
-    //      (goFlashUntil is armed by the audio bookkeeping in renderPong) and fades
-    //      while the ball is already flying — racing-light semantics.
+    // ---- READY / SET / GO! — the start-of-game countdown words (PLAYING only;
+    //      training enters directly with no countdown). READY and SET each cover
+    //      half the hold; GO! flashes AT the launch moment (goFlashUntil is armed
+    //      by the audio bookkeeping in renderPong) and fades while the ball is
+    //      already flying — racing-light semantics.
     function drawServeCountdown(ctx, W, H) {
         const gs = dashState.gameState, st = dashState.appStatus;
-        if (!gs || !st || (st.status !== 'PLAYING' && st.status !== 'TRAINING')) return;
+        if (!gs || !st || st.status !== 'PLAYING') return;
         const hold = gs.serve_hold || 0, total = gs.serve_hold_total || 0;
         let word = null;
         if (hold > 0 && total > 0 && gs.hold_kind === 'start') {
@@ -186,7 +187,6 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     function drawTrainingPrompts(ctx, W, H) {
         const gs = dashState.gameState, st = dashState.appStatus;
         if (!gs || !st || st.status !== 'TRAINING') return;
-        if ((gs.serve_hold || 0) > 0) return;   // prompts appear on GO!, not during READY/SET
         drawPromptLine(ctx, W, H * 0.32, gs.train_target || 'left', COL_P1);
         if (dashState.settings && dashState.settings.two_player) {
             drawPromptLine(ctx, W, H * 0.68, gs.train_target_p2 || 'left', COL_P2);
@@ -296,33 +296,36 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
             const ax = gameState.ai_x;
             if (prevAiX !== null && ax !== prevAiX) playTone(ax < prevAiX ? FREQ_AI_LEFT : FREQ_AI_RIGHT);
             prevAiX = ax;
-            // serve-hold cues: READY/SET ticks + GO! note at game/training start;
-            // two low ticks + a launch tone around every between-point hold. Edge-
-            // triggered off serve_hold crossings so each cue fires exactly once.
-            const hold = gameState.serve_hold || 0, total = gameState.serve_hold_total || 0;
-            const kind = gameState.hold_kind;
-            if (hold > 0 && total > 0) {
-                if (kind === 'start') {
-                    if (prevHold === null || hold > prevHold) playTone(FREQ_TICK_START);            // READY
-                    else if (prevHold > total / 2 && hold <= total / 2) playTone(FREQ_TICK_START);  // SET
-                } else if (prevHold !== null && hold <= prevHold) {
-                    for (const b of [total * 2 / 3, total / 3]) {
-                        if (prevHold > b && hold <= b) playTone(FREQ_TICK_SERVE);
+            // serve-hold cues (PLAYING only — training has no countdown): READY/SET
+            // ticks + GO! note at game start; two low ticks + a launch tone around
+            // every between-point hold. Edge-triggered off serve_hold crossings so
+            // each cue fires exactly once.
+            if (appStatus.status === 'PLAYING') {
+                const hold = gameState.serve_hold || 0, total = gameState.serve_hold_total || 0;
+                const kind = gameState.hold_kind;
+                if (hold > 0 && total > 0) {
+                    if (kind === 'start') {
+                        if (prevHold === null || hold > prevHold) playTone(FREQ_TICK_START);            // READY
+                        else if (prevHold > total / 2 && hold <= total / 2) playTone(FREQ_TICK_START);  // SET
+                    } else if (prevHold !== null && hold <= prevHold) {
+                        for (const b of [total * 2 / 3, total / 3]) {
+                            if (prevHold > b && hold <= b) playTone(FREQ_TICK_SERVE);
+                        }
                     }
+                    prevHold = hold;
+                } else if (prevHold !== null && prevHold > 0) {
+                    playTone(kind === 'start' ? FREQ_GO : FREQ_LAUNCH);
+                    if (kind === 'start') goFlashUntil = performance.now() + 450;   // GO! flash
+                    prevHold = 0;
                 }
-                prevHold = hold;
-            } else if (prevHold !== null && prevHold > 0) {
-                playTone(kind === 'start' ? FREQ_GO : FREQ_LAUNCH);
-                if (kind === 'start') goFlashUntil = performance.now() + 450;   // GO! flash
-                prevHold = 0;
-            }
+            } else { prevHold = null; }
         } else { prevZoneIdx = null; prevAiX = null; prevHold = null; }
         dashState.gameState = gameState;
         if (!started) { started = true; requestAnimationFrame(fieldLoop); }
     }
 
     // ==========================================================
-    //  WAVEFORM  (fixed ±40k µV, dashed ±Nσ, second gridlines, soft
+    //  WAVEFORM  (fixed ±20k µV, dashed ±Nσ, second gridlines, soft
     //  peak-centered glance bands: green = LEFT, red = RIGHT).
     //  waveData = { y:[...velocity samples...], thr, sigma_thr, win_s }
     // ==========================================================
@@ -376,9 +379,9 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
             ctx.fillStyle = COL_SIGMA; ctx.textBaseline = 'alphabetic';
             ctx.fillText('+' + st + 'σ', 4, yOf(thr) - 3); ctx.fillText('-' + st + 'σ', 4, yOf(-thr) + 10);
         }
-        // axis labels (µV on the left, with the ±40k)
-        ctx.fillStyle = COL_INK_DIM; ctx.textBaseline = 'top'; ctx.fillText('+40k µV', 4, 3);
-        ctx.textBaseline = 'bottom'; ctx.fillText('-40k µV', 4, h - 12);
+        // axis labels (µV on the left, with the ±20k)
+        ctx.fillStyle = COL_INK_DIM; ctx.textBaseline = 'top'; ctx.fillText('+20k µV', 4, 3);
+        ctx.textBaseline = 'bottom'; ctx.fillText('-20k µV', 4, h - 12);
         // trace
         if (n) {
             ctx.lineJoin = 'round'; ctx.lineWidth = 1.6; ctx.strokeStyle = COL_TRACE;
