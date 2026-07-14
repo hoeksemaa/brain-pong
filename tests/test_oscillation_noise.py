@@ -39,15 +39,19 @@ def test_filter_kills_60hz_but_passes_low_freq_oscillation():
 
 # ── 2. reproduce the spurious fire end-to-end ─────────────────────────────────────
 
-def _feed_oscillation(freq, amp_sigma, sigma=1.0, dur_s=3.0, poll_s=0.1):
+def _feed_oscillation(freq, amp_sigma, sigma=1.0, dur_s=3.0, poll_s=0.1, primed=None):
     """Filter an oscillation, chop into poll windows, run the state machine.
 
     Mirrors the live loop: _poll_eog hands _run_eog_sm the last poll_s of
-    filtered signal each tick. Returns the list of fired commands.
+    filtered signal each tick. Returns the list of fired commands. `primed`, if given,
+    seeds the per-player committed-glance scale (as real play would) so the amplitude
+    gate is active.
     """
     osc = sine(freq, amp_sigma * sigma, dur_s, sr=SR)
     filt = _eog_filter(osc.copy(), SR)
     st = calibrated_state(sigma=sigma)
+    if primed is not None:
+        st['glance_scale'] = list(primed)
     n_new = max(1, int(poll_s * SR))
     cmds = []
     for k in range(filt.size // n_new):
@@ -59,13 +63,24 @@ def _feed_oscillation(freq, amp_sigma, sigma=1.0, dur_s=3.0, poll_s=0.1):
 
 
 @pytest.mark.parametrize("freq", [3.0, 5.0, 8.0])
-def test_suprathreshold_oscillation_reproduces_spurious_fire(freq):
-    # KNOWN DEFECT: a clean oscillation above threshold drives phantom commands.
+def test_v3_amplitude_gate_suppresses_oscillation_in_play(freq):
+    # MITIGATION LANDED (pipeline-v3): once the per-player committed-glance scale is
+    # learned (as it is within the first few real glances of play), the amplitude gate
+    # rejects any supra-threshold oscillation weaker than a committed glance. A 10σ
+    # oscillation vs a ~35σ committed glance → zero spurious commands at every frequency.
+    st_primed = calibrated_state(sigma=1.0)
+    st_primed['glance_scale'] = [35.0] * 6          # a player who has made real glances
+    cmds = _feed_oscillation(freq, amp_sigma=10.0, primed=st_primed['glance_scale'])
+    assert cmds == [], f"{freq} Hz oscillation leaked a command past the amplitude gate"
+
+
+@pytest.mark.parametrize("freq", [3.0, 8.0])
+def test_unprimed_oscillation_still_partially_leaks(freq):
+    # HONEST BOUND: before any real glance primes the amplitude gate, only the run-count
+    # + min-wait gates act, which catch the mid-band (~5-6 Hz) but let slow/fast leak a
+    # few fires. This is why the amplitude gate (above) is the real oscillation defense.
     cmds = _feed_oscillation(freq, amp_sigma=10.0)
-    assert len(cmds) >= 1, (
-        f"{freq} Hz oscillation produced no command — if a mitigation landed, "
-        "flip this test to assert zero spurious fires."
-    )
+    assert len(cmds) >= 1
 
 
 def test_subthreshold_oscillation_is_safe():

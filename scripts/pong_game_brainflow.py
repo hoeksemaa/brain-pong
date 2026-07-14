@@ -366,7 +366,7 @@ app.layout = html.Div(
                 id='detector-toggle',
                 options=[{'label': ' Velocity', 'value': 'velocity'},
                          {'label': ' Matched filter', 'value': 'matched'}],
-                value='velocity', inline=True, inputStyle={'marginLeft': '16px', 'marginRight': '4px'})),
+                value='matched', inline=True, inputStyle={'marginLeft': '16px', 'marginRight': '4px'})),
             _tuning_row('Sigma threshold (×σ)', dcc.Slider(
                 id='sigma-thr-slider', min=1, max=10, step=0.5, value=EOG_SIGMA_THR,
                 marks={i: _MK(i) for i in range(1, 11)})),
@@ -387,7 +387,7 @@ app.layout = html.Div(
         dcc.Store(id='settings-store',       data={'ball_speed': abs(INITIAL_BALL_SPEED_Y), 'paddle_width': PADDLE_WIDTH,
                                                     'two_player': TWO_PLAYER_MODE}),
         dcc.Store(id='eog-tuning-store',      data={'sigma_thr': EOG_SIGMA_THR, 'glance_window_s': GLANCE_WINDOW_S,
-                                                    'lpf_hz': EOG_LPF_HZ, 'hpf_hz': EOG_HPF_HZ, 'detector': 'velocity',
+                                                    'lpf_hz': EOG_LPF_HZ, 'hpf_hz': EOG_HPF_HZ, 'detector': 'matched',
                                                     'wave_ymax': WAVE_YMAX_DEFAULT}),
         dcc.Store(id='game-state-store',     data=get_initial_game_state()),
         dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0, 'mode': 'game',
@@ -1240,7 +1240,7 @@ def _start_recording(p1_name, p2_name, mode='game'):
         'ch_L': st['ch_L'], 'ch_R': st['ch_R'], 'sr': st['sr'],
         'sigma_thr': st.get('sigma_thr'), 'hpf_hz': st.get('hpf_hz'),
         'lpf_hz': st.get('lpf_hz'), 'glance_window_s': st.get('glance_window_s'),
-        'detector': st.get('detector', 'velocity'),
+        'detector': st.get('detector', 'matched'),
     } for slot, brd, st, port in boards]
     _rec['active']     = True
     _rec['start_time'] = time.time()
@@ -1288,7 +1288,7 @@ def _save_one_recording(p, start_t, stop_t, n_players, stamp):
     eeg  = np.vstack([np.ascontiguousarray(span[p['ch_L']].astype(np.float64)),
                       np.ascontiguousarray(span[p['ch_R']].astype(np.float64))])   # (2,N)
     n_samp = eeg.shape[1]
-    detector = p.get('detector', 'velocity')
+    detector = p.get('detector', 'matched')
     training = _rec.get('mode') == 'training'
     session  = 'training-mode' if training else 'pong'
     notes = (f"in-game {session} recording ({n_players}-player); board v{p['version']} on "
