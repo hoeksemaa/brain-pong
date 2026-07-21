@@ -5,7 +5,7 @@ left/right eye movements off a [Cerelog X8](https://cerelog.com) and drives the 
 The setup is receive-only — it measures the small natural voltages your eye movements produce on the
 skin; nothing is ever sent back into the body.
 
-<a href="assets/eye-pong-demo.mp4"><img src="assets/eye-pong-poster.jpg" width="320" alt="BrainPong EOG demo — click to play"></a>
+![BrainPong — a live 2-player EOG match. The right-hand panels are each player's eye signal; the green/red bands mark every glance the detector fires on as it drives the paddles.](assets/brainpong-demo.gif)
 
 ## How it works
 
