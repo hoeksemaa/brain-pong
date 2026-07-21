@@ -5,7 +5,7 @@ left/right eye movements off a [Cerelog X8](https://cerelog.com) and drives the 
 The setup is receive-only — it measures the small natural voltages your eye movements produce on the
 skin; nothing is ever sent back into the body.
 
-<a href="assets/eye-pong-demo.mp4"><img src="assets/eye-pong-poster.jpg" width="320" alt="BrainPong EOG demo — click to play"></a>
+![BrainPong — a live 2-player EOG match. The right-hand panels are each player's eye signal; the green/red bands mark every glance the detector fires on as it drives the paddles.](assets/brainpong-demo.gif)
 
 ## How it works
 
@@ -22,7 +22,7 @@ signature rather than raw amplitude, which keeps it robust to drift.
 - `src/brainpong/` — importable library: `eog_core` (realtime glance-pair detector), `preprocess`, `detect`, `store` (viewer SQLite + npz decimation).
 - `scripts/` — runnable entrypoints (game, recorder, eval, plots, viewer server + ingest).
 - `web/` — the EOG diagnostic viewer frontend (static HTML/CSS/canvas, talks to the viewer API).
-- `data/eog/` — labeled EOG sessions (`eog-v1`/`eog-v2`). Read-only ground truth; never mutated.
+- `data/eog/` — labeled EOG sessions (`eog-v1`/`eog-v2`/`eog-v3`). Read-only ground truth; never mutated.
 - `derivatives/` — regenerable outputs (`derivatives/results/` = benchmark JSON; `viewer.db` = viewer store, gitignored).
 - `archive/` — prior SSVEP pong work. Reference only; superseded by the EOG approach.
 
@@ -61,7 +61,7 @@ python archive/eog-scripts/bench.py              # eval pipelines against all re
 
 python scripts/pong_game_brainflow.py --no-board   # keyboard only, no hardware
 python scripts/pong_game_brainflow.py --eog        # 1-player EOG (needs board)
-python scripts/pong_game_brainflow.py --2player    # 2-player EOG (P1=ch1-2, P2=ch3-4)
+python scripts/pong_game_brainflow.py --2player    # 2-player EOG (two boards, one per player)
 ```
 
 **Diagnostic web viewer** (no board needed — reads the committed recordings):
