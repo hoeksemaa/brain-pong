@@ -1,0 +1,46 @@
+name: Deploy EOG data portal to GitHub Pages
+
+# Serves the PUBLIC static portal (web/, incl. the pre-baked web/portal-data/) on
+# GitHub Pages. No Python runs here — the data is baked locally by
+# scripts/bake_portal.py and committed, so CI only uploads static files. The
+# local-only diagnostic viewer (web/studio/, which needs the Flask /api) is
+# excluded from the public deploy.
+#
+# GOING LIVE (deliberate, two steps — the portal is anonymized but this is the
+# outward-facing publish):
+#   1. Repo Settings → Pages → Source: "GitHub Actions"
+#      (or: gh api -X POST repos/hoeksemaa/brain-pong/pages -f build_type=workflow)
+#   2. Actions → "Deploy EOG data portal to GitHub Pages" → Run workflow
+# Manual-dispatch only on purpose, so merging to main never auto-publishes. To make
+# re-bakes auto-deploy once Pages is enabled, add a `push:` trigger on web/**.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage public site (exclude local-only studio viewer)
+        run: |
+          mkdir -p _site
+          rsync -a --exclude 'studio' --exclude '.playwright-mcp' web/ _site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

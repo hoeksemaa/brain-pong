@@ -3,22 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>EOG Studio — diagnostic viewer</title>
-  <link rel="stylesheet" href="style.css">
+  <title>BrainPong — EOG Data Portal</title>
+  <meta name="description" content="Public, filterable browser for the BrainPong horizontal-EOG recording corpus — every session, tagged, viewable through each historical filtering paradigm.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>%E2%97%B4</text></svg>">
+  <link rel="stylesheet" href="portal.css">
 </head>
 <body>
   <div class="app">
-    <aside class="sidebar">
-      <div class="brand"><b>◴</b> EOG Studio</div>
-      <div class="filters">
-        <span class="fchip on">All subjects</span>
-        <span class="fchip">Problems only</span>
+    <header class="topbar">
+      <div class="brand"><b>◴</b> BrainPong <span>EOG Data Portal</span></div>
+      <div class="corpus-stats" id="stats"></div>
+      <div class="topactions">
+        <button class="tbtn" id="aboutBtn" title="What is this?">About</button>
+        <a class="tbtn" href="cmrr/" title="CMRR collapse explainer">CMRR&nbsp;↗</a>
       </div>
-      <div class="sortbar"></div>
-      <ul class="reclist"></ul>
-    </aside>
-    <main class="main"></main>
+    </header>
+    <div class="body">
+      <aside class="sidebar">
+        <div class="searchwrap"><input id="search" type="search" placeholder="Search subject… (e.g. Player A)" autocomplete="off"></div>
+        <div class="filters" id="filters"></div>
+        <div class="listmeta" id="listmeta"></div>
+        <ul class="reclist" id="reclist"></ul>
+      </aside>
+      <main class="main" id="main"></main>
+    </div>
   </div>
-  <script src="viewer.js"></script>
+  <div class="modal" id="aboutModal" hidden></div>
+  <script src="portal.js"></script>
 </body>
 </html>
