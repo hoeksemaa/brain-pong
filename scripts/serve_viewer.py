@@ -1,5 +1,11 @@
 """
-Flask API + static host for the EOG diagnostic web viewer.
+Flask API + static host for the EOG viewer(s).
+
+Serves two frontends out of web/:
+  /          the PUBLIC data portal (static, reads web/portal-data/ baked by
+             scripts/bake_portal.py — no DB, no API; also what deploys to Pages)
+  /studio/   the local diagnostic viewer (real names + trim editing; uses the
+             /api routes below, backed by the SQLite store)
 
 Reads the SQLite store (built by scripts/ingest_npz.py) and serves:
 
@@ -24,7 +30,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory, abort
+from flask import Flask, jsonify, request, send_from_directory, redirect, abort
 
 from brainpong import store
 
@@ -121,10 +127,16 @@ def create_app(db_path=DEFAULT_DB):
 
     @app.get("/")
     def index():
-        return send_from_directory(WEB, "index.html")
+        return send_from_directory(WEB, "index.html")   # the public portal
 
     @app.get("/<path:p>")
     def static_files(p):
+        # directory paths → serve index.html; redirect the unslashed form first so
+        # the page's relative asset refs resolve against /<dir>/ (e.g. /studio → /studio/)
+        if not p.endswith("/") and (WEB / p).is_dir():
+            return redirect(f"/{p}/", code=301)
+        if p.endswith("/"):
+            return send_from_directory(WEB, str(Path(p) / "index.html"))
         return send_from_directory(WEB, p)
 
     return app

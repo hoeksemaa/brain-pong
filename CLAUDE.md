@@ -54,8 +54,12 @@ src/brainpong/   — importable library (`pip install -e .`)
   store.py       — viewer SQLite store over frozen npz (metadata/events/trims only)
 scripts/         — pong_game_brainflow.py (game), record_eog.py (cued recorder),
                    filtered_plot.py (live signal sanity plot),
-                   serve_viewer.py + ingest_npz.py (diagnostic viewer)
-web/             — "EOG Studio" diagnostic viewer frontend (canvas + Flask API)
+                   serve_viewer.py + ingest_npz.py (diagnostic viewer),
+                   bake_portal.py (public static portal generator → web/portal-data/)
+web/             — index.html/portal.js/portal.css = PUBLIC static data portal
+                   (reads web/portal-data/, anonymized, GitHub-Pages-hostable);
+                   web/studio/ = local "EOG Studio" diagnostic viewer (Flask /api,
+                   real names + trim editing); web/cmrr/ = CMRR explainer
 data/eog/        — labeled EOG recordings (eog-v1/v2/v3). Read-only ground truth.
 derivatives/     — regenerable outputs (results/ JSON; viewer.db, gitignored)
 archive/         — SSVEP pong + early EOG probes + archived offline eval/plot tooling
@@ -84,11 +88,16 @@ python scripts/pong_game_brainflow.py --eog         # 1-player EOG (needs board 
 python scripts/pong_game_brainflow.py --2player     # 2-player EOG (two boards)
 ```
 
-Diagnostic viewer (no board needed — reads committed recordings):
+Viewers (no board needed — read committed recordings). See `docs/data-portal.md`.
 
 ```bash
+# PUBLIC data portal — static, anonymized, filter-heavy, paradigm-lens browser:
+python scripts/bake_portal.py                # (re)bake web/portal-data/ from data/eog/
+python -m http.server --directory web 8899   # -> http://localhost:8899/  (pure static)
+
+# LOCAL diagnostic viewer — real names + trim editing (needs the Flask /api):
 python scripts/ingest_npz.py     # build derivatives/viewer.db from data/eog/
-python scripts/serve_viewer.py   # http://localhost:8770  (needs only flask + numpy/scipy)
+python scripts/serve_viewer.py   # http://localhost:8770/ (portal) + /studio/ (viewer)
 ```
 
 **Modes** (`pong_game_brainflow.py`, `parse_known_args`): default = keyboard only
