@@ -18,143 +18,160 @@
  */
 
 :root {
-  --bg:    #ffffff;
-  --ink:   #000000;   /* base data + primary marks */
-  --green: #00a344;   /* secondary base data — full saturation; see note below */
-  --red:   #d1332e;   /* modified / derived data */
-  --axis:  #4a4a4a;   /* tick labels, units — dark grey, subordinate to the data */
-  --grid:  #e6e6e6;   /* gridlines: present, never competing */
-  --cue:   #9aa0a6;   /* gaze-cue guides — above the gridlines, below the data */
-  --rule:  #d4d4d4;   /* toggle track */
-  --mono: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --eog-bg:    #ffffff;
+  --eog-ink:   #000000;   /* base data + primary marks */
+  --eog-green: #00a344;   /* secondary base data — full saturation; see note below */
+  --eog-red:   #d1332e;   /* modified / derived data */
+  /* The one DECORATIVE colour in the series, and scoped to figure 1's anatomy:
+     an iris is blue because eyes are, not because blue means anything here. Kept
+     out of the data roles above so it can never be mistaken for a signal. */
+  --eog-iris:  #3f76c4;
+  --eog-axis:  #4a4a4a;   /* tick labels, units — dark grey, subordinate to the data */
+  --eog-grid:  #e6e6e6;   /* gridlines: present, never competing */
+  --eog-cue:   #9aa0a6;   /* gaze-cue guides — above the gridlines, below the data */
+  --eog-rule:  #d4d4d4;   /* toggle track */
+  --eog-mono: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   /* Width reserved for a figure's controls, whatever they are — and whether or
      not it has any. Without a fixed reservation the canvas flexes to fill what
      the controls leave, so figure 8's labelled toggles produce a narrower plot
      than figure 9's empty column, and the traces stop being comparable between
      steps. Wide enough for the longest control label ("low-pass 100 Hz"). */
-  --ctrl-w: 150px;
-  --ctrl-gap: 1.25rem;
+  --eog-ctrl-w: 150px;
+  --eog-ctrl-gap: 1.25rem;
 }
 
-* { box-sizing: border-box; }
+/* EVERY RULE IS SCOPED TO .eog-fig, and every custom property is namespaced,
+   because this stylesheet is dropped into a page it does not own. An earlier cut
+   set `body` and a bare `*` and would have restyled the whole essay. The mount
+   div carries the class:  <div id="fig-05" class="eog-fig"></div>
 
-body {
-  margin: 0;
-  padding: 3rem 1.25rem;
-  background: var(--bg);
-  color: var(--ink);
-  font-family: var(--mono);
+   The harness supplies its own page styling inline in index.html. */
+.eog-fig, .eog-fig * { box-sizing: border-box; }
+
+/* A FIGURE CARRIES ITS OWN WHITE PAGE, and that is not decoration.
+ *
+ * The palette above is built for white: black is the base data, the grid is
+ * #e6e6e6, and the axis grey is chosen to sit UNDER the data without vanishing.
+ * On a dark host — the blog it ships to runs #141414 — a black trace is a black
+ * block and the axis labels disappear entirely. The alternatives were a second
+ * dark palette, which doubles every colour decision and halves the odds they stay
+ * consistent, or this: the figure brings the background its colours were designed
+ * against. Same rendering everywhere, one palette, no variant to keep in step.
+ *
+ * On a white host this is invisible except for the padding. */
+.eog-fig {
+  background: var(--eog-bg);
+  color: var(--eog-ink);
+  font-family: var(--eog-mono);
   font-size: 15px;
   line-height: 1.65;
+  padding: 1.1rem 1rem 0.6rem;
+  border-radius: 2px;
+  margin: 24px 0;
 }
-
-.wrap { max-width: 720px; margin: 0 auto; }
 
 /* Graph left, toggle to its right, vertically centred on the figure — which
    lands it level with the difference panel the toggle produces. */
-.fig {
+.eog-fig .fig {
   margin: 1.5rem 0;
-  display: flex; align-items: center; gap: var(--ctrl-gap);
+  display: flex; align-items: center; gap: var(--eog-ctrl-gap);
 }
-.fig-canvas { flex: 1 1 auto; min-width: 0; }
-.fig-canvas canvas { display: block; width: 100%; touch-action: pan-y; }
+.eog-fig .fig-canvas { flex: 1 1 auto; min-width: 0; }
+.eog-fig .fig-canvas canvas { display: block; width: 100%; touch-action: pan-y; }
 
 /* Toggle: stays where you leave it, and tapping it never competes with page
    scroll the way a drag target does. */
-.fig-toggle { flex: 0 0 var(--ctrl-w); }
+.eog-fig .fig-toggle { flex: 0 0 var(--eog-ctrl-w); }
 
 /* Slider: only where the parameter is genuinely continuous (baseline seconds,
    sigma multiplier). Vertical, so it sits level with the panel it acts on and
    reads as a magnitude instead of running against the time axis. */
-.fig-slider { flex: 0 0 var(--ctrl-w); height: 150px; display: flex; align-items: center; }
-.fig-slider input[type="range"] {
+.eog-fig .fig-slider { flex: 0 0 var(--eog-ctrl-w); height: 150px; display: flex; align-items: center; }
+.eog-fig .fig-slider input[type="range"] {
   -webkit-appearance: none; appearance: none;
   writing-mode: vertical-lr; direction: rtl;
   width: 24px; height: 150px; margin: 0; background: transparent; cursor: pointer;
 }
-.fig-slider input[type="range"]::-webkit-slider-runnable-track {
-  width: 3px; background: var(--rule); border-radius: 2px;
+.eog-fig .fig-slider input[type="range"]::-webkit-slider-runnable-track {
+  width: 3px; background: var(--eog-rule); border-radius: 2px;
 }
-.fig-slider input[type="range"]::-moz-range-track {
-  width: 3px; background: var(--rule); border-radius: 2px;
+.eog-fig .fig-slider input[type="range"]::-moz-range-track {
+  width: 3px; background: var(--eog-rule); border-radius: 2px;
 }
-.fig-slider input[type="range"]::-webkit-slider-thumb {
+.eog-fig .fig-slider input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   width: 18px; height: 18px; border-radius: 50%;
-  background: var(--red); margin-left: -7.5px;
+  background: var(--eog-red); margin-left: -7.5px;
 }
-.fig-slider input[type="range"]::-moz-range-thumb {
-  width: 18px; height: 18px; border: 0; border-radius: 50%; background: var(--red);
+.eog-fig .fig-slider input[type="range"]::-moz-range-thumb {
+  width: 18px; height: 18px; border: 0; border-radius: 50%; background: var(--eog-red);
 }
-.fig-slider input[type="range"]:focus-visible { outline: 2px solid var(--red); outline-offset: 4px; }
+.eog-fig .fig-slider input[type="range"]:focus-visible { outline: 2px solid var(--eog-red); outline-offset: 4px; }
 
 /* Several independent toggles, stacked, each printing its own name. Used where
    a figure has more than one control and so cannot label its state on the trace
    without a legend. The toggles are the same control as everywhere else; only
    the naming is new. */
-.fig-toggles {
-  flex: 0 0 var(--ctrl-w);
+.eog-fig .fig-toggles {
+  flex: 0 0 var(--eog-ctrl-w);
   display: flex; flex-direction: column; gap: 0.6rem;
 }
-.fig-toggle-row { display: flex; align-items: center; gap: 0.6rem; }
-.fig-toggle-label { font-size: 10px; color: var(--axis); line-height: 1.3; white-space: nowrap; }
+.eog-fig .fig-toggle-row { display: flex; align-items: center; gap: 0.6rem; }
+.eog-fig .fig-toggle-label { font-size: 10px; color: var(--eog-axis); line-height: 1.3; white-space: nowrap; }
 
 /* A figure with no controls still reserves the column, so its plot is the same
    width as every other figure's. */
-.fig-nocontrol { flex: 0 0 var(--ctrl-w); }
+.eog-fig .fig-nocontrol { flex: 0 0 var(--eog-ctrl-w); }
 
 /* A slider laid UNDER the plot rather than beside it. For a parameter that is
    itself a level on the y-axis, so it can be aligned to the plot box and read
    as the line it moves. The 108px left inset is the plot's own left edge. */
-.fig-stacked { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+.eog-fig .fig-stacked { flex-direction: column; align-items: stretch; gap: 0.5rem; }
 /* Reserve the control gutter on the right even though the control is below, so
    this figure's plot is exactly as wide as the ones with side controls. */
-.fig-stacked .fig-canvas { margin-right: calc(var(--ctrl-w) + var(--ctrl-gap)); }
-.fig-slider-below {
+.eog-fig .fig-stacked .fig-canvas { margin-right: calc(var(--eog-ctrl-w) + var(--eog-ctrl-gap)); }
+.eog-fig .fig-slider-below {
   display: flex; align-items: center; gap: 0.75rem;
   margin-left: 108px;
-  margin-right: calc(12px + var(--ctrl-w) + var(--ctrl-gap));
+  margin-right: calc(12px + var(--eog-ctrl-w) + var(--eog-ctrl-gap));
 }
-.fig-slider-below input[type="range"] {
+.eog-fig .fig-slider-below input[type="range"] {
   -webkit-appearance: none; appearance: none;
   flex: 1 1 auto; height: 18px; margin: 0; background: transparent; cursor: pointer;
 }
-.fig-slider-below input[type="range"]::-webkit-slider-runnable-track {
-  height: 3px; background: var(--rule); border-radius: 2px;
+.eog-fig .fig-slider-below input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px; background: var(--eog-rule); border-radius: 2px;
 }
-.fig-slider-below input[type="range"]::-moz-range-track {
-  height: 3px; background: var(--rule); border-radius: 2px;
+.eog-fig .fig-slider-below input[type="range"]::-moz-range-track {
+  height: 3px; background: var(--eog-rule); border-radius: 2px;
 }
-.fig-slider-below input[type="range"]::-webkit-slider-thumb {
+.eog-fig .fig-slider-below input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   width: 16px; height: 16px; border-radius: 50%;
-  background: var(--red); margin-top: -6.5px;
+  background: var(--eog-red); margin-top: -6.5px;
 }
-.fig-slider-below input[type="range"]::-moz-range-thumb {
-  width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--red);
+.eog-fig .fig-slider-below input[type="range"]::-moz-range-thumb {
+  width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--eog-red);
 }
-.fig-slider-below input[type="range"]:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
-.fig-slider-readout {
+.eog-fig .fig-slider-below input[type="range"]:focus-visible { outline: 2px solid var(--eog-red); outline-offset: 3px; }
+.eog-fig .fig-slider-readout {
   flex: 0 0 auto; min-width: 4.2rem; text-align: right;
-  font-size: 10px; color: var(--red); font-variant-numeric: tabular-nums;
+  font-size: 10px; color: var(--eog-red); font-variant-numeric: tabular-nums;
 }
 
-/* Dev-harness only — the essay supplies its own headings. */
-.fig-h { font-size: 13px; font-weight: 400; color: var(--cue); margin: 3rem 0 0; }
-
-.fig input[type="checkbox"] {
+.eog-fig .fig input[type="checkbox"] {
   -webkit-appearance: none; appearance: none;
   display: block; position: relative; margin: 0;
   width: 44px; height: 24px; border-radius: 12px;
-  background: var(--rule); cursor: pointer;
+  background: var(--eog-rule); cursor: pointer;
   transition: background 0.18s ease;
 }
-.fig input[type="checkbox"]::after {
+.eog-fig .fig input[type="checkbox"]::after {
   content: ""; position: absolute; top: 3px; left: 3px;
   width: 18px; height: 18px; border-radius: 50%;
-  background: var(--bg);
+  background: var(--eog-bg);
   transition: transform 0.18s ease;
 }
-.fig input[type="checkbox"]:checked { background: var(--red); }
-.fig input[type="checkbox"]:checked::after { transform: translateX(20px); }
-.fig input[type="checkbox"]:focus-visible { outline: 2px solid var(--red); outline-offset: 4px; }
+.eog-fig .fig input[type="checkbox"]:checked { background: var(--eog-red); }
+.eog-fig .fig input[type="checkbox"]:checked::after { transform: translateX(20px); }
+.eog-fig .fig input[type="checkbox"]:focus-visible { outline: 2px solid var(--eog-red); outline-offset: 4px; }

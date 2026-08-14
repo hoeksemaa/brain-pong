@@ -205,6 +205,15 @@ def ingest_dir(db_path, npz_dir):
         )
         n += 1
         log.info("ingested %s [%s] rail=%.1f%% peak=%.0fuV", rid, status, rail_pct, ribbon_peak)
+    # Prune rows whose source npz no longer exists on disk, so the viewer never
+    # lists (and 500s on) recordings that have been deleted from data/.
+    keep = {p.stem for p in paths}
+    stale = [r[0] for r in con.execute("SELECT id FROM recording").fetchall() if r[0] not in keep]
+    for rid in stale:
+        con.execute("DELETE FROM recording WHERE id=?", (rid,))
+        con.execute("DELETE FROM event WHERE recording_id=?", (rid,))
+        con.execute("DELETE FROM trim WHERE recording_id=?", (rid,))
+        log.info("pruned stale %s (npz missing)", rid)
     con.commit()
     con.close()
     return n

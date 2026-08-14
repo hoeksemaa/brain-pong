@@ -71,6 +71,7 @@
     list:    () => j("/api/recordings"),
     detail:  (id) => j(`/api/recordings/${id}`),
     ribbon:  (id,f,w,t0,t1) => j(`/api/recordings/${id}/ribbon?filter=${f}&width=${w}`+(t0!=null?`&t0=${t0}&t1=${t1}`:"")),
+    pipeline:(id,w) => j(`/api/recordings/${id}/pipeline?width=${w}`),
     channels:(id,rows,w) => j(`/api/recordings/${id}/channels?width=${w}`+(rows?`&rows=${rows.join(",")}`:"")),
     eegRows: (id) => j(`/api/recordings/${id}/eeg_rows`),
     health:  (id,t0,t1) => j(`/api/recordings/${id}/health`+(t0!=null?`?t0=${t0}&t1=${t1}`:"")),
@@ -101,7 +102,7 @@
     })();
   }
 
-  const state = { recs:[], rec:null, detail:null, filt:"raw", chans:2, trim:{}, ribbon:null, channels:null, eegRows:null,
+  const state = { recs:[], rec:null, detail:null, filt:"raw", chans:2, trim:{}, ribbon:null, channels:null, eegRows:null, pipe:{},
                   sortByDate:(localStorage.getItem("eog:sortByDate")==="1"),
                   sortDir:(localStorage.getItem("eog:sortDir")==="asc"?"asc":"desc") };
   const RB = { cv:null, t:null, rid:null, draw:null, drag:null };
@@ -117,7 +118,10 @@
   }
   function drawTrace(cv,t,series,opts){
     opts=opts||{}; const {ctx,w,h}=setup(cv,opts.height||70);
-    const padT=7, padB=opts.ruler?18:7, x0=t[0], x1=t[t.length-1];
+    // opts.xdom [t0,t1] pins the x-axis to a shared domain (pipeline panels all
+    // align on the full recording even when a stage only exists from calib on).
+    const padT=7, padB=opts.ruler?18:7,
+          x0=opts.xdom?opts.xdom[0]:t[0], x1=opts.xdom?opts.xdom[1]:t[t.length-1];
     const xm=(tt)=>lerp(PADL,w-PADR,(tt-x0)/(x1-x0||1));
     const wLo=opts.scaleWindow?opts.scaleWindow.t0:x0, wHi=opts.scaleWindow?opts.scaleWindow.t1:x1;
     const inWin=(i)=>t[i]>=wLo&&t[i]<=wHi;
@@ -135,6 +139,11 @@
     for(const f of [0.25,0.5,0.75]){const y=lerp(padT,h-padB,f);ctx.beginPath();ctx.moveTo(PADL,y);ctx.lineTo(w-PADR,y);ctx.stroke();}
     ctx.strokeStyle=THEME.zero; ctx.beginPath(); ctx.moveTo(PADL,ym(0)); ctx.lineTo(w-PADR,ym(0)); ctx.stroke();
 
+    if(opts.vspans) for(const s of opts.vspans){   // shaded time windows (calibration, settle)
+      const a=Math.max(s.t0,x0), b=Math.min(s.t1,x1); if(b<=a)continue;
+      ctx.fillStyle=s.color; ctx.fillRect(xm(a),padT,xm(b)-xm(a),(h-padB)-padT);
+      if(s.label){ctx.fillStyle=s.text||THEME.muted;ctx.font="9px "+THEME.mono;ctx.textAlign="left";ctx.fillText(s.label,xm(a)+3,s.labelTop?padT+16:h-padB-4);}
+    }
     if(opts.ceil && opts.ceil<A*0.99){
       ctx.fillStyle=THEME.railFill;
       ctx.fillRect(PADL,padT,w-PADR-PADL,ym(opts.ceil)-padT);
@@ -149,7 +158,21 @@
         ctx.strokeStyle=col;ctx.globalAlpha=0.22;ctx.beginPath();ctx.moveTo(x,padT);ctx.lineTo(x,h-padB);ctx.stroke();ctx.globalAlpha=1;
         if(letters){ctx.fillStyle=col;ctx.font="9px "+THEME.mono;ctx.textAlign="center";ctx.fillText(e.label[0],x,padT+9);} }
     }
-    for(const s of series) envelope(ctx,t,s.mn,s.mx,xm,ym,s.fill,s.stroke);
+    for(const s of series) envelope(ctx,s.t||t,s.mn,s.mx,xm,ym,s.fill,s.stroke);
+
+    if(opts.hlines) for(const l of opts.hlines){   // threshold lines etc.
+      if(Math.abs(l.v-off)>A) continue;
+      ctx.strokeStyle=l.color; if(l.dash)ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(PADL,ym(l.v)); ctx.lineTo(w-PADR,ym(l.v)); ctx.stroke(); ctx.setLineDash([]);
+      if(l.label){ctx.fillStyle=l.color;ctx.font="9px "+THEME.mono;ctx.textAlign="left";ctx.fillText(l.label,PADL+3,ym(l.v)+(l.v>=off?-3:9));}
+    }
+    if(opts.vmarks) for(const m of opts.vmarks){   // session-timeline markers (calib/play)
+      if(m.t<x0||m.t>x1)continue; const x=xm(m.t);
+      ctx.strokeStyle=m.color; ctx.globalAlpha=0.55; ctx.setLineDash([2,3]);
+      ctx.beginPath(); ctx.moveTo(x,padT); ctx.lineTo(x,h-padB); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha=1;
+      if(m.label){ctx.fillStyle=m.color;ctx.font="9px "+THEME.mono;ctx.textAlign="center";ctx.fillText(m.label,x,padT+8);}
+    }
 
     if(opts.trim){
       const {t0,t1}=opts.trim;
@@ -241,6 +264,16 @@
     const chCanvas=state.channels.channels.map((ch,i)=>{ const row=el("div","chrow"),cv=el("canvas"); row.appendChild(cv); stack.appendChild(row); return {cv,ch,last:i===state.channels.channels.length-1}; });
     rz.appendChild(stack); main.appendChild(rz);
 
+    // PIPELINE zone — the recording replayed through the LIVE game detection code
+    // (server: brainpong.pipeline → eog_core), one panel per transformation.
+    const pz=el("section","zone zone-pipe"), ph=el("div","zonehead");
+    ph.appendChild(el("span","zlabel zlabel-p","PIPELINE"));
+    ph.appendChild(el("span","zsub","live-game replay — every transformation, raw → paddle"));
+    const pinfo=el("span","pipeinfo",""); ph.appendChild(pinfo); pz.appendChild(ph);
+    const pbody=el("div","pipebody",'<div class="loading">replaying through the live detector…</div>');
+    pz.appendChild(pbody); main.appendChild(pz);
+    loadPipeline(r, pbody, pinfo, ev);
+
     // draw
     function drawRibbon(){
       const rb=state.ribbon, tr=state.trim[r.id]||null;
@@ -252,7 +285,7 @@
     }
     function drawChannels(){
       const ct=state.channels.t, tr=state.trim[r.id]||null;
-      chCanvas.forEach(({cv,ch,last})=>{ const col=THEME.palette[(ch.row-1)%8];
+      chCanvas.forEach(({cv,ch,last})=>{ const col=THEME.palette[(((ch.row-1)%8)+8)%8];   // rows may be 0-based (L/R) or 1-based (board) — keep the index positive
         drawTrace(cv, ct, [{mn:ch.mn,mx:ch.mx,fill:hexA(col,THEME.chFillA),stroke:col}],
           { height: state.chans===2?138:84, ceil:state.channels.ceil_uv, ev, center:true, robust:true,
             scaleWindow:tr, trim:tr, trimHandles:false, name:ch.label, nameColor:col, ruler:last }); });
@@ -265,6 +298,109 @@
       LOG.debug(`trim grab ${RB.drag} @ ${tt.toFixed(1)}s`);
       drawAll(); e.preventDefault(); });
     requestAnimationFrame(drawAll);
+  }
+
+  // ── PIPELINE rendering ──────────────────────────────────────────────────────
+  async function loadPipeline(r, body, info, ev){
+    let p = state.pipe[r.id];
+    if(!p){
+      const done=LOG.time(`pipeline ${r.id}`);
+      try{ p = await API.pipeline(r.id, WIDTH); }
+      catch(e){ body.innerHTML=`<div class="empty">pipeline replay failed (${e})</div>`; return; }
+      done({steps:p.steps.length, cmds:p.n_commands});
+      state.pipe[r.id]=p;
+    }
+    if(!state.rec || state.rec.id!==r.id) return;           // user moved on mid-fetch
+    const prm=p.params;
+    info.textContent = `${p.detector} detector · σ×${prm.sigma_thr} · LP ${prm.lpf_hz} Hz · HP ${prm.hpf_hz} Hz · `+
+                       `pair window ${prm.glance_window_s}s · ${p.n_motions} motions → ${p.n_commands} commands`;
+    renderPipeline(p, r, body, ev);
+  }
+
+  function renderPipeline(p, r, body, ev){
+    body.innerHTML="";
+    const xdom=[0,p.duration];
+    // session-timeline markers, drawn on every panel so the stages stay readable
+    // as one aligned story (labels only on the first panel).
+    const mk=(lab)=>{
+      const m=[];
+      if(p.calib && p.calib.t_start!=null) m.push({t:p.calib.t_start,color:"#38bdf8",label:lab?"calib":null});
+      if(p.calib && p.calib.t_locked!=null) m.push({t:p.calib.t_locked,color:"#38bdf8",label:lab?"σ lock":null});
+      if(p.play_start!=null) m.push({t:p.play_start,color:"#5ad19a",label:lab?"play":null});
+      return m;
+    };
+    // keyed intent labels from the recording (p1_left / p2_right …) — ground truth
+    // to eyeball against what the detector fired.
+    const intents=(ev||[]).map(e=>{const m=/_(left|right)$/.exec(e.label);return m?{t:e.t,dir:m[1].toUpperCase()}:null;}).filter(Boolean);
+
+    p.steps.forEach((s,idx)=>{
+      const row=el("div","piperow");
+      row.appendChild(el("div","phead",`<span class="pname">${s.name}</span><span class="punit">${s.unit||""}</span>`));
+      row.appendChild(el("div","pdesc",s.desc));
+      const cv=el("canvas"); row.appendChild(cv); body.appendChild(row);
+      const base={xdom, vmarks:mk(idx===0), center:true, robust:true};
+      requestAnimationFrame(()=>{
+        if(s.kind==="signal"){
+          const o={...base, height:s.key==="threshold"?120:84};
+          if(s.key==="threshold"&&s.thr!=null){
+            o.hlines=[{v:s.thr,color:"#7ef0b0",dash:true,label:`+${fmtK(s.thr)} (σ×${p.params.sigma_thr})`},
+                      {v:-s.thr,color:"#7ef0b0",dash:true}];
+            o.vspans=[{t0:p.calib.t_start,t1:p.calib.t_locked??p.calib.t_start,color:"rgba(56,189,248,0.10)",label:"baseline → σ",text:"#38bdf8"}];
+            if(p.play_start!=null&&p.settle_until!=null)
+              o.vspans.push({t0:p.play_start,t1:p.settle_until,color:"rgba(255,255,255,0.06)",label:"settle",text:"#8b93a7",labelTop:true});
+          }
+          drawTrace(cv,s.t,[{mn:s.mn,mx:s.mx,fill:"rgba(126,240,176,0.12)",stroke:"#7ef0b0",primary:true}],o);
+        }else if(s.kind==="signal2"){
+          drawTrace(cv,s.series[0].t,s.series.map((sr,i)=>{
+            const col=i===0?THEME.palette[7]:THEME.palette[0];   // L teal, R blue — same as the RAW zone rows
+            return {t:sr.t,mn:sr.mn,mx:sr.mx,fill:hexA(col,0.10),stroke:col,primary:true};
+          }),{...base,height:96,name:"L / R",nameColor:THEME.muted});
+        }else if(s.kind==="sm"){
+          drawSM(cv,p,s,xdom,intents);
+        }
+      });
+    });
+  }
+  function fmtK(v){return Math.abs(v)>=1000?(v/1000).toFixed(1)+"k":v.toFixed(0);}
+
+  const SM_COLS={CALIBRATING:"#38bdf8",IDLE:"#2a3346",ARMED:"#fbbf24",REFRACTORY:"#ff6b81"};
+  function drawSM(cv,p,step,xdom,intents){
+    const {ctx,w,h}=setup(cv,100);
+    const [x0,x1]=xdom, xm=(t)=>lerp(PADL,w-PADR,(t-x0)/(x1-x0||1));
+    ctx.fillStyle=THEME.panel; ctx.fillRect(0,0,w,h);
+    const laneY=32, laneH=18;
+    for(const s of step.segments){
+      ctx.fillStyle=SM_COLS[s.state]||"#444"; ctx.globalAlpha=s.state==="IDLE"?0.45:0.9;
+      ctx.fillRect(xm(s.t0),laneY,Math.max(1,xm(s.t1)-xm(s.t0)),laneH);
+    }
+    ctx.globalAlpha=1;
+    for(const m of step.motions){                       // ▲ every counted directional motion
+      const x=xm(m.t), col=m.dir==="LEFT"?THEME.evL:THEME.evR;
+      ctx.fillStyle=col; ctx.beginPath();
+      ctx.moveTo(x,laneY-3); ctx.lineTo(x-3.5,laneY-10); ctx.lineTo(x+3.5,laneY-10); ctx.closePath(); ctx.fill();
+    }
+    for(const c of step.commands){                      // │L fired commands (dim = discarded)
+      const x=xm(c.t), col=c.cmd==="LEFT"?THEME.evL:THEME.evR;
+      ctx.globalAlpha=c.live?1:0.3;
+      ctx.strokeStyle=col; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(x,laneY+laneH+2); ctx.lineTo(x,laneY+laneH+10); ctx.stroke();
+      ctx.fillStyle=col; ctx.font="700 10px "+THEME.mono; ctx.textAlign="center";
+      ctx.fillText(c.cmd[0],x,laneY+laneH+20); ctx.globalAlpha=1;
+    }
+    for(const it of intents){                           // ○ keyed intent (ground truth)
+      const x=xm(it.t), col=it.dir==="LEFT"?THEME.evL:THEME.evR;
+      ctx.strokeStyle=col; ctx.lineWidth=1.2; ctx.beginPath();
+      ctx.arc(x,h-22,3,0,Math.PI*2); ctx.stroke();
+    }
+    ctx.fillStyle=THEME.muted; ctx.font="10px "+THEME.mono; ctx.textAlign="center";   // time ruler (last panel)
+    for(let i=0;i<=8;i++){const tt=lerp(x0,x1,i/8);ctx.fillText(tt.toFixed(0)+"s",xm(tt),h-4);}
+    ctx.font="9px "+THEME.mono; ctx.textAlign="left"; let lx=PADL+2;
+    for(const k of Object.keys(SM_COLS)){
+      ctx.fillStyle=SM_COLS[k]; ctx.fillRect(lx,8,7,7);
+      ctx.fillStyle=THEME.muted; ctx.fillText(k,lx+10,15); lx+=ctx.measureText(k).width+28;
+    }
+    ctx.fillStyle=THEME.muted; ctx.textAlign="right";
+    ctx.fillText("▲ counted motion · │+letter fired command (dim = calib-tail, discarded) · ○ keyed intent",w-PADR-3,15);
   }
 
   function evtToT(e){ const rect=RB.cv.getBoundingClientRect(), x=e.clientX-rect.left, t=RB.t, x0=t[0], x1=t[t.length-1];
