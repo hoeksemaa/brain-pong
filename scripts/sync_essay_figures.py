@@ -31,7 +31,8 @@ DEFAULT_DEST = pathlib.Path.home() / "Dev/hoeksemaa.github.io/assets/essay-figur
 
 # index.html is deliberately NOT copied: it is the harness, it carries page-level
 # styling the blog supplies for itself, and the post mounts its own divs.
-FILES = ["figures.js", "figures.css", "data/eog-figures.json", "data/eog-full.bin"]
+FILES = ["figures.js", "figures.css", "data/eog-figures.json", "data/eog-full.bin",
+         "data/eog-ampvel.json", "data/eog-ampvel.bin"]
 
 
 def main():
