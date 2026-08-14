@@ -13,17 +13,20 @@ Privacy by construction
 Named subjects are replaced with stable pseudonyms (``<first-name>`` -> ``Player A``)
 *before* anything is written; recording ids become ``<date>-<time>-<slug>`` so the
 name never appears in a filename or URL either; free-form ``notes`` (which can name
-people) are parsed for the pipeline tag and then dropped. The owner keeps his own
-name by choice (``OWNER``); the already-anonymous ``P1``/``P2`` slot files pass
-through unchanged. Result: the baked tree is name-free and safe to commit + deploy.
+people) are dropped entirely. The owner keeps his own name by choice (``OWNER``);
+the already-anonymous ``P1``/``P2`` slot files pass through unchanged. Pseudonym
+letters are assigned in order of each subject's first recording, so adding newer
+recordings never renames an already-published subject. Result: the baked tree is
+name-free and safe to commit + deploy.
 
 Outputs (all under ``web/portal-data/``)
-  manifest.json  — one lean row per recording (metadata + 5 tags + pipeline + spark)
-  meta.json      — corpus aggregates, tag taxonomy, subject list, lens catalogue
-  rec/<id>.json  — per-recording detail: shared time axis + every paradigm-lens
-                   ribbon (min/max decimated) + L/R raw + event markers
+  manifest.json  — one lean row per recording (metadata + tags + spark)
+  meta.json      — corpus aggregates, tag taxonomy, subject list
+  rec/<id>.json  — per-recording detail: shared time axis + three raw min/max
+                   ribbons (R−L difference, L electrode, R electrode) + events
 
-The signal itself is never modified; this only reads the npz. Regenerable.
+The public portal deliberately shows only the raw signal — no derived/filtered
+views. The signal itself is never modified; this only reads the npz. Regenerable.
 
 Usage
     python scripts/bake_portal.py                 # -> web/portal-data/
@@ -38,7 +41,7 @@ import time
 from pathlib import Path
 
 import numpy as np
-from scipy.signal import butter, sosfiltfilt, savgol_filter
+from scipy.signal import butter, sosfiltfilt
 
 # Rail/ceiling math (mirrors brainpong.store._rail_status / _ceil_uv — kept inline
 # so the bake stays pure numpy+scipy with no brainflow import, i.e. runnable in a
@@ -75,10 +78,9 @@ OWNER = "john"           # the project owner keeps his own name (his data, his c
 WIDTH = 1400             # min/max decimation buckets per ribbon
 SPARK_BUCKETS = 64
 
-# ── DSP paradigm lenses (zero-phase; offline display is non-causal by design) ────
-# Each lens is a historical filtering paradigm the pipeline passed through, so the
-# same raw recording can be viewed through every era. Order = chronological.
-# unit: display unit; ceil: whether the ADC rail band is meaningful on this axis.
+# ── spark-thumbnail bandpass (the only filtering left in the bake; the plots
+#    themselves are raw). 0.5–30 Hz keeps the tiny list thumbnails readable —
+#    raw traces are dominated by DC offset/drift at thumbnail size. ─────────────
 
 
 @functools.lru_cache(maxsize=64)
@@ -86,89 +88,8 @@ def _sos_bp(lo, hi, sr):
     return butter(4, [lo, hi], btype="band", fs=sr, output="sos")
 
 
-@functools.lru_cache(maxsize=64)
-def _sos_bs(lo, hi, sr):
-    return butter(4, [lo, hi], btype="bandstop", fs=sr, output="sos")
-
-
 def _bp(x, sr, lo, hi):
     return sosfiltfilt(_sos_bp(lo, hi, sr), x) if x.size >= 30 else x
-
-
-def _notch(x, sr):
-    for lo, hi in ((48.0, 52.0), (58.0, 62.0)):
-        if x.size >= 30:
-            x = sosfiltfilt(_sos_bs(lo, hi, sr), x)
-    return x
-
-
-def _velocity(x, sr):
-    y = _bp(x, sr, 0.1, 30.0)
-    if y.size < 21:
-        return y
-    return savgol_filter(y, window_length=21, polyorder=2, deriv=1, delta=1.0 / sr)
-
-
-def _matched(x, sr):
-    """Velocity cross-correlated with a ~120 ms unit-norm Hann saccade template."""
-    v = _velocity(x, sr)
-    n = max(3, int(round(0.120 * sr)))
-    tmpl = np.hanning(n)
-    nrm = np.linalg.norm(tmpl)
-    if nrm > 0:
-        tmpl = tmpl / nrm
-    return np.correlate(v, tmpl, mode="same") if v.size >= n else v
-
-
-def _robust_sigma(x):
-    med = np.median(x)
-    mad = np.median(np.abs(x - med))
-    s = 1.4826 * mad
-    return float(s) if s > 1e-9 else float(np.std(x)) or 1e-6
-
-
-# (id, label, date, unit, has_ceil, blurb) — the chronological progression.
-LENSES = [
-    ("raw", "Raw", None, "µV", True,
-     "Unfiltered L−R differential — the signal exactly as the board recorded it."),
-    ("preflight", "EOG preflight", "2026-04-29", "µV", True,
-     "0.5–30 Hz band + 50/60 Hz notch. The first EOG-tuned display band."),
-    ("offline", "Offline baseline", "2026-05-21", "µV", True,
-     "0.5–100 Hz. The wide low-pass deliberately passed EMG — the false-positive "
-     "problem that drove every later narrowing."),
-    ("clinical", "Clinical HEOG", "2026-05-21", "µV", True,
-     "0.1–30 Hz literature band. Lower corners keep the saccade step, cut EMG."),
-    ("velocity", "Velocity", "2026-07-09", "µV/s", False,
-     "Engbert–Kliegl velocity (Savitzky–Golay derivative). The shift from amplitude "
-     "to velocity — differentiation self-rejects slow drift."),
-    ("matched", "Matched filter", "2026-07-09", "µV/s", False,
-     "Velocity cross-correlated with a 120 ms Hann saccade template — the statistic "
-     "the current detector fires on. Integrates over the glance shape for SNR."),
-    ("znorm", "z-normalized", None, "σ", False,
-     "0.1–30 Hz divided by the recording's own noise floor, so amplitudes are in σ "
-     "units comparable across people regardless of signal strength. The dashed line "
-     "marks 6σ above noise — a significant-excursion reference. (The live detector's "
-     "actual fire threshold sits on the velocity/matched statistic, not this "
-     "amplitude band, so this line is a scale guide, not a fire predictor.)"),
-]
-
-
-def _apply_lens(lid, diff_uv, sr, sigma):
-    if lid == "raw":
-        return np.asarray(diff_uv, float)
-    if lid == "preflight":
-        return _notch(_bp(diff_uv, sr, 0.5, 30.0), sr)
-    if lid == "offline":
-        return _bp(diff_uv, sr, 0.5, 100.0)
-    if lid == "clinical":
-        return _bp(diff_uv, sr, 0.1, 30.0)
-    if lid == "velocity":
-        return _velocity(diff_uv, sr)
-    if lid == "matched":
-        return _matched(diff_uv, sr)
-    if lid == "znorm":
-        return _bp(diff_uv, sr, 0.1, 30.0) / sigma
-    raise ValueError(lid)
 
 
 # ── decimation (min/max per pixel bucket; honest — rails/spikes survive) ─────────
@@ -220,20 +141,15 @@ def load(path):
         "ch_r": int(d["eog_ch_R"][0]),
         "n": int(eeg.shape[1]),
         "gain": int(gain_raw[0]) if gain_raw is not None else None,
-        "subject": _s(d, "subject_id", "?"),
-        "board": _s(d, "board"),
-        "notes": _s(d, "notes", "") or "",
         "protocol": _s(d, "protocol_version", "?"),
         "n_players": int(_f(d, "n_players", [0])[0]) if _f(d, "n_players") is not None else None,
-        "board_version": _s(d, "board_version"),
-        "detector": _s(d, "detector"),
         "tags": [str(t) for t in _f(d, "tags", [])],
         "ev_s": ev_s,
         "ev_l": ev_l,
     }
 
 
-# ── tag derivation (deterministic ruleset — see docs cross-reference) ────────────
+# ── tag derivation (deterministic ruleset) ───────────────────────────────────────
 
 def derive_tags(m, date):
     proto = m["protocol"]
@@ -244,42 +160,27 @@ def derive_tags(m, date):
     else:
         session_type = "game"
 
-    bv = m["board_version"]
-    if bv in ("1.2", "1.3"):
-        rig = "v" + bv
-    elif (m["board"] or "").endswith("original"):
-        rig = "v1.2"                      # the original board is hardware v1.2 (docs)
-    else:
-        rig = "unknown"
-
     return {
         "tournament": (date == "2026-07-13"),
         "session_type": session_type,
-        "rig_board": rig,
-        "electrode_type": "gold",         # corpus is documented all-gold; no clip files
-        "cleaning_regimen": "prepped" if date == "2026-07-13" else "unknown",
     }
 
 
-_PIPE_RE = re.compile(r"\[pipeline-(v\d)\]")
 _LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{2,}$")   # drop char-splat artifacts
-
-
-def pipeline_of(m):
-    hit = _PIPE_RE.search(m["notes"])
-    return hit.group(1) if hit else None
 
 
 # ── anonymization ────────────────────────────────────────────────────────────────
 
-def build_anon_map(subjects):
-    """real subject -> (display pseudonym, url slug). Stable, name-free output."""
+def build_anon_map(first_seen):
+    """real subject -> (display pseudonym, url slug), from {subject: earliest stem}.
+
+    Letters follow each subject's FIRST recording (not the alphabet), so baking in
+    newer recordings — even from new people — never renames an existing subject
+    and never breaks an already-shared portal URL."""
     special = {OWNER: (OWNER, OWNER), "P1": ("P1", "P1"), "P2": ("P2", "P2")}
-    named = sorted(s for s in subjects if s not in special)
-    out = {}
-    for s in subjects:
-        if s in special:
-            out[s] = special[s]
+    named = sorted((s for s in first_seen if s not in special),
+                   key=lambda s: (first_seen[s], s))
+    out = {s: special[s] for s in first_seen if s in special}
     for i, s in enumerate(named):
         letter = chr(ord("A") + i) if i < 26 else f"A{i}"
         out[s] = (f"Player {letter}", f"player{letter}")
@@ -304,21 +205,24 @@ def bake(width):
     if not paths:
         sys.exit(f"no npz under {DATA_DIR}")
 
-    # Pass 1: collect real subjects (from the stem token) for a stable anon map.
-    subjects = set()
+    # Pass 1: earliest stem per real subject (paths are stem-sorted = time-sorted),
+    # so pseudonym letters follow first appearance and stay stable across re-bakes.
+    first_seen = {}
     for p in paths:
         _, _, _, subj = parse_stem(p.stem)
-        subjects.add(subj)
-    anon = build_anon_map(subjects)
+        first_seen.setdefault(subj, p.stem)
+    anon = build_anon_map(first_seen)
 
-    (OUT_DIR / "rec").mkdir(parents=True, exist_ok=True)
+    # Clean rec/ so retired ids (renamed/removed recordings) don't linger in git.
+    rec_dir = OUT_DIR / "rec"
+    rec_dir.mkdir(parents=True, exist_ok=True)
+    for f in rec_dir.glob("*.json"):
+        f.unlink()
 
     manifest = []
     used_ids = {}
     sess_members = {}       # session key -> list of (anon_id, display subject)
-    total_samples = 0
-    lens_meta = [{"id": i, "label": l, "date": dt, "unit": u, "blurb": b}
-                 for (i, l, dt, u, _c, b) in LENSES]
+    total_seconds = 0.0
 
     for p in paths:
         stem = p.stem
@@ -334,14 +238,12 @@ def bake(width):
 
         m = load(str(p))
         sr = m["sr"]
-        total_samples += m["n"]
+        total_seconds += m["n"] / sr
         diff = (m["eeg"][m["ch_r"]] - m["eeg"][m["ch_l"]]) * 1e6
         wired = np.vstack([m["eeg"][m["ch_l"]], m["eeg"][m["ch_r"]]])
         status, rail_frac = _rail_status(wired, m["gain"])
         ceil = round(_ceil_uv(m["gain"]), 1)
-        sigma = _robust_sigma(_bp(diff, sr, 0.1, 30.0))
         tags = derive_tags(m, date)
-        pipe = pipeline_of(m)
 
         # spark: coarse midpoint of the clinical band, normalized
         clin = _bp(diff, sr, 0.5, 30.0)
@@ -364,26 +266,16 @@ def bake(width):
             "n_players": m["n_players"],
             "status": status,
             "rail_pct": round(rail_frac * 100, 2),
-            "ribbon_peak": round(float(np.max(np.abs(diff))), 1),
-            "detector": m["detector"],
-            "pipeline": pipe,
             "tags": tags,
             "spark": spark,
         }
         manifest.append(row)
         sess_members.setdefault(session, []).append((rid, disp))
 
-        # ── per-recording detail: shared time axis + every lens ribbon ──
+        # ── per-recording detail: shared time axis + three raw ribbons ──
+        # diff = R − L (rightward gaze positive — same convention as eog_core).
         t_axis, _, _ = _decimate(diff, width, sr, 1)
-        lenses = {}
-        for (lid, _l, _dt, _u, has_ceil, _b) in LENSES:
-            nd = 2 if lid == "znorm" else 0    # 1 µV resolution is plenty on ±k signals
-            y = _apply_lens(lid, diff, sr, sigma)
-            _, mn, mx = _decimate(y, width, sr, nd)
-            lenses[lid] = {"mn": mn, "mx": mx,
-                           "ceil": ceil if has_ceil else None,
-                           "thr": 6 if lid == "znorm" else None}
-        # raw L/R electrodes
+        _, d_mn, d_mx = _decimate(diff, width, sr, 0)   # 1 µV resolution on ±k signals
         _, l_mn, l_mx = _decimate(m["eeg"][m["ch_l"]] * 1e6, width, sr, 0)
         _, r_mn, r_mx = _decimate(m["eeg"][m["ch_r"]] * 1e6, width, sr, 0)
         events = [{"t": round(int(s) / sr, 2), "label": str(lab)}
@@ -393,14 +285,13 @@ def bake(width):
             "id": rid, "date": date, "time": tm, "session": session, "subject": disp,
             "duration": round(m["n"] / sr, 1), "fs": sr, "n_players": m["n_players"],
             "status": status, "rail_pct": round(rail_frac * 100, 2),
-            "ribbon_peak": round(float(np.max(np.abs(diff))), 1),
-            "ceil_uv": ceil, "sigma": round(sigma, 2),
-            "detector": m["detector"], "pipeline": pipe, "tags": tags,
-            "t": t_axis, "lenses": lenses,
+            "ceil_uv": ceil, "tags": tags,
+            "t": t_axis,
+            "diff": {"mn": d_mn, "mx": d_mx},
             "channels": {"l": {"mn": l_mn, "mx": l_mx}, "r": {"mn": r_mn, "mx": r_mx}},
             "events": events,
         }
-        (OUT_DIR / "rec" / f"{rid}.json").write_text(json.dumps(detail, separators=(",", ":")))
+        (rec_dir / f"{rid}.json").write_text(json.dumps(detail, separators=(",", ":")))
 
     # opponents (2-player sessions share a timestamp)
     by_id = {r["id"]: r for r in manifest}
@@ -437,7 +328,7 @@ def bake(width):
             "n_recordings": len(manifest),
             "n_sessions": len(sess_members),
             "n_subjects": len(subjects_present),
-            "total_hours": round(total_samples / 250 / 3600, 2),
+            "total_hours": round(total_seconds / 3600, 2),
             "date_start": dates[0] if dates else None,
             "date_end": dates[-1] if dates else None,
             "quality": quality,
@@ -447,16 +338,8 @@ def bake(width):
                            "values": [{"v": True, "count": dist(lambda r: r["tags"]["tournament"]).get(True, 0)},
                                       {"v": False, "count": dist(lambda r: r["tags"]["tournament"]).get(False, 0)}]},
             "session_type": tag_group("Session type", "session_type", ["game", "training", "cued"]),
-            "rig_board": tag_group("Rig / board", "rig_board", ["v1.2", "v1.3", "unknown"]),
-            "electrode_type": tag_group("Electrode", "electrode_type", ["gold", "clips", "unknown"]),
-            "cleaning_regimen": tag_group("Skin prep", "cleaning_regimen", ["prepped", "none", "unknown"]),
-        },
-        "pipeline": {
-            "detector": dist(lambda r: r["detector"]),
-            "version": dist(lambda r: r["pipeline"]),
         },
         "subjects": subjects_present,
-        "lenses": lens_meta,
         "owner": OWNER,
     }
 
@@ -471,8 +354,6 @@ def bake(width):
           f"hours={meta['corpus']['total_hours']} quality={quality}")
     print(f"  tournament={dist(lambda r: r['tags']['tournament'])}")
     print(f"  session_type={dist(lambda r: r['tags']['session_type'])}")
-    print(f"  rig_board={dist(lambda r: r['tags']['rig_board'])}")
-    print(f"  detector={meta['pipeline']['detector']} pipeline={meta['pipeline']['version']}")
     sz = sum(f.stat().st_size for f in OUT_DIR.rglob("*.json"))
     print(f"  output size: {sz/1e6:.1f} MB across {len(list(OUT_DIR.rglob('*.json')))} files")
 

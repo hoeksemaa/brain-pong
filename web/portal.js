@@ -1,8 +1,8 @@
 /* BrainPong — EOG Data Portal (static, public).
  * Reads the baked ./portal-data/ tree (no server): meta.json + manifest.json +
  * rec/<id>.json. Every recording is anonymized at bake time — no real names here.
- * Filter the whole corpus by name/date/tag/pipeline/quality/numeric range, then
- * view any recording through each historical filtering paradigm ("lens"). */
+ * Filter the corpus by subject/date/tag/quality, then view any recording as three
+ * raw traces: the R−L difference the game reads, plus each electrode alone. */
 (function () {
   "use strict";
   const THEME = {
@@ -10,7 +10,7 @@
     mono: "ui-monospace,Menlo,monospace", ui: "Inter,system-ui,sans-serif",
     rib: "#7ef0b0", ribFill: "rgba(126,240,176,0.12)",
     rail: "#ff6b81", railFill: "rgba(255,107,129,0.08)",
-    thr: "#fbbf24", evL: "#5b8cff", evR: "#ff9d5c", evO: "#5b6b86",
+    evL: "#5b8cff", evR: "#ff9d5c", evO: "#5b6b86",
     L: "#4ea8ff", R: "#ff9d5c",
     status: { ok: "#34d399", railing: "#fb7185", flat: "#fbbf24" },
   };
@@ -23,8 +23,9 @@
   function pctl(a,p){const b=a.slice().sort((x,y)=>x-y);if(!b.length)return 0;return b[clamp(Math.floor(p/100*b.length),0,b.length-1)];}
   const hexA = (h, a) => { const n = parseInt(h.slice(1), 16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; };
   const humanDur = s => s >= 60 ? `${Math.floor(s/60)}m${String(Math.round(s%60)).padStart(2,"0")}s` : `${Math.round(s)}s`;
-  const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const fmtDate = (d, yr) => { if (!d) return "—"; const [y,m,dd] = d.split("-"); return `${MON[+m-1]} ${+dd}` + (yr ? ` ${y}` : ""); };
+  const QUALITY = {   // plain-language names for the bake's status field
+    ok: "good", railing: "clipped", flat: "flat",
+  };
 
   // ── data layer (pure static fetch) ──────────────────────────────────────────
   const base = "./portal-data";
@@ -35,11 +36,9 @@
   };
 
   const state = {
-    meta: null, recs: [], filtered: [], sel: null, detail: null, lens: "raw",
+    meta: null, recs: [], filtered: [], sel: null, detail: null,
     sortDesc: true,
-    f: { q: "", tour: null, st: new Set(), rig: new Set(), det: new Set(), pipe: new Set(),
-         prep: new Set(), elec: new Set(), qual: new Set(), df: "", dt: "",
-         dmin: 0, dmax: Infinity, rmax: 100 },
+    f: { q: "", tour: null, st: new Set(), qual: new Set(), df: "", dt: "" },
   };
 
   // ── canvas kit ──────────────────────────────────────────────────────────────
@@ -67,7 +66,6 @@
     let A;
     if (opts.robust) { const av=[]; for (const s of series) for (let i=0;i<t.length;i++) av.push(Math.abs(s.mn[i]-off),Math.abs(s.mx[i]-off)); A=pctl(av,99)*1.15; }
     else { A=1e-6; for (const s of series) for (let i=0;i<t.length;i++) A=Math.max(A,Math.abs(s.mn[i]-off),Math.abs(s.mx[i]-off)); A*=1.12; }
-    if (opts.minA) A = Math.max(A, opts.minA);
     A = Math.max(A, 1e-6);
     const ym = v => lerp(padT, h - padB, (A - (v - off)) / (2 * A));
 
@@ -82,13 +80,7 @@
       ctx.fillRect(PADL, ym(-opts.ceil), w-PADR-PADL, (h-padB)-ym(-opts.ceil));
       ctx.strokeStyle = THEME.rail; ctx.setLineDash([4,3]);
       for (const c of [opts.ceil,-opts.ceil]){ctx.beginPath();ctx.moveTo(PADL,ym(c));ctx.lineTo(w-PADR,ym(c));ctx.stroke();}
-      ctx.setLineDash([]); ctx.fillStyle=THEME.rail; ctx.font="10px "+THEME.mono; ctx.textAlign="right"; ctx.fillText("RAIL",w-PADR-3,ym(opts.ceil)+11);
-    }
-    if (opts.thr) {   // znorm σ-threshold lines
-      ctx.strokeStyle = THEME.thr; ctx.setLineDash([5,4]); ctx.globalAlpha=.8;
-      for (const c of [opts.thr,-opts.thr]){ if(c<A){ctx.beginPath();ctx.moveTo(PADL,ym(c));ctx.lineTo(w-PADR,ym(c));ctx.stroke();} }
-      ctx.setLineDash([]); ctx.globalAlpha=1; ctx.fillStyle=THEME.thr; ctx.font="9px "+THEME.mono; ctx.textAlign="right";
-      if(opts.thr<A) ctx.fillText(`${opts.thr}σ`, w-PADR-3, ym(opts.thr)-3);
+      ctx.setLineDash([]); ctx.fillStyle=THEME.rail; ctx.font="10px "+THEME.mono; ctx.textAlign="right"; ctx.fillText("LIMIT",w-PADR-3,ym(opts.ceil)+11);
     }
     if (opts.events && opts.events.length) {
       let evs = opts.events;
@@ -123,16 +115,9 @@
     if (f.q && !r.subject.toLowerCase().includes(f.q.toLowerCase())) return false;
     if (f.tour !== null && t.tournament !== f.tour) return false;
     if (f.st.size && !f.st.has(t.session_type)) return false;
-    if (f.rig.size && !f.rig.has(t.rig_board)) return false;
-    if (f.prep.size && !f.prep.has(t.cleaning_regimen)) return false;
-    if (f.elec.size && !f.elec.has(t.electrode_type)) return false;
-    if (f.det.size && !f.det.has(r.detector)) return false;
-    if (f.pipe.size && !f.pipe.has(r.pipeline)) return false;
     if (f.qual.size && !f.qual.has(r.status)) return false;
     if (f.df && r.date < f.df) return false;
     if (f.dt && r.date > f.dt) return false;
-    if (r.duration < f.dmin || r.duration > f.dmax) return false;
-    if (r.rail_pct > f.rmax) return false;
     return true;
   }
   function recompute() {
@@ -148,51 +133,43 @@
     if (f.q) p.set("q", f.q);
     if (f.tour !== null) p.set("tour", f.tour ? "1" : "0");
     const setCSV = (k, s) => { if (s.size) p.set(k, [...s].join(",")); };
-    setCSV("st", f.st); setCSV("rig", f.rig); setCSV("det", f.det); setCSV("pipe", f.pipe);
-    setCSV("prep", f.prep); setCSV("qual", f.qual);
+    setCSV("st", f.st); setCSV("qual", f.qual);
     if (f.df) p.set("df", f.df); if (f.dt) p.set("dt", f.dt);
-    if (f.dmin > 0) p.set("dmin", f.dmin); if (f.dmax !== Infinity) p.set("dmax", f.dmax);
-    if (f.rmax < 100) p.set("rmax", f.rmax);
     if (state.sel) p.set("rec", state.sel);
-    if (state.lens !== "raw") p.set("lens", state.lens);
-    history.replaceState(null, "", "?" + p.toString());
+    const qs = p.toString();
+    history.replaceState(null, "", qs ? "?" + qs : location.pathname);
   }
   function loadURL() {
     const p = new URLSearchParams(location.search), f = state.f;
     f.q = p.get("q") || "";
     f.tour = p.has("tour") ? p.get("tour") === "1" : null;
-    const getCSV = (k, s, cast) => { const v = p.get(k); if (v) v.split(",").forEach(x => s.add(cast ? cast(x) : x)); };
-    getCSV("st", f.st); getCSV("rig", f.rig); getCSV("det", f.det); getCSV("pipe", f.pipe);
-    getCSV("prep", f.prep); getCSV("qual", f.qual);
+    const getCSV = (k, s) => { const v = p.get(k); if (v) v.split(",").forEach(x => s.add(x)); };
+    getCSV("st", f.st); getCSV("qual", f.qual);
     f.df = p.get("df") || ""; f.dt = p.get("dt") || "";
-    if (p.has("dmin")) f.dmin = +p.get("dmin"); if (p.has("dmax")) f.dmax = +p.get("dmax");
-    if (p.has("rmax")) f.rmax = +p.get("rmax");
-    if (p.has("lens")) state.lens = p.get("lens");
     return p.get("rec");
   }
 
   // ── corpus stats (top bar) ──────────────────────────────────────────────────
   function renderStats() {
-    const c = state.meta.corpus, q = c.quality || {};
+    const c = state.meta.corpus;
     const items = [
-      [c.n_recordings, "recordings"], [c.n_sessions, "sessions"],
-      [c.total_hours + "h", "signal"], [c.n_subjects, "subjects"],
-      [`${c.date_start.slice(5)} – ${c.date_end.slice(5)}`, "date span"],
-      [`<span class="qok">${q.ok||0}</span> / <span class="qbad">${q.railing||0}</span> / <span class="qwarn">${q.flat||0}</span>`, "ok / rail / flat"],
+      [c.n_recordings, "recordings"], [c.n_subjects, "people"],
+      [c.total_hours + "h", "of signal"],
+      [`${c.date_start.slice(5)} – ${c.date_end.slice(5)}`, "2026"],
     ];
     const box = $("#stats"); box.innerHTML = "";
     for (const [v, k] of items) { const c2 = el("div", "cstat"); c2.appendChild(el("div", "v", v)); c2.appendChild(el("div", "k", k)); box.appendChild(c2); }
   }
 
   // ── filter UI ───────────────────────────────────────────────────────────────
-  function chipGroup(title, values, sel, onToggle, statusClass) {
+  function chipGroup(title, values, sel, labelFn, statusClass) {
     const g = el("div", "fgroup");
     const h = el("h4", null, title);
     if (sel.size) { const c = el("span", "clr", "clear"); c.onclick = () => { sel.clear(); recompute(); renderFilters(); }; h.appendChild(c); }
     g.appendChild(h);
     const chips = el("div", "chips");
     for (const { v, count } of values) {
-      const label = v === true ? "Yes" : v === false ? "No" : v == null ? "—" : String(v);
+      const label = labelFn ? labelFn(v) : String(v);
       const active = sel.has(v);
       const cls = "chip" + (active ? " on" : "") + (statusClass ? " st-" + v : "");
       const b = el("button", cls, `${label}<span class="n">${count}</span>`);
@@ -205,42 +182,21 @@
     const wrap = $("#filters"); wrap.innerHTML = "";
     const meta = state.meta, f = state.f;
 
-    // tournament (boolean)
+    // tournament day (boolean toggle)
     const tv = meta.tags.tournament.values;
-    const tg = el("div", "fgroup"); tg.appendChild(el("h4", null, "Tournament"));
+    const tg = el("div", "fgroup"); tg.appendChild(el("h4", null, "Event"));
     const tchips = el("div", "chips");
     for (const { v, count } of tv) {
-      const b = el("button", "chip" + (f.tour === v ? " on tour" : ""), `${v ? "Tournament" : "Other"}<span class="n">${count}</span>`);
+      const b = el("button", "chip" + (f.tour === v ? " on tour" : ""), `${v ? "Tournament day" : "Other days"}<span class="n">${count}</span>`);
       b.onclick = () => { f.tour = f.tour === v ? null : v; recompute(); renderFilters(); };
       tchips.appendChild(b);
     }
     tg.appendChild(tchips); wrap.appendChild(tg);
 
-    wrap.appendChild(chipGroup("Session type", meta.tags.session_type.values, f.st, recompute));
-    wrap.appendChild(chipGroup("Rig / board", meta.tags.rig_board.values, f.rig, recompute));
+    wrap.appendChild(chipGroup("Session type", meta.tags.session_type.values, f.st));
 
-    // pipeline / detector — the paradigm axis, as a list filter
-    const dv = Object.entries(meta.pipeline.detector).map(([k, n]) => ({ v: k === "null" ? null : k, count: n })).filter(x => x.v);
-    wrap.appendChild(chipGroup("Detector", dv, f.det, recompute));
-    const pv = Object.entries(meta.pipeline.version).map(([k, n]) => ({ v: k === "null" ? null : k, count: n })).filter(x => x.v);
-    wrap.appendChild(chipGroup("Pipeline", pv, f.pipe, recompute));
-
-    wrap.appendChild(chipGroup("Skin prep", meta.tags.cleaning_regimen.values, f.prep, recompute));
-
-    // quality (status colors)
-    const qv = ["ok", "railing", "flat"].map(s => ({ v: s, count: (state.meta.corpus.quality[s] || 0) })).filter(x => x.count);
-    wrap.appendChild(chipGroup("Signal quality", qv, f.qual, recompute, true));
-
-    // electrode — single value in this corpus, shown as static info
-    const ev = meta.tags.electrode_type.values.filter(x => x.count);
-    if (ev.length === 1) {
-      const g = el("div", "fgroup"); g.appendChild(el("h4", null, "Electrode"));
-      const chips = el("div", "chips");
-      chips.appendChild(el("span", "chip static", `${ev[0].v}<span class="n">${ev[0].count}</span>`));
-      g.appendChild(chips); wrap.appendChild(g);
-    } else {
-      wrap.appendChild(chipGroup("Electrode", ev, f.elec, recompute));
-    }
+    const qv = ["ok", "railing", "flat"].map(s => ({ v: s, count: (meta.corpus.quality[s] || 0) })).filter(x => x.count);
+    wrap.appendChild(chipGroup("Signal quality", qv, f.qual, v => QUALITY[v] || v, true));
 
     // date range
     const dg = el("div", "fgroup"); dg.appendChild(el("h4", null, "Date range"));
@@ -248,24 +204,12 @@
     const di = (val, on) => { const i = el("input"); i.type = "date"; i.value = val; i.min = meta.corpus.date_start; i.max = meta.corpus.date_end; i.onchange = () => { on(i.value); recompute(); }; return i; };
     dr.appendChild(di(f.df, v => f.df = v)); dr.appendChild(el("span", null, "→")); dr.appendChild(di(f.dt, v => f.dt = v));
     dg.appendChild(dr); wrap.appendChild(dg);
-
-    // numeric: max rail %
-    const rg = el("div", "fgroup"); rg.appendChild(el("h4", null, "Max rail %"));
-    const rr = el("div", "rangerow"); const ri = el("input"); ri.type = "range"; ri.min = 0; ri.max = 100; ri.step = 1; ri.value = f.rmax;
-    const rvl = el("span", "rv", `≤ ${f.rmax}%`); ri.oninput = () => { f.rmax = +ri.value; rvl.textContent = `≤ ${f.rmax}%`; recompute(); };
-    rr.appendChild(ri); rr.appendChild(rvl); rg.appendChild(rr); wrap.appendChild(rg);
-
-    // numeric: min duration
-    const gg = el("div", "fgroup"); gg.appendChild(el("h4", null, "Min duration"));
-    const gr = el("div", "rangerow"); const gi = el("input"); gi.type = "range"; gi.min = 0; gi.max = 120; gi.step = 5; gi.value = Math.min(f.dmin, 120);
-    const gvl = el("span", "rv", f.dmin ? `≥ ${f.dmin}s` : "any"); gi.oninput = () => { f.dmin = +gi.value; gvl.textContent = f.dmin ? `≥ ${f.dmin}s` : "any"; recompute(); };
-    gr.appendChild(gi); gr.appendChild(gvl); gg.appendChild(gr); wrap.appendChild(gg);
   }
 
   // ── sidebar list ────────────────────────────────────────────────────────────
   function renderList() {
     const meta = $("#listmeta"); meta.innerHTML = "";
-    meta.appendChild(el("span", null, `<b style="color:var(--ink)">${state.filtered.length}</b> of ${state.recs.length}`));
+    meta.appendChild(el("span", null, `<b style="color:var(--ink)">${state.filtered.length}</b> of ${state.recs.length} recordings`));
     const sb = el("button", "sortbtn", state.sortDesc ? "↓ Newest" : "↑ Oldest");
     sb.onclick = () => { state.sortDesc = !state.sortDesc; recompute(); };
     meta.appendChild(sb);
@@ -283,8 +227,7 @@
       const tags = el("div", "ritags");
       if (r.tags.tournament) tags.appendChild(el("span", "ttag tour", "tournament"));
       tags.appendChild(el("span", "ttag", r.tags.session_type));
-      tags.appendChild(el("span", "ttag", r.tags.rig_board));
-      if (r.detector) tags.appendChild(el("span", "ttag", r.detector));
+      if (r.n_players === 2) tags.appendChild(el("span", "ttag", "2-player"));
       li.appendChild(tags);
       const spark = el("canvas", "spark"); li.appendChild(spark);
       li.onclick = () => selectRec(r.id);
@@ -303,88 +246,65 @@
     syncURL();
     renderDetail();
   }
-  function lensMeta(id) { return state.meta.lenses.find(l => l.id === id) || state.meta.lenses[0]; }
   function renderDetail() {
     const r = state.detail, main = $("#main"); main.innerHTML = "";
+    const row = state.recs.find(x => x.id === r.id) || {};
     const wrap = el("div", "detail");
 
     const head = el("div", "dhead");
-    const ttl = el("div"); ttl.appendChild(el("div", "dtitle", r.subject + (r.opponent ? ` <span class="opp">vs ${r.opponent}</span>` : "")));
-    ttl.appendChild(el("div", "dsub", `${r.id} · ${r.date} ${r.time} · ${humanDur(r.duration)} @ ${r.fs} Hz`));
+    const ttl = el("div"); ttl.appendChild(el("div", "dtitle", r.subject + (row.opponent ? ` <span class="opp">vs ${row.opponent}</span>` : "")));
+    ttl.appendChild(el("div", "dsub", `${r.date} at ${r.time} · ${humanDur(r.duration)} · ${r.fs} samples/s`));
     head.appendChild(ttl); wrap.appendChild(head);
 
     const badges = el("div", "badges");
     if (r.tags.tournament) badges.appendChild(el("span", "badge tour", "🏆 Tournament"));
     badges.appendChild(el("span", "badge", `Session <b>${r.tags.session_type}</b>`));
-    badges.appendChild(el("span", "badge", `Rig <b>${r.tags.rig_board}</b>`));
-    badges.appendChild(el("span", "badge", `Electrode <b>${r.tags.electrode_type}</b>`));
-    badges.appendChild(el("span", "badge", `Skin prep <b>${r.tags.cleaning_regimen}</b>`));
-    if (r.detector) badges.appendChild(el("span", "badge pipe", `Detector <b>${r.detector}</b>${r.pipeline ? " · " + r.pipeline : ""}`));
-    if (r.n_players) badges.appendChild(el("span", "badge", `${r.n_players}-player`));
+    if (r.n_players === 2) badges.appendChild(el("span", "badge", "2-player match"));
+    const q = QUALITY[r.status] || r.status;
+    const qb = el("span", "badge q-" + r.status, `Signal <b>${q}</b>` + (r.rail_pct > 0 ? ` · ${r.rail_pct.toFixed(1)}% at limit` : ""));
+    badges.appendChild(qb);
     wrap.appendChild(badges);
 
-    // ── DSP paradigm lens card ──
-    const lc = el("div", "card");
-    const lh = el("div", "cardhead");
-    lh.appendChild(el("span", "clabel", "PARADIGM LENS"));
-    lh.appendChild(el("span", "csub", "view the raw recording through each era of the filtering pipeline"));
-    const rail = el("span", "railpill", `RAIL ${r.rail_pct.toFixed(1)}%`);
-    rail.style.color = r.rail_pct > 0 ? THEME.rail : THEME.status.ok;
-    lh.appendChild(rail); lc.appendChild(lh);
+    // ── the three raw traces ──
+    const card = el("div", "card");
+    const ch = el("div", "cardhead");
+    ch.appendChild(el("span", "clabel", "RAW SIGNAL"));
+    ch.appendChild(el("span", "csub", "three traces, no filtering — exactly as recorded, in microvolts (µV)"));
+    card.appendChild(ch);
 
-    const lw = el("div", "lenswrap");
-    const lrail = el("div", "lensrail");
-    for (const L of state.meta.lenses) {
-      const node = el("div", "lensnode" + (state.lens === L.id ? " on" : ""));
-      node.appendChild(el("div", "lensdot"));
-      node.appendChild(el("div", "lenslbl", L.label));
-      node.appendChild(el("div", "lensdate", fmtDate(L.date)));
-      node.onclick = () => { state.lens = L.id; syncURL(); renderDetail(); };
-      lrail.appendChild(node);
-    }
-    lw.appendChild(lrail);
-    const lm = lensMeta(state.lens);
-    const blurb = el("div", "lensblurb", `<span class="ld">${lm.label}${lm.date ? " · " + fmtDate(lm.date, true) : ""} · ${lm.unit}</span><br>${lm.blurb}`);
-    lw.appendChild(blurb); lc.appendChild(lw);
+    card.appendChild(el("div", "plotnote",
+      `<b style="color:${THEME.rib}">R − L</b> is the difference between the two electrodes — the signal the game reads. ` +
+      `A glance to the right moves it up; a glance to the left moves it down. Below it: each electrode alone.`));
 
-    const pp = el("div", "plot"); const rcv = el("canvas"); pp.appendChild(rcv); lc.appendChild(pp);
-    wrap.appendChild(lc);
+    const pp = el("div", "plot");
+    const dcv = el("canvas"); pp.appendChild(dcv);
+    card.appendChild(pp);
+    const stack = el("div", "stack");
+    const lrow = el("div", "chrow"), lcv = el("canvas"); lrow.appendChild(lcv);
+    const rrow = el("div", "chrow"), rcv = el("canvas"); rrow.appendChild(rcv);
+    stack.appendChild(lrow); stack.appendChild(rrow); card.appendChild(stack);
 
-    // event key
     if (r.events && r.events.length) {
       const key = el("div", "eventkey");
       const kinds = [...new Set(r.events.map(e => e.label))];
       const shown = kinds.slice(0, 6);
-      key.appendChild(el("span", null, `<b>${r.events.length}</b> event markers:`));
+      key.appendChild(el("span", null, `<b>${r.events.length}</b> game/cue events marked as vertical lines:`));
       for (const k of shown) key.appendChild(el("span", null, k));
       if (kinds.length > 6) key.appendChild(el("span", null, `+${kinds.length - 6} more`));
-      lc.appendChild(key);
+      card.appendChild(key);
     }
-
-    // ── raw electrodes card ──
-    const rc = el("div", "card");
-    const rhh = el("div", "cardhead");
-    rhh.appendChild(el("span", "clabel", "RAW ELECTRODES"));
-    rhh.appendChild(el("span", "csub", "left / right, unfiltered (µV)"));
-    rc.appendChild(rhh);
-    const stack = el("div", "stack");
-    const lrow = el("div", "chrow"), lcv = el("canvas"); lrow.appendChild(lcv);
-    const rrow = el("div", "chrow"), rcv2 = el("canvas"); rrow.appendChild(rcv2);
-    stack.appendChild(lrow); stack.appendChild(rrow); rc.appendChild(stack); wrap.appendChild(rc);
-
+    wrap.appendChild(card);
     main.appendChild(wrap);
 
     requestAnimationFrame(() => {
-      const lens = r.lenses[state.lens], lmeta = lensMeta(state.lens);
-      drawTrace(rcv, r.t, [{ mn: lens.mn, mx: lens.mx, fill: THEME.ribFill, stroke: THEME.rib }], {
-        height: 240, center: true, ruler: true, ceil: lens.ceil, thr: lens.thr,
-        minA: lens.thr ? lens.thr * 1.15 : 0, events: r.events, unit: lmeta.unit,
-        name: `R−L · ${lmeta.label}`, nameColor: THEME.rib,
+      drawTrace(dcv, r.t, [{ mn: r.diff.mn, mx: r.diff.mx, fill: THEME.ribFill, stroke: THEME.rib }], {
+        height: 240, center: true, ruler: true, ceil: r.ceil_uv, events: r.events,
+        unit: "µV", name: "R − L (right minus left)", nameColor: THEME.rib,
       });
       drawTrace(lcv, r.t, [{ mn: r.channels.l.mn, mx: r.channels.l.mx, fill: hexA(THEME.L, .12), stroke: THEME.L }],
-        { height: 116, center: true, robust: true, ceil: r.ceil_uv, name: "L", nameColor: THEME.L });
-      drawTrace(rcv2, r.t, [{ mn: r.channels.r.mn, mx: r.channels.r.mx, fill: hexA(THEME.R, .12), stroke: THEME.R }],
-        { height: 116, center: true, robust: true, ceil: r.ceil_uv, ruler: true, name: "R", nameColor: THEME.R });
+        { height: 116, center: true, robust: true, ceil: r.ceil_uv, unit: "µV", name: "Left electrode", nameColor: THEME.L });
+      drawTrace(rcv, r.t, [{ mn: r.channels.r.mn, mx: r.channels.r.mx, fill: hexA(THEME.R, .12), stroke: THEME.R }],
+        { height: 116, center: true, robust: true, ceil: r.ceil_uv, ruler: true, unit: "µV", name: "Right electrode", nameColor: THEME.R });
     });
   }
 
@@ -395,9 +315,16 @@
     const d = el("div", "dash");
     d.appendChild(el("h2", null, "Play Pong with your eyes."));
     d.appendChild(el("p", null,
-      `Every recording here is horizontal <b>EOG</b> — the tiny voltages that appear near the eyes when you glance left or right, read by a two-electrode montage on a Cerelog X8 and used to drive a Pong paddle. This portal is a public, read-only browser over the whole labeled corpus: <b>${c.n_recordings}</b> recordings across <b>${c.n_sessions}</b> sessions and <b>${c.n_subjects}</b> subjects, ${c.date_start} → ${c.date_end}. Names are anonymized.`));
+      `Every recording here is horizontal <b>EOG</b> (electrooculography): the small voltage that appears ` +
+      `beside your eyes when you glance left or right. Two electrodes read that voltage, and it drives a Pong paddle. ` +
+      `This site holds the full recording corpus of the <a href="https://github.com/hoeksemaa/brain-pong">BrainPong</a> project: ` +
+      `<b>${c.n_recordings}</b> recordings from <b>${c.n_subjects}</b> people, ` +
+      `${c.total_hours} hours of signal, collected ${fmtSpan(c.date_start, c.date_end)}. ` +
+      `All names except the project owner's are pseudonyms.`));
     d.appendChild(el("p", null,
-      `Use the filters on the left to slice by tag, pipeline, quality, date, or duration. Open any recording to view it through each <b>historical filtering paradigm</b> — from the first EOG band in April to the velocity/matched detector the game runs today.`));
+      `<b>Pick a recording from the list on the left.</b> Each one shows three raw traces: the right-minus-left ` +
+      `difference (the signal the game reads), and each electrode on its own. ` +
+      `Use the filters to narrow the list, or open <b>About</b> for help reading the plots.`));
     // quality bar
     const bar = el("div", "qbar");
     for (const [k, col] of [["ok", THEME.status.ok], ["railing", THEME.status.railing], ["flat", THEME.status.flat]]) {
@@ -405,12 +332,16 @@
     }
     d.appendChild(bar);
     const leg = el("div", "qlegend");
-    leg.appendChild(el("span", null, `<b style="color:${THEME.status.ok}">${q.ok||0}</b> ok`));
-    leg.appendChild(el("span", null, `<b style="color:${THEME.status.railing}">${q.railing||0}</b> railing`));
+    leg.appendChild(el("span", null, `<b style="color:${THEME.status.ok}">${q.ok||0}</b> good`));
+    leg.appendChild(el("span", null, `<b style="color:${THEME.status.railing}">${q.railing||0}</b> clipped`));
     leg.appendChild(el("span", null, `<b style="color:${THEME.status.flat}">${q.flat||0}</b> flat`));
     d.appendChild(leg);
-    d.appendChild(el("p", null, `<span style="color:var(--muted)">← pick a recording to begin.</span>`));
     main.appendChild(d);
+  }
+  function fmtSpan(a, b) {
+    const MON = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    const f = d => { const [y,m] = d.split("-"); return `${MON[+m-1]} ${y}`; };
+    return f(a) === f(b) ? `in ${f(a)}` : `from ${f(a)} to ${f(b)}`;
   }
 
   // ── about modal ─────────────────────────────────────────────────────────────
@@ -418,10 +349,25 @@
     const m = $("#aboutModal");
     m.innerHTML = "";
     const box = el("div", "box");
-    box.innerHTML = `<h2>About this portal</h2>
-      <p><b>BrainPong</b> is a hobby project: play Pong with your eyes. A two-electrode horizontal <b>electrooculography</b> (EOG) montage on a Cerelog X8 reads left/right glances and moves the paddle in real time. The sensor is receive-only — it measures the naturally-occurring skin voltages near the eyes; nothing is applied back to anyone.</p>
-      <p>This page browses the recording corpus that backs the detector work. Each recording can be viewed through the successive <b>filtering paradigms</b> the pipeline passed through, so you can see the signal-processing progression over time. Subject names are anonymized; the underlying arrays are the project owner's and consenting players' EOG.</p>
-      <p>The <a href="cmrr/">CMRR explainer ↗</a> covers why electrode-impedance mismatch degrades common-mode rejection.</p>
+    box.innerHTML = `<h2>About this site</h2>
+      <p><b>BrainPong</b> is a hobby project: play Pong with your eyes. Two electrodes beside the eyes read
+      <b>electrooculography</b> (EOG) — the natural voltage of the eye, which shifts when you glance left or right.
+      A Cerelog X8 board digitizes the voltage, and the game moves the paddle from it in real time.
+      The sensor only receives; nothing is ever applied to a person.</p>
+      <p><b>How to read a recording:</b></p>
+      <ul>
+        <li><b style="color:#7ef0b0">R − L</b> — the right electrode minus the left electrode. This is the signal
+        the game reads. A glance right moves the trace up; a glance left moves it down.</li>
+        <li><b style="color:#4ea8ff">Left</b> / <b style="color:#ff9d5c">Right</b> — each electrode alone, unfiltered.</li>
+        <li><b style="color:#ff6b81">LIMIT</b> — red dashed lines mark the amplifier's range. A trace pinned there
+        is clipped, not real signal. Recordings marked <i>clipped</i> or <i>flat</i> had electrode problems.</li>
+        <li>Vertical colored lines are game or cue events (for example a <b style="color:#5b8cff">LEFT</b> /
+        <b style="color:#ff9d5c">RIGHT</b> cue during a training run).</li>
+      </ul>
+      <p>Each plot is a min/max envelope of the full recording, so short spikes stay visible.
+      All subjects played with consent; every name except the project owner's is a pseudonym.</p>
+      <p>More: <a href="cmrr/">why bad electrode contact ruins the signal ↗</a> ·
+      <a href="https://github.com/hoeksemaa/brain-pong">source code on GitHub ↗</a></p>
       <button class="tbtn close">Close</button>`;
     m.appendChild(box); m.hidden = false;
     const close = () => { m.hidden = true; };
