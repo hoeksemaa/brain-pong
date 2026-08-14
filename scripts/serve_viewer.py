@@ -16,6 +16,8 @@ Reads the SQLite store (built by scripts/ingest_npz.py) and serves:
   GET  /api/recordings/<id>/channels        decimated raw channels
          ?rows=1,2 &t0=&t1=&width=
   GET  /api/recordings/<id>/eeg_rows        board rows carrying the 8 ADS1299 chs
+  GET  /api/recordings/<id>/pipeline        live-game detection replay, every stage
+         ?width=                            (brainpong.pipeline → eog_core)
   GET/PUT/DELETE /api/recordings/<id>/trim  keep-window annotation (never touches npz)
   GET  /  + static                          the web/ frontend
 
@@ -32,7 +34,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory, redirect, abort
 
-from brainpong import store
+from brainpong import pipeline, store
 
 REPO = Path(__file__).resolve().parent.parent
 WEB = REPO / "web"
@@ -100,6 +102,19 @@ def create_app(db_path=DEFAULT_DB):
     @app.get("/api/recordings/<rid>/eeg_rows")
     def api_eeg_rows(rid):
         return jsonify(store.eeg_rows(db(), rid))
+
+    @app.get("/api/recordings/<rid>/pipeline")
+    def api_pipeline(rid):
+        """Replay the recording through the LIVE game detection pipeline
+        (brainpong.pipeline — the exact eog_core functions, chunked like the
+        in-game 100 ms poll) and return every intermediate stage for display."""
+        src = store._source(db(), rid)
+        if src is None:
+            abort(404)
+        out = pipeline.replay(src, _width())
+        log.info("GET pipeline %s detector=%s -> %d steps, %d cmds",
+                 rid, out["detector"], len(out["steps"]), out["n_commands"])
+        return jsonify(out)
 
     @app.get("/api/recordings/<rid>/health")
     def api_health(rid):
