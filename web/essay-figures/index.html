@@ -4,30 +4,61 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BrainPong essay figures</title>
-<link rel="stylesheet" href="figures.css?v=14">
+<link rel="stylesheet" href="figures.css?v=17">
+<style>
+/* Page styling for the harness ONLY. It used to live in figures.css, which meant
+   dropping that file into the essay would have restyled the whole site —
+   figures.css now scopes everything to .eog-fig and owns nothing outside it. */
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 3rem 1.25rem;
+  background: #fff; color: #000;
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 15px; line-height: 1.65;
+}
+.wrap { max-width: 720px; margin: 0 auto; }
+.fig-h { font-size: 13px; font-weight: 400; color: #9aa0a6; margin: 3rem 0 0; }
+</style>
 </head>
 <body>
 <!-- Development harness only. In the essay each figure is embedded on its own,
      next to the prose step it illustrates; figures.js builds whichever mount
-     ids are actually present. -->
+     ids are actually present. The .eog-fig class is what figures.css hangs on,
+     so it belongs here too — otherwise the harness stops matching what the
+     essay renders, which is the whole point of having a harness. -->
 <div class="wrap">
 
+  <h2 class="fig-h">1 · eyes move — the dipole rotates</h2>
+  <div id="fig-01" class="eog-fig"></div>
+
+  <h2 class="fig-h">2 · measured against SRB1</h2>
+  <div id="fig-02" class="eog-fig"></div>
+
+  <h2 class="fig-h">3 · bias driven into the body</h2>
+  <div id="fig-03" class="eog-fig"></div>
+
+  <h2 class="fig-h">5 · digitize</h2>
+  <div id="fig-05" class="eog-fig"></div>
+
   <h2 class="fig-h">6 · subtract left from right</h2>
-  <div id="fig-06"></div>
+  <div id="fig-06" class="eog-fig"></div>
 
   <h2 class="fig-h">7 · detrend</h2>
-  <div id="fig-07"></div>
+  <div id="fig-07" class="eog-fig"></div>
 
   <h2 class="fig-h">8 · filter</h2>
-  <div id="fig-08"></div>
+  <div id="fig-08" class="eog-fig"></div>
+
+  <h2 class="fig-h">8.5 · threshold amplitude, or threshold velocity</h2>
+  <div id="fig-085" class="eog-fig"></div>
 
   <h2 class="fig-h">9 · calibrate → σ</h2>
-  <div id="fig-09"></div>
+  <div id="fig-09" class="eog-fig"></div>
 
   <h2 class="fig-h">10 · threshold → spike detected</h2>
-  <div id="fig-10"></div>
+  <div id="fig-10" class="eog-fig"></div>
 
 </div>
-<script src="figures.js?v=84"></script>
+<script src="figures.js?v=115"></script>
 </body>
 </html>

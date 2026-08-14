@@ -18,7 +18,11 @@
 
 /* Role-based palette, resolved from CSS so the stylesheet stays the one place
  * colours are defined:  ink = base data, green = secondary base, red = derived.
- * axis/grid are neutral so they never read as a data series. */
+ * axis/grid are neutral so they never read as a data series.
+ *
+ * The properties are namespaced --eog-* because this ships into a page it does
+ * not own, and a bare --red on :root is exactly the kind of thing that collides
+ * with a host stylesheet two years later. */
 // Set two-line, "look" over the direction — roughly half the width of one line,
 // which is what lets the labels survive the fast block's 0.55 s cue spacing.
 const CUE_TEXT = { L: "left", R: "right", C: "center" };
@@ -26,8 +30,9 @@ const CUE_TEXT = { L: "left", R: "right", C: "center" };
 const C = {};
 function readColors() {
   const cs = getComputedStyle(document.documentElement);
-  for (const k of ["ink", "green", "red", "axis", "grid", "cue", "rule", "bg"]) {
-    C[k] = cs.getPropertyValue("--" + k).trim();
+  for (const k of ["ink", "green", "red", "axis", "grid", "cue", "rule", "bg",
+                   "iris"]) {
+    C[k] = cs.getPropertyValue("--eog-" + k).trim();
   }
 }
 
@@ -130,12 +135,54 @@ class Plot {
     ctx.restore();
   }
 
+  /* Trace a function of continuous TIME rather than of sample index, at `steps`
+     points per sample of `fs`.
+
+     Only figures 2 and 3 need this, and only because they draw a pre-ADC signal.
+     Their interference is analytic, so it can be evaluated anywhere — and it has
+     to be: the 5th mains harmonic is 300 Hz against the recording's 125 Hz
+     Nyquist, so drawing it on sample positions would render it as a 50 Hz alias.
+     Sampling the analytic part finely is not a liberty, it is the whole point of
+     being on the analogue side of the hinge. The recorded part of `f` is still
+     only known at 250 Hz and is interpolated between samples, which is what
+     trace() draws anyway. */
+  traceT(f, t0, t1, fs, steps, color, width) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(this.x, this.y - 3, this.w, this.h + 6); ctx.clip();
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineJoin = "round";
+    ctx.beginPath();
+    const dt = 1 / (fs * steps);
+    let first = true;
+    for (let t = t0; t <= t1; t += dt) {
+      const xx = this.px(t), yy = this.py(f(t));
+      if (first) { ctx.moveTo(xx, yy); first = false; } else ctx.lineTo(xx, yy);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
   label(text, color) {
     const { ctx } = this;
     ctx.save();
     ctx.font = "15px " + font();
     ctx.fillStyle = color; ctx.textAlign = "left"; ctx.textBaseline = "middle";
     ctx.fillText(text, 6, this.y + this.h / 2);
+    ctx.restore();
+  }
+
+  /* label(), but stacked lines at a caller-chosen size. Exists for names too
+     long for the gutter at the standard 15 px — "amplitude · 0.1–30 Hz" would
+     cross x=63 into the tick labels, so figure 8.5 stacks the name over its
+     band at a size that stays clear. */
+  label2(lines, color, px) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = px + "px " + font();
+    ctx.fillStyle = color; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    const lh = px + 3;
+    const y0 = this.y + this.h / 2 - (lines.length - 1) * lh / 2;
+    lines.forEach((t, j) => ctx.fillText(t, 6, y0 + j * lh));
     ctx.restore();
   }
 
@@ -314,6 +361,14 @@ const PLOT_FOOT = 36;         // px below a panel for the x-axis and its unit
 // step — which is what makes the traces comparable between steps. Padding the
 // canvas out to figure 6's height on top of that bought nothing but whitespace.
 const SINGLE_H = PLOT_TOP + PANEL_H + PLOT_FOOT;
+// Gap between stacked panels, taken from figure 6: its two sit at PLOT_TOP and at
+// PLOT_TOP + avail − PANEL_H, which leaves exactly this between them.
+const PANEL_GAP = FIG_H - PLOT_TOP - PLOT_FOOT - 2 * PANEL_H;
+// Figure 2 stacks THREE — the two canthi and the reference they are measured
+// against — so it is the one figure taller than figure 6. The plot box is still
+// 430x150 and the top two panels sit at exactly figure 3's y, so the seam holds;
+// what grows is only the canvas.
+const TRIPLE_H = PLOT_TOP + 3 * PANEL_H + 2 * PANEL_GAP + PLOT_FOOT;
 const TARGET_GRID_PX = 52;    // aimed-for gridline spacing, identical in every panel
 // Two labelled lines are always on screen, so any screenshot at any scroll
 // position carries its own absolute scale.
@@ -573,9 +628,754 @@ const winMean = (get, i0, i1) => {
   return a / (i1 - i0);
 };
 
+/* ── the pre-ADC interference (figures 2 and 3) ───────────────────────────── */
+
+/* The common-mode waveform both pre-ADC figures scale, built once from
+ * meta.interference so the two cannot drift apart. Unit peak by construction —
+ * the bake normalises the harmonic amplitudes — which is what lets V_cm be quoted
+ * as a peak and stay inside the amplifier's input window.
+ *
+ * Mains is not a sine. It carries odd-harmonic distortion, and capacitive
+ * coupling amplifies the problem because the displacement current into the body
+ * is C·dV/dt and so rises with frequency.
+ *
+ * No amplitude envelope, though the real interference has one. It is measurable
+ * in this recording — the 58-62 Hz Hilbert envelope has sd/mean 0.22 on R and
+ * 0.42 on L, power peaking at 0.061 Hz — but only a fifth of its variance sits
+ * below 0.3 Hz, so the real thing jumps when someone moves and then holds. A
+ * single slow sinusoid got the depth right and the character wrong.
+ *
+ * Everything NOT here — electrode-skin noise at 1-20 µV rms with a 1/f^1.5-2
+ * spectrum, EMG, drift, lead-loop pickup — is already in the recording. Adding it
+ * would count it twice. These figures model only what gets removed. */
+function makeInterference(meta) {
+  const H = meta.interference.harmonics.map(
+    ([k, a, p]) => [2 * Math.PI * k * meta.interference.f_hz, a, p]);
+  return (t) => {
+    let v = 0;
+    for (const [w, a, p] of H) v += a * Math.sin(w * t + p);
+    return v;
+  };
+}
+
+/* Read a baked signal at a non-integer sample position. The recorded half of a
+ * pre-ADC figure is only known at 250 Hz; between samples it is a straight line,
+ * which is exactly what Plot.trace draws. */
+const sampleAt = (get, n) => (t, fs) => {
+  const x = t * fs;
+  const i = Math.floor(x);
+  if (i < 0) return get(0);
+  if (i >= n - 1) return get(n - 1);
+  const fr = x - i;
+  return get(i) * (1 - fr) + get(i + 1) * fr;
+};
+
 /* Every figure, keyed by the id of the element it mounts into. Only the ones
    present in the DOM are built, so the essay can embed them one at a time. */
 const FIGURES = {};
+
+/* ── 01 · eyes move — the dipole rotates ─────────────────────────────────── */
+
+/* Where the signal comes from, and the only figure in the series that is a diagram
+ * rather than a trace.
+ *
+ * THE EYE IS A BATTERY. The retinal pigment epithelium holds a standing potential
+ * across the globe — cornea POSITIVE, retina negative, a few hundred µV to a
+ * millivolt end to end. It is always there; nothing about a saccade creates it. All
+ * a saccade does is ROTATE it.
+ *
+ * WHICH IS WHY THE SIGNS ONLY APPEAR AS THE EYES TURN. Looking straight at the
+ * viewer the dipole points along the line of sight, so both poles project to the
+ * same spot on screen and both canthi sit equidistant from it — the battery is
+ * there and the difference it produces is zero. Rotating it swings the positive
+ * pole toward one canthus and the negative pole toward the other, and only then is
+ * there anything to measure. The signs fading in with the rotation is that, not a
+ * charge appearing out of nothing.
+ *
+ * VERIFIED AGAINST THE RECORDING, which is the one thing here that is not a
+ * drawing. Averaged over the cued glances: a LEFT cue puts ch_L at +39.0 µV and
+ * ch_R at −25.4 µV; a RIGHT cue puts ch_R at +29.6 µV and ch_L at −34.2 µV. So
+ * R − L is −64 µV one way and +64 µV the other, symmetric to within a microvolt,
+ * and the canthus the cornea swings toward is the one that goes positive. The
+ * geometry drawn here predicts that sign, and the data confirms it.
+ *
+ * HANDEDNESS, and it is worth being explicit because it is easy to get backwards.
+ * These are eyes looking OUT at the reader, so screen-left is the subject's RIGHT.
+ * GAZE_DIR = −1 sweeps the pupils to screen-left, which is the subject glancing to
+ * their own right, and by the numbers above that drives R − L POSITIVE. Flip
+ * GAZE_DIR to +1 and it becomes a leftward glance, matching the "look left" cue
+ * guides in figures 2 onward. No electrodes are drawn: this figure is the source,
+ * and where the signal gets measured from is figure 2's business.
+ *
+ * NO AXIS LINE BETWEEN THE POLES. It was drawn and cut: through a globe that is
+ * itself outlined in grey, a third horizontal line reads as anatomy the eye does
+ * not have. The two signs moving apart in step already say they are one object.
+ *
+ * THE SIGNS SIT OUTSIDE THE GLOBES, which is a legibility choice and not a
+ * projection. The true poles stay inside the outline — at 30° they are only
+ * Rg·sin 30° = 22 px off centre against a 44 px radius — so drawn faithfully they
+ * would sit on top of the iris. They are pushed out to the rim along the same axis
+ * and in the same proportion, so the direction and the ordering are honest even
+ * though the distance is not. */
+FIGURES["fig-01"] = (mount, data) => {
+  const R_GLOBE = 40;          // px, the eyeball
+  const R_IRIS = 17;
+  const R_PUPIL = 9;
+  // Wider than anatomy — real eyes sit ~2.6 globe-radii apart and this is 4.2 —
+  // because each globe needs a pole drawn either side of it and at true spacing the
+  // left eye's minus lands on top of the right eye's plus. A schematic, not a
+  // portrait, so the spacing gives way before the poles do.
+  const EYE_DX = 84;           // half the distance between the two globes
+  const MAX_DEG = 30;          // gaze excursion at full turn
+  const SIGN_OUT = 13;         // pole clearance from the globe
+  const GAZE_DIR = -1;         // −1 sweeps the pupils to screen-left; see above
+  const MAX_RAD = MAX_DEG * Math.PI / 180;
+
+  new Figure(mount, {
+    height: 210,
+    aria: "turn the eyes and watch the corneoretinal dipole rotate",
+    draw: (ctx, W, H, s) => {
+      const e = ease(s);
+      const phi = GAZE_DIR * MAX_RAD * e;
+      // Rotation as a fraction of full turn, signed. Drives where the poles sit.
+      const t = Math.sin(phi) / Math.sin(MAX_RAD);
+      // Signs come in with the rotation, because before it there is no difference
+      // for the electrodes to see.
+      const aSign = ease(s / 0.35);
+      const cy = H / 2 - 6;
+
+      const eye = (cx) => {
+        // Globe.
+        ctx.save();
+        ctx.fillStyle = C.bg; ctx.strokeStyle = C.cue; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.arc(cx, cy, R_GLOBE, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+        ctx.restore();
+
+        // Iris and pupil, both foreshortened by cos of the rotation and both
+        // centred on the cornea — the positive pole itself, at its true projected
+        // position. Clipped to the globe so a wide rotation cannot push them past
+        // the outline.
+        const xCornea = cx + R_GLOBE * Math.sin(phi);
+        const squash = Math.abs(Math.cos(phi));
+        ctx.save();
+        ctx.beginPath(); ctx.arc(cx, cy, R_GLOBE - 1, 0, Math.PI * 2); ctx.clip();
+        for (const [r, fill] of [[R_IRIS, C.iris], [R_PUPIL, C.ink]]) {
+          ctx.fillStyle = fill;
+          ctx.beginPath();
+          ctx.ellipse(xCornea, cy, r * squash, r, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+
+        if (aSign <= 0.004) return;
+        const xPlus = cx + (R_GLOBE + SIGN_OUT) * t;
+        const xMinus = cx - (R_GLOBE + SIGN_OUT) * t;
+
+        ctx.save();
+        ctx.font = "600 21px " + font();
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillStyle = C.red;
+        ctx.globalAlpha = aSign;
+        ctx.fillText("+", xPlus, cy);
+        // Dimmer: the retina is on the far side of the globe.
+        ctx.globalAlpha = aSign * 0.75;
+        ctx.fillText("−", xMinus, cy);
+        ctx.restore();
+      };
+
+      eye(W / 2 - EYE_DX);
+      eye(W / 2 + EYE_DX);
+    },
+  });
+};
+
+/* ── 02 · measured against SRB1 ──────────────────────────────────────────── */
+
+/* The step that makes a measurement exist at all.
+ *
+ * There is no such thing as the voltage AT a point — only the voltage BETWEEN
+ * two. Every channel on this rig is one canthus measured against the reference
+ * earlobe, and this figure is that subtraction. Before it, each amplifier pin
+ * sits at whatever the body sits at; after it, there is a signal.
+ *
+ * Same invented open-loop scenario as figure 3, sharing every parameter, so the
+ * arithmetic closes exactly:
+ *
+ *     V_pin_i = V_cm·(1 − Z_i/Z_in)    + true_i
+ *     V_srb1  = V_cm·(1 − Z_srb1/Z_in)
+ *     V_pin_i − V_srb1 = V_cm·(Z_srb1 − Z_i)/Z_in + true_i
+ *
+ * — and that last line IS figure 3's opening trace. So this figure opens on
+ * `figure 3's opening trace + V_srb1` and the toggle removes V_srb1, landing on
+ * figure 3 with nothing left over.
+ *
+ * THREE PANELS, figure 6's structure: the operands are drawn, then the result.
+ * R and L are the two canthi as their amplifier pins see them; SRB1 is the
+ * reference earlobe, drawn as its own trace because a subtraction whose subtrahend
+ * is invisible is not a subtraction the reader can follow. It is the one figure in
+ * the series taller than figure 6 — three 150 px panels instead of two — and the
+ * top two sit at exactly figure 3's y, so the seam holds and only the canvas grows.
+ *
+ * SRB1 IS DRAWN IN RED, with the results it produces. Red is this series' colour
+ * for what a step contributes, and the subtrahend and the two differences it makes
+ * are one operation — so the reference, its two travelling copies and both output
+ * traces are all the same colour. It also carries no biopotential and no drift,
+ * only the common-mode, which is exactly why subtracting it takes the one and
+ * leaves the other.
+ *
+ * THE REFERENCE SITS BETWEEN THE TWO CHANNELS, and doubles. One earlobe is
+ * subtracted from two canthi, so its trace leaves the middle panel as TWO copies
+ * that slide out in opposite directions — up into R, down into L — and dissolve as
+ * they land. Putting it in the middle is what makes "at the same time" literal:
+ * the distances are equal, so one progress variable gives both copies the same
+ * speed AND the same arrival. Everything they overlay is at the same volts scale on
+ * the way, and at that scale a channel and the reference agree to 0.013 %, so each
+ * copy lands directly on top of the trace it is cancelling.
+ *
+ * L THEN CLOSES THE GAP. Once the reference is spent its panel is dead space, so L
+ * rises into it and the figure finishes as the two panels figure 5 opens on, in
+ * figure 5's own positions. Figure 6 converges two panels into one for the same
+ * reason: a panel that has done its work should not go on occupying the page.
+ *
+ * TWO STAGES ON ONE CLICK, because "it all goes away" and "no, look closer, it
+ * didn't" are two different claims and the second is the interesting one.
+ *
+ *   stage 1  subtract the reference. Its copies slide out into the two channels,
+ *            its own panel empties and L closes the gap, and the axis HOLDS at the
+ *            volts scale — so both channels collapse from a 3 V band of mains to a
+ *            hairline on zero.
+ *   stage 2  the axis zooms ~2000x, and the hairline turns out to have structure
+ *            — the 392 µV and 168 µV that survived because the bridge is
+ *            unbalanced. Subtraction gets you to a floor; it does not get you to
+ *            zero. Figure 3 then lowers the floor.
+ *
+ * The zoom is LOGARITHMIC. A linear ramp from 3.73 V to 1550 µV spends 99 % of
+ * its second above 40 mV and then snaps through the last three decades; equal
+ * ratios per unit time is what reads as a steady zoom.
+ *
+ * AT THE VOLTS SCALE ALL THREE TRACES ARE INDISTINGUISHABLE. The channels differ
+ * from the reference by ~400 µV out of 3 V — 0.013 % — so the figure opens on
+ * three panels that look like the same trace, and that trace looks like mains.
+ * That is the point: the eye signal is in there, four decades down, and nothing
+ * about the raw pin potentials hints at it.
+ *
+ * THE NAMES CHANGE WITH THE ARITHMETIC, as figure 6's do when its R and L become
+ * R − L: R and L are what went in, R−SRB1 and L−SRB1 are what came out, switching
+ * on the subtraction itself so the name and the contents change together.
+ *
+ * NAMES AT THE SERIES' 15 px, like every other figure. "R−SRB1" measures to x=60
+ * against tick labels that start at x=63, so it fits where a longer form would not:
+ * the tick gutter is 108 px with the labels right-aligned into it, and anything
+ * past x=63 lands on top of "−12.50".
+ *
+ * THE HALF-CELLS ARE NOT SPOOFED. V_srb1 carries the earlobe's own half-cell
+ * potential too, but the recording's DC offsets — −11.1 mV on R, −38.9 mV on L —
+ * already ARE (electrode half-cell − earlobe half-cell). Adding the earlobe's
+ * offset to both channels and subtracting it again is a no-op, so what is
+ * subtracted here is the common-mode alone. */
+FIGURES["fig-02"] = (mount, data) => {
+  const meta = data.meta, fs = data.fs;
+  const sr = meta.srb1, bi = meta.bias, dg = meta.digitize;
+  const R = data.sig("ch_R"), L = data.sig("ch_L");
+
+  const VIEW = dg.view_s;                     // 3 s — the series' window
+  const X_STEP = [1, 0.5, 0.2, 0.1].find((v) => VIEW / v >= 6) ?? 0.1;
+  const CM = makeInterference(meta);          // unit-peak, shared with figure 3
+  const SUB = meta.interference.substeps;
+  const atR = sampleAt(R, data.n), atL = sampleAt(L, data.n);
+
+  const A_CM = sr.subtracted_uv;              // the reference's own potential, µV
+  // What survives the subtraction on each channel, and so what figure 3 inherits.
+  const LEAK = { ch_R: bi.ch.ch_R.removed_uv, ch_L: bi.ch.ch_L.removed_uv };
+  const SPAN_PIN = sr.span;                   // volts — before subtraction
+  const SPAN_REFD = bi.span;                  // µV — figure 3's opening panel
+  const gpad = (span) => span * (EDGE_FADE_PX / 2) / PANEL_H;
+  // Above this span the panel is labelled in volts. One relabel, and it lands
+  // mid-zoom where the gridlines are sweeping anyway, so it is masked by motion.
+  const V_SCALE_UV = 1e5;
+
+  new Figure(mount, {
+    height: TRIPLE_H,
+    morph_s: TRANSITION_S * 2,                // a second per stage
+    aria: "subtract the reference electrode from both channels, "
+        + "then zoom in on what is left",
+    draw: (ctx, W, H, s, clock) => {
+      const ph = PANEL_H;
+      // R top, the reference BETWEEN them, L bottom — so the two copies travel
+      // equal distances in opposite directions and "at the same time" needs no
+      // qualification. yR and yMid are figure 5's two panel positions, which is
+      // where R and L end up once L has closed the gap.
+      const yR = PLOT_TOP;
+      const yMid = PLOT_TOP + PANEL_H + PANEL_GAP;
+      const yL0 = yMid + PANEL_H + PANEL_GAP;
+      const { t0, i0, i1 } = data.window(clock, 0, VIEW);
+
+      const k = ease(s / 0.45);               // the subtraction
+      const m = ease(s / 0.40);               // the copies' flight
+      // They dissolve from early in the flight, so they read as merging into the
+      // trace they cancel rather than stopping on top of it.
+      const aCopy = 0.55 * (1 - ease((s - 0.10) / 0.28));
+      // The reference's panel empties as its trace departs: once subtracted it is
+      // spent, and drawing it still would claim it is an input.
+      const aMid = 1 - ease((s - 0.32) / 0.16);
+      // L closes the gap the reference leaves, landing on figure 5's lower panel.
+      const conv = ease((s - 0.50) / 0.22);
+      const z = ease((s - 0.72) / 0.28);      // volts → mV
+      const yL = lerp(yL0, yMid, conv);
+
+      // (1−k) of the reference still present, so k=1 is figure 3's opening trace
+      // and every intermediate k is a real partial referencing.
+      const fn = (at, key) => {
+        const a = LEAK[key] + (1 - k) * A_CM;
+        return (t) => at(t, fs) + a * CM(t);
+      };
+      const fR = fn(atR, "ch_R"), fL = fn(atL, "ch_L");
+      const fSR = (t) => A_CM * CM(t);
+      // Sample-indexed versions, for the window mean the camera centres on.
+      const gR = (i) => R(i) + (LEAK.ch_R + (1 - k) * A_CM) * CM(i / fs);
+      const gL = (i) => L(i) + (LEAK.ch_L + (1 - k) * A_CM) * CM(i / fs);
+      const gSR = (i) => A_CM * CM(i / fs);
+
+      // Equal ratios per unit time — see the note above. The reference's own panel
+      // never zooms: it is gone long before the zoom starts.
+      const span = (key) => key === "srb1" ? SPAN_PIN.srb1
+        : Math.exp(lerp(Math.log(SPAN_PIN[key]), Math.log(SPAN_REFD[key]), z));
+
+      const mk = (y, ctr, sp) => new Plot(ctx,
+        { x: 108, y, w: W - 120, h: ph },
+        [t0, t0 + VIEW], [ctr - sp / 2, ctr + sp / 2]);
+
+      // Cues span the stack down to whichever panel is currently lowest.
+      mk(yR, 0, 1).cues(meta.cues, yR, yL + ph);
+
+      const panel = (y, key, g, f, base, nameIn, nameOut, alpha) => {
+        if (alpha <= 0.004) return;
+        const sp = span(key);
+        const p = mk(y, winMean(g, i0, i1), sp);
+        const volts = sp > V_SCALE_UV;
+        ctx.globalAlpha = alpha;
+        p.grid(ticksAt(p.ymin, p.ymax, gridStep(sp, ph, gpad(sp), MIN_GRIDLINES)),
+               volts ? (u) => (u / 1e6).toFixed(2) : (u) => (u / 1e3).toFixed(2),
+               volts ? "V" : "mV");
+        const col = mix(base, C.red, ease(s));
+        if (nameOut) {
+          // NOT cross-faded. The two names share an origin at x=6 and have
+          // different lengths, so any overlap in their alphas renders both sets
+          // of glyphs on top of each other. One leaves before the
+          // other arrives, with a beat of no name in between.
+          ctx.globalAlpha = alpha * (1 - ease(k / 0.45));
+          p.label(nameIn, col);
+          ctx.globalAlpha = alpha * ease((k - 0.55) / 0.45);
+          p.label(nameOut, col);
+        } else {
+          p.label(nameIn, col);
+        }
+        ctx.globalAlpha = alpha;
+        if (f) p.traceT(f, t0, t0 + VIEW, fs, SUB, col, 1.2);
+        ctx.globalAlpha = 1;
+      };
+      panel(yR, "ch_R", gR, fR, C.ink, "R", "R−SRB1", 1);
+      panel(yL, "ch_L", gL, fL, C.green, "L", "L−SRB1", 1);
+      // Grid and name only — the reference's trace leaves as the two copies below.
+      // Red, because it is what this step contributes: the subtrahend and the two
+      // results it produces are one operation, and in this series that is red.
+      panel(yMid, "srb1", gSR, null, C.red, "SRB1", null, aMid);
+
+      // The reference, doubled, sliding into both channels at once — up into R and
+      // down into L, equal distances from the middle. Drawn last so each copy is
+      // visible over the trace it is landing on.
+      if (aCopy > 0.004) {
+        const ctr = winMean(gSR, i0, i1);
+        for (const yTo of [yR, yL0]) {
+          ctx.globalAlpha = aCopy;
+          mk(lerp(yMid, yTo, m), ctr, SPAN_PIN.srb1)
+            .traceT(fSR, t0, t0 + VIEW, fs, SUB, C.red, 0.9);
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      // Pinned under the lowest panel, which rides up with L.
+      mk(yL, 0, 1).xAxis("seconds", X_STEP);
+    },
+  });
+};
+
+/* ── 03 · bias driven into the body ──────────────────────────────────────── */
+
+/* Active cancellation, and the only figure in the series built on invented
+ * numbers.
+ *
+ * WHY IT HAS TO BE INVENTED. The recording only ever contains SRB1-referenced,
+ * bias-ON channels; the corpus has no PD_BIAS-off session, so the common-mode the
+ * loop suppresses was never measured. Everything from figure 5 down is the
+ * committed recording and this is not. What makes it honest anyway is that the
+ * model is an INVERTIBLE function of the real data: the figure adds a leak term
+ * and the toggle takes it back out, so at s=1 the trace is the recording bit for
+ * bit. meta.bias carries every parameter, flagged `invented: true`.
+ *
+ * THE MECHANISM, which is not what most people expect. Bias does not subtract
+ * anything from the measurement. Electrode impedances and the amplifier's input
+ * impedance form a BRIDGE, and common-mode leaks into the difference in
+ * proportion to how unbalanced that bridge is:
+ *
+ *     ch_i = ch_i_true + V_cm · (Z_srb1 − Z_i) / Z_in
+ *
+ * The loop drives an inverted copy of V_cm back into the BODY, which shrinks the
+ * multiplier on that whole term. Sound-cancelling headphones, except the
+ * anti-signal goes into the medium every microphone is sitting in rather than
+ * into one pair of ears — which is exactly why one electrode on one earlobe helps
+ * both channels at once. Not finite CMRR: the ADS1299's is −110 dB, far too good
+ * to explain any visible hum.
+ *
+ * Z_in IS NOT THE CHIP. Its input impedance is gigaohms and irrelevant at 60 Hz.
+ * The bottom of the bridge is the capacitance from each input node to ground,
+ * dominated by unshielded electrode leads — 100 pF is 26.5 MΩ at 60 Hz.
+ *
+ * WHAT THIS FIGURE DOES NOT CLAIM. That the 60 Hz left in the recording is what
+ * bias left behind. With the loop closed this model leaks 1.7–4 µV, and the
+ * measured hum is several times that, 4× larger on R than on L, and correlated
+ * between the channels at only +0.24 — none of which looks like a shared
+ * common-mode. Lead-loop magnetic pickup is differential by cable geometry and
+ * immune to both bias and CMRR. So the figure shows what bias REMOVES and says
+ * nothing about the composition of what remains.
+ *
+ * THREE PANELS, LIKE FIGURE 2, and for the same reason: the anti-signal the loop
+ * drives into the body sits BETWEEN the two channels and doubles, sliding up into R
+ * and down into L over equal distances. Drawn in red with the results it produces,
+ * since the anti-signal and the two suppressions it causes are one operation. Once
+ * it is spent L closes the gap, and the figure finishes as figure 5's two panels in
+ * figure 5's positions.
+ *
+ * ONE LOOP CANNOT NULL TWO CHANNELS EXACTLY. The two canthi sit behind different
+ * mismatches, so the amount cancelled differs — 392 µV on R against 168 µV on L.
+ * The middle panel is drawn at the mean of the two, and the ARITHMETIC applied to
+ * each channel stays per-channel exact; only the display trace is averaged. What
+ * that per-channel difference leaves behind is the (Z_L − Z_R) term figure 6 spends.
+ *
+ * SEAM. At s=1 this is figure 5's opening frame — same two panels, same baked
+ * 3 s spans, same window-mean centring, same 1 s-per-second scroll. The toggle
+ * runs BACKWARDS relative to the other figures for once: 0 is the loop open,
+ * which is the state the reader arrives from, and 1 is the real recording. Black
+ * and green go in, red comes out, on the same s as the arithmetic — figure 7's
+ * contract. */
+FIGURES["fig-03"] = (mount, data) => {
+  const meta = data.meta, fs = data.fs;
+  const bi = meta.bias, dg = meta.digitize;
+  const R = data.sig("ch_R"), L = data.sig("ch_L");
+
+  const VIEW = dg.view_s;                // 3 s — figure 5's window
+  const X_STEP = [1, 0.5, 0.2, 0.1].find((v) => VIEW / v >= 6) ?? 0.1;
+  const CM = makeInterference(meta);     // unit-peak, the same one figure 2 scales
+  const SUB = meta.interference.substeps;
+  const atR = sampleAt(R, data.n), atL = sampleAt(L, data.n);
+
+  // The amplitude the loop removes from each channel, and the panel each needs
+  // with the loop open. Both baked; see bias_model() for the derivation.
+  const AMP = { ch_R: bi.ch.ch_R.removed_uv, ch_L: bi.ch.ch_L.removed_uv };
+  const MID = bi.mid_uv;                 // the anti-signal, as the middle draws it
+  const SPAN_OPEN = bi.span;             // loop open — the wider panel
+  const SPAN_SHUT = dg.span;             // loop closed — figure 5's panel, the seam
+  const gpad = (span) => span * (EDGE_FADE_PX / 2) / PANEL_H;
+
+  new Figure(mount, {
+    height: TRIPLE_H,
+    morph_s: TRANSITION_S * 2,
+    aria: "close the bias loop and drive the mains interference out of the body",
+    draw: (ctx, W, H, s, clock) => {
+      const ph = PANEL_H;
+      // Same stack as figure 2: R top, the thing being subtracted BETWEEN them, L
+      // bottom. yR and yMid are figure 5's two positions, which is where R and L
+      // finish once L has closed the gap the anti-signal leaves.
+      const yR = PLOT_TOP;
+      const yMid = PLOT_TOP + PANEL_H + PANEL_GAP;
+      const yL0 = yMid + PANEL_H + PANEL_GAP;
+      const yf = (u) => (u / 1000).toFixed(2);
+      const { t0, i0, i1 } = data.window(clock, 0, VIEW);
+
+      const k = ease(s / 0.45);          // the suppression
+      const m = ease(s / 0.40);          // the copies' flight
+      const aCopy = 0.55 * (1 - ease((s - 0.10) / 0.28));
+      const aMid = 1 - ease((s - 0.32) / 0.16);
+      const conv = ease((s - 0.50) / 0.30);
+      const yL = lerp(yL0, yMid, conv);
+
+      // (1−k) of the leak, so k=1 is the recording untouched and every intermediate
+      // k is a loop with less than full gain — a real state, not a crossfade
+      // between two pictures. Time is absolute recording time, so the interference
+      // travels with the samples it corrupts instead of standing still while they
+      // slide underneath.
+      const fn = (at, key) => {
+        const a = (1 - k) * AMP[key];
+        return (t) => at(t, fs) + a * CM(t);
+      };
+      const fR = fn(atR, "ch_R"), fL = fn(atL, "ch_L");
+      // The anti-signal itself: an inverted copy of the interference, which is what
+      // the loop drives into the body. Sound-cancelling headphones, except the
+      // anti-signal goes into the medium every electrode is sitting in.
+      const fMid = (t) => -MID * CM(t);
+      // Sample-indexed versions, for the window mean the camera centres on.
+      const gR = (i) => R(i) + (1 - k) * AMP.ch_R * CM(i / fs);
+      const gL = (i) => L(i) + (1 - k) * AMP.ch_L * CM(i / fs);
+      const gMid = (i) => -MID * CM(i / fs);
+
+      const span = (key) => key === "mid" ? SPAN_OPEN.mid
+        : lerp(SPAN_OPEN[key], SPAN_SHUT[key], k);
+
+      const mk = (y, ctr, sp) => new Plot(ctx,
+        { x: 108, y, w: W - 120, h: ph },
+        [t0, t0 + VIEW], [ctr - sp / 2, ctr + sp / 2]);
+
+      mk(yR, 0, 1).cues(meta.cues, yR, yL + ph);
+
+      const panel = (y, key, g, f, base, nameIn, nameOut, alpha) => {
+        if (alpha <= 0.004) return;
+        const sp = span(key);
+        const p = mk(y, winMean(g, i0, i1), sp);
+        ctx.globalAlpha = alpha;
+        p.grid(ticksAt(p.ymin, p.ymax, gridStep(sp, ph, gpad(sp), MIN_GRIDLINES)),
+               yf, "mV");
+        // Black/green in, red out, carrying the same k as the arithmetic.
+        const col = mix(base, C.red, k);
+        if (nameOut) {
+          // Not cross-faded — see figure 2. One name leaves before the next lands.
+          ctx.globalAlpha = alpha * (1 - ease(k / 0.45));
+          p.label(nameIn, col);
+          ctx.globalAlpha = alpha * ease((k - 0.55) / 0.45);
+          p.label(nameOut, col);
+        } else {
+          p.label(nameIn, col);
+        }
+        ctx.globalAlpha = alpha;
+        if (f) p.traceT(f, t0, t0 + VIEW, fs, SUB, col, 1.2);
+        ctx.globalAlpha = 1;
+      };
+      // Tight around the minus, not "R − Bias": the tick gutter stops a name at
+      // x=63, and spaced it measures to 78 at the series' 15 px while tight it
+      // measures to 60. Figure 2 sets its longer names smaller for the same reason;
+      // here the shorter name means the size can stay standard instead.
+      panel(yR, "ch_R", gR, fR, C.ink, "R", "R−Bias", 1);
+      panel(yL, "ch_L", gL, fL, C.green, "L", "L−Bias", 1);
+      // Grid and name only; its trace leaves as the two copies below. Red, because
+      // the anti-signal and the two results it produces are one operation.
+      panel(yMid, "mid", gMid, null, C.red, "Bias", null, aMid);
+
+      // The anti-signal, doubled, sliding into both channels at once — up into R
+      // and down into L, equal distances from the middle.
+      if (aCopy > 0.004) {
+        const ctr = winMean(gMid, i0, i1);
+        for (const yTo of [yR, yL0]) {
+          ctx.globalAlpha = aCopy;
+          mk(lerp(yMid, yTo, m), ctr, SPAN_OPEN.mid)
+            .traceT(fMid, t0, t0 + VIEW, fs, SUB, C.red, 0.9);
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      mk(yL, 0, 1).xAxis("seconds", X_STEP);
+    },
+  });
+};
+
+/* ── 05 · digitized ──────────────────────────────────────────────────────── */
+
+/* The ADC: the hinge of the whole essay. Everything above this figure is
+ * analogue physics reconstructed backwards; everything below it is arithmetic on
+ * an array, and this is where the array first exists.
+ *
+ * THE RATE IS WRONG ON PURPOSE, and it is the one deliberate lie in the series.
+ * The board runs at 250 Hz, so the 2 s window holds 500 samples per channel —
+ * well over one per pixel. Drawn as dots they merge back into the line they came
+ * from and the reader learns only that a trace is made of ink. So the figure
+ * samples at 10 Hz instead: one dot per 100 ms, each the mean of 25 real samples.
+ * What survives the exaggeration is the only thing this step has to teach — that
+ * a continuous quantity has been replaced by one number per interval, and the
+ * intervals are all there is from here on. meta.digitize carries both rates so
+ * the prose can say which it is showing.
+ *
+ * ONE NUMBER PER INTERVAL, and the number is the interval's mean. Which makes
+ * each band the whole truth about where its dot came from — the point of drawing
+ * the band at all. The real converter does NOT do this: an ADS1299 decimates
+ * with a third-order sinc, so a sample is a bell-weighted mean 3 output periods
+ * wide whose centre of mass sits 1.5 periods behind the timestamp it is reported
+ * under, and consecutive samples overlap three deep. A one-slot band would lie
+ * about that. meta.digitize.adc carries the real filter — support, group delay,
+ * -3 dB corner, all derived from f_CLK and the decimation ratio in the bake —
+ * for prose that wants to name the gap. See adc_chain() there.
+ *
+ * THE CAMERA DOES NOT MOVE. Same 3 s window, same span, same scroll rate at both
+ * ends of the toggle, so the only thing the control changes is the sampling. An
+ * earlier cut opened on figure 6's 10 s frame and zoomed in as the dots appeared,
+ * which made the seam exact but moved the camera and the operator together — and
+ * a reader watching the picture change cannot then tell which of the two did it.
+ * The cost is the seam: figure 6 opens five times wider, so the step from 5 to 6
+ * is a zoom-out this figure no longer performs.
+ *
+ * COLOUR. Black and green are the two channels going in, red is the samples
+ * coming out — one panel each, so the two red series are told apart by position
+ * rather than by hue. The continuous traces do not morph toward red the way
+ * figure 7's does: the dots REPLACE the curve rather than being the curve
+ * transformed, and keeping R and L in their own colours is what lets a reader
+ * follow which is which while both are on screen.
+ *
+ * ORDER OF APPEARANCE. Slots, then the samples that land in them, and only then
+ * does the curve leave. A reader shown the dots before the intervals has no
+ * reason to believe one-dot-per-interval is what happened rather than a
+ * thinning-out of the line. */
+FIGURES["fig-05"] = (mount, data) => {
+  const meta = data.meta, fs = data.fs;
+  const dg = meta.digitize;
+  const R = data.sig("ch_R"), L = data.sig("ch_L");
+
+  const VIEW = dg.view_s;                // 2 s, at both ends of the toggle
+  const SLOT = dg.slot_s;                // 0.1 s of recording per sample -> 10 Hz
+  const DOT_R = 3.4;                     // px. Thirty of these at 14 px apart,
+                                         // not figure 10's five event markers, so
+                                         // well under its 5.2.
+
+  // Panel heights for a 2 s window, baked by the same worst-slice rule as the
+  // top-level spans but over two seconds. The 10 s spans are several times too
+  // tall here — a short slice of a raw channel moves a fraction of what a 10 s
+  // slice does, and the samples flatten into a straight row with nothing to
+  // sample.
+  const SPAN = dg.span;
+  // Fixed for the life of the figure, since the span is. Same padding rule as
+  // Data.step(), which cannot be used directly: its cache is keyed on the
+  // top-level span, and this figure's is the 1 s one.
+  const STEP = {
+    ch_R: gridStep(SPAN.ch_R, PANEL_H, SPAN.ch_R * (EDGE_FADE_PX / 2) / PANEL_H,
+                   MIN_GRIDLINES),
+    ch_L: gridStep(SPAN.ch_L, PANEL_H, SPAN.ch_L * (EDGE_FADE_PX / 2) / PANEL_H,
+                   MIN_GRIDLINES),
+  };
+  // Coarsest rung that still puts at least eight labels on the panel. Derived
+  // rather than set, because the window has been retuned twice and a hand-set
+  // step silently stops fitting: whole seconds on a 2 s panel is two labels.
+  const X_STEP = [1, 0.5, 0.2, 0.1].find((v) => VIEW / v >= 6) ?? 0.1;
+
+  new Figure(mount, {
+    height: FIG_H,
+    // TWO STEPS ON ONE CLICK. They are two different claims — the axis divides
+    // into intervals; only one number per interval survives — so they are staged
+    // in sequence rather than blended, with a beat between them where step 1 is
+    // fully up and nothing has happened to the data yet. One toggle, because a
+    // reader should not have to work out that two controls are meant to be
+    // pressed in order.
+    //
+    // morph_s is TRANSITION_S x 2, so each of the two steps gets the one second
+    // every other transition in the series takes. The stages below are fractions
+    // of that doubled clock: step 1 lands by 0.35, holds to 0.5, step 2 runs to 1.
+    morph_s: TRANSITION_S * 2,
+    aria: "mark the sampling intervals, then keep one sample per interval",
+    draw: (ctx, W, H, s, clock) => {
+      const top = CUE_HEADROOM, foot = PLOT_FOOT, ph = PANEL_H;
+      const avail = H - top - foot;
+      const yf = (u) => (u / 1000).toFixed(2);
+
+      // Straight off the shell's clock, which advances at SCROLL_RATE — one
+      // second of recording per real second, the same as every other figure. So
+      // the panel's contents turn over every 3 s and a new sample lands every
+      // 100 ms: the real thing at real speed.
+      const { t0, i0, i1 } = data.window(clock, 0, VIEW);
+
+      // Step 1: stripes in, data untouched and in front. Step 2: stripes and data
+      // both out, dots in — the stripes have done their job once the samples
+      // exist, and step 2's whole point is that only the samples survive.
+      const step2 = ease((s - 0.5) / 0.5);
+      const aBand = ease(s / 0.35) * (1 - step2);
+      const aCont = 1 - ease((s - 0.5) / 0.45);
+      const aDot = ease((s - 0.55) / 0.45);
+
+      const mk = (y, ctr, span) => new Plot(ctx,
+        { x: 108, y, w: W - 120, h: ph },
+        [t0, t0 + VIEW], [ctr - span / 2, ctr + span / 2]);
+
+      // Slot bounds in ABSOLUTE recording time — band k is [k·SLOT, (k+1)·SLOT)
+      // of the record, not of the screen. So a band travels with the samples it
+      // covers and its dot can never migrate into a neighbour, which is figure
+      // 9's rule for its grey window and holds here for the same reason.
+      const kRange = () => [Math.floor(t0 / SLOT), Math.ceil((t0 + VIEW) / SLOT)];
+      // Fade at the panel edges on the same 18 px as cue guides and x-axis
+      // labels, so a band or a dot entering the window dissolves in.
+      const edgeFade = (p, xx) =>
+        clamp(Math.min(xx - p.x, p.x + p.w - xx) / 18, 0, 1);
+
+      const slots = (p, alpha) => {
+        const [k0, k1] = kRange();
+        ctx.save();
+        ctx.beginPath(); ctx.rect(p.x, p.y, p.w, p.h); ctx.clip();
+        ctx.fillStyle = C.grid;
+        // STRIPED, not every column: alternate slots are filled and the ones
+        // between are left as background, so the boundary between two intervals
+        // is a colour change rather than a gap. Filling all thirty needed a
+        // pixel gap to separate them, and at 14 px a column that gap is a
+        // meaningful slice of the interval it is supposed to be delimiting.
+        // Parity comes off the ABSOLUTE slot index, so the stripes scroll with
+        // the data instead of shimmering as the window slides past them.
+        for (let k = k0; k <= k1; k++) {
+          if (k % 2) continue;
+          const xa = p.px(k * SLOT), xb = p.px((k + 1) * SLOT);
+          ctx.globalAlpha = alpha * edgeFade(p, (xa + xb) / 2);
+          ctx.fillRect(xa, p.y, xb - xa, p.h);
+        }
+        ctx.restore();
+      };
+
+      const dots = (p, get, alpha) => {
+        const [k0, k1] = kRange();
+        ctx.save();
+        ctx.beginPath(); ctx.rect(p.x, p.y - 4, p.w, p.h + 8); ctx.clip();
+        ctx.fillStyle = C.red;
+        for (let k = k0; k <= k1; k++) {
+          // Sample bounds from the same slot edges the band was drawn between,
+          // so what is averaged and what is highlighted are one interval. Half
+          // -open at both ends, so no sample is counted in two slots.
+          const a = Math.max(0, Math.ceil(k * SLOT * fs));
+          const b = Math.min(data.n, Math.ceil((k + 1) * SLOT * fs));
+          if (b <= a) continue;
+          const xx = p.px((k + 0.5) * SLOT);
+          ctx.globalAlpha = alpha * edgeFade(p, xx);
+          ctx.beginPath();
+          ctx.arc(xx, p.py(winMean(get, a, b)), DOT_R, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      };
+
+      // Figure 6's two panels in figure 6's two places, on figure 6's
+      // window-mean centring. Both built before anything is drawn, because the
+      // slot fills go UNDERNEATH the gridlines — unlike figure 9's single grey
+      // wash, which covers them. Striped bands laid on top would erase the scale
+      // across most of the panel; underneath, it survives the highlight.
+      const build = (y, key, get) => mk(y, winMean(get, i0, i1), SPAN[key]);
+      const pR = build(top, "ch_R", R);
+      const pL = build(top + avail - ph, "ch_L", L);
+
+      if (aBand > 0.004) { slots(pR, aBand); slots(pL, aBand); }
+
+      // Cues over the slots but under the gridlines, which is figure 6's
+      // stacking — so at s=0 the two figures are pixel-for-pixel the same frame.
+      mk(top, 0, 1).cues(meta.cues, top, top + avail);
+
+      const finish = (p, key, get, color, name) => {
+        const sp = SPAN[key], ctr = (p.ymin + p.ymax) / 2;
+        p.grid(ticksAt(ctr - sp / 2, ctr + sp / 2, STEP[key]), yf, "mV");
+        p.label(name, color);
+        if (aCont > 0.004) {
+          ctx.globalAlpha = aCont;
+          p.trace(get, i0, i1, fs, color, 1.2);
+          ctx.globalAlpha = 1;
+        }
+        if (aDot > 0.004) dots(p, get, aDot);
+      };
+      finish(pR, "ch_R", R, C.ink, "R");
+      finish(pL, "ch_L", L, C.green, "L");
+
+      // One shared time axis, pinned to the bottom panel — figure 6's again.
+      mk(top + avail - ph, 0, 1).xAxis("seconds", X_STEP);
+    },
+  });
+};
 
 /* ── 06 · subtract left from right ───────────────────────────────────────── */
 
@@ -805,6 +1605,122 @@ FIGURES["fig-08"] = (mount, data) => {
       const col = mix(C.ink, C.red, s.reduce((a, b) => a + b, 0) / s.length);
       p.trace(get, i0, i1, fs, col, 1.5);
       p.xAxis("seconds");
+    },
+  });
+};
+
+/* ── 08.5 · threshold amplitude, or threshold velocity ───────────────────── */
+
+/* Three rows off ONE poll-by-poll computation: the R − L differential, the
+ * game's filtered amplitude, and the same chain's velocity — rows 2 and 3
+ * diverge only at the final step, and each carries its own ±6σ threshold from
+ * the recording's own 5 s calibration. No control: the loop is the animation
+ * (figure 9's precedent), and the argument is the comparison itself.
+ *
+ * TWO DELIBERATE DEPARTURES from the rest of the series, both the point:
+ *
+ * - THE GAME'S CORNERS, not the essay's. The data is baked through
+ *   eog_core._eog_filter verbatim (LP 30 / HP 0.1, notch 3rd order). At the
+ *   essay's LP 100 the derivative amplifies 40-100 Hz broadband so much that
+ *   velocity LOSES on the 12-recording corpus (531/960 cued glances vs
+ *   amplitude's 708/960 at 6σ) — PR #36's own "velocity performs best at
+ *   ~35 Hz" warning, measured. At these corners: amplitude 526/960,
+ *   velocity 926/960.
+ *
+ * - NOT the committed john recording. On john both rows catch 79/80 — the one
+ *   subject in the corpus where nothing separates them. David (run #3 of the
+ *   mass collection) is the honest witness: BOTH rows draw their σ from the
+ *   same noisy opening — each lands at the 100th percentile of its own
+ *   recording's 5 s blocks (σ_amp 51.3 µV vs blockwise median 14.9; σ_vel
+ *   586.6 µV/s vs median 324) — so each detector gets the worst calibration
+ *   it could have drawn. Amplitude's 6σ (±308 µV) sits ABOVE the recording's
+ *   peak (265 µV): it cannot fire at all, 0/80 cued glances. Velocity's
+ *   slimmer margin (peaks 2.2× its 6σ) still clears: 77/80. The bake
+ *   (scripts/bake_ampvel_figure.py) carries the full numbers.
+ *
+ * Row names sit in the gutter per figures 2/3, but stacked at 10.5 px over
+ * their band (label2) — "amplitude" at the standard 15 px would cross x=63
+ * into the tick labels. Thresholds are figure 10's idiom: 1 px red rules,
+ * both signs, under the trace. */
+FIGURES["fig-085"] = (mount, data) => {
+  const av = data.ampvel;
+  if (!av) return;                       // sidecar bake not present
+  const m = av.meta, fs = m.fs, view = m.view_s, from = m.valid_from_s;
+  const DIFF = (i) => av.arrays.diff[i] + m.mean.diff;
+  const AMP = (i) => av.arrays.amp[i];
+  const VEL = (i) => av.arrays.vel[i] * m.vel_scale;
+  const THR_A = m.sigma_thr * m.sigma.amp_uv;
+  const THR_V = m.sigma_thr * m.sigma.vel_uvs;
+  const S = m.span;
+  const gpad = (span) => span * (EDGE_FADE_PX / 2) / PANEL_H;
+  const STEP_D = gridStep(S.diff, PANEL_H, gpad(S.diff), MIN_GRIDLINES);
+  const STEP_A = gridStep(S.amp, PANEL_H, gpad(S.amp), MIN_GRIDLINES);
+  const STEP_V = gridStep(S.vel, PANEL_H, gpad(S.vel), MIN_GRIDLINES);
+
+  new Figure(mount, {
+    height: TRIPLE_H,
+    control: "none",
+    aria: "the same ten seconds three ways: raw differential, filtered "
+        + "amplitude against its six-sigma threshold, and the same chain's "
+        + "velocity against its own",
+    draw: (ctx, W, H, _v, clock) => {
+      const travel = m.duration_s - from - view;
+      const t0 = from + (clock % travel);
+      const i0 = Math.max(0, Math.floor(t0 * fs) - 1);
+      const i1 = Math.min(m.n, Math.ceil((t0 + view) * fs) + 1);
+      const xr = [t0, t0 + view];
+      const y1 = PLOT_TOP;
+      const y2 = y1 + PANEL_H + PANEL_GAP;
+      const y3 = y2 + PANEL_H + PANEL_GAP;
+      const box = { x: 108, w: W - 120 };
+
+      // Row 1 centres on the window mean (figure 6/7's camera — drift dwarfs
+      // any one slice); rows 2/3 are absolute, zero is zero (figure 8's rule).
+      const ctr = winMean(DIFF, i0, i1);
+      const p1 = new Plot(ctx, { ...box, y: y1, h: PANEL_H }, xr,
+                          [ctr - S.diff / 2, ctr + S.diff / 2]);
+      p1.grid(ticksAt(ctr - S.diff / 2, ctr + S.diff / 2, STEP_D),
+              (v) => (v / 1000).toFixed(2), "mV");
+      const p2 = new Plot(ctx, { ...box, y: y2, h: PANEL_H }, xr,
+                          [-S.amp / 2, S.amp / 2]);
+      p2.grid(ticksAt(-S.amp / 2, S.amp / 2, STEP_A),
+              (v) => (v / 1000).toFixed(2), "mV");
+      const p3 = new Plot(ctx, { ...box, y: y3, h: PANEL_H }, xr,
+                          [-S.vel / 2, S.vel / 2]);
+      p3.grid(ticksAt(-S.vel / 2, S.vel / 2, STEP_V),
+              (v) => (v / 1000).toFixed(0), "mV/s");
+
+      // Cue guides span the whole stack (figure 2/3's rule); labels above the
+      // top panel only.
+      p1.cues(m.cues, y1, y3 + PANEL_H);
+
+      // Thresholds under the traces, both signs — _sustained_crossing tests
+      // |x| and reads direction off the crossing afterwards.
+      ctx.save();
+      ctx.strokeStyle = C.red; ctx.lineWidth = 1;
+      for (const [p, thr] of [[p2, THR_A], [p3, THR_V]]) {
+        for (const v of [thr, -thr]) {
+          const yy = p.py(v);
+          if (yy < p.y || yy > p.y + p.h) continue;
+          ctx.beginPath(); ctx.moveTo(p.x, yy); ctx.lineTo(p.x + p.w, yy); ctx.stroke();
+        }
+      }
+      ctx.restore();
+
+      p1.trace(DIFF, i0, i1, fs, C.ink, 1.5);
+      p2.trace(AMP, i0, i1, fs, C.red, 1.5);
+      p3.trace(VEL, i0, i1, fs, C.red, 1.5);
+
+      p1.label2(["R − L"], C.ink, 15);
+      p2.label2(["amplitude", "0.1–30 Hz"], C.red, 10.5);
+      p3.label2(["velocity", "0.1–30 Hz"], C.red, 10.5);
+
+      // σ is this figure's genuine output — the number the threshold lines
+      // are drawn from — under the same rule as figure 9's readout.
+      p2.note([[`6σ = ${THR_A.toFixed(1)} µV`, C.red]]);
+      p3.note([[`6σ = ${Math.round(THR_V)} µV/s`, C.red]]);
+
+      p3.xAxis("seconds");
     },
   });
 };
@@ -1047,16 +1963,45 @@ FIGURES["fig-10"] = (mount, data) => {
 
 /* ── bootstrap ───────────────────────────────────────────────────────────── */
 
+/* Where the baked data lives, relative to the PAGE and not to this script.
+ *
+ * The harness serves the figures from their own directory so "." is right there.
+ * An essay does not: a post at /2026/07/14/brain-pong.html would resolve a bare
+ * "data/..." to /2026/07/14/data/... and 404. Host pages set
+ *
+ *     <script>window.EOG_FIG_BASE = "/assets/essay-figures";</script>
+ *
+ * before loading this file. */
+const BASE = String(window.EOG_FIG_BASE || ".").replace(/\/+$/, "");
+
 // Bump on every re-bake. The data files are fetched separately from the script,
 // so without this a re-bake silently keeps serving the previous payload.
-const DATA_V = 15;
+const DATA_V = 44;
 
 readColors();
+// Figure 8.5 draws a different recording through the game's own corners, so its
+// data is a sidecar bake (scripts/bake_ampvel_figure.py) fetched only when its
+// mount is on the page — an essay embedding figures one at a time pays for it
+// only where it appears.
+const wantAmpvel = !!document.getElementById("fig-085");
 Promise.all([
-  fetch(`data/eog-figures.json?v=${DATA_V}`).then((r) => r.json()),
-  fetch(`data/eog-full.bin?v=${DATA_V}`).then((r) => r.arrayBuffer()),
-]).then(([meta, buf]) => {
+  fetch(`${BASE}/data/eog-figures.json?v=${DATA_V}`).then((r) => r.json()),
+  fetch(`${BASE}/data/eog-full.bin?v=${DATA_V}`).then((r) => r.arrayBuffer()),
+  wantAmpvel
+    ? fetch(`${BASE}/data/eog-ampvel.json?v=${DATA_V}`).then((r) => r.json())
+    : Promise.resolve(null),
+  wantAmpvel
+    ? fetch(`${BASE}/data/eog-ampvel.bin?v=${DATA_V}`).then((r) => r.arrayBuffer())
+    : Promise.resolve(null),
+]).then(([meta, buf, avMeta, avBuf]) => {
   const data = new Data(meta, buf);
+  if (avMeta && avBuf) {
+    const arrays = {};
+    avMeta.layout.forEach((k, i) => {
+      arrays[k] = new Int16Array(avBuf, i * avMeta.n * 2, avMeta.n);
+    });
+    data.ampvel = { meta: avMeta, arrays };
+  }
   for (const [id, build] of Object.entries(FIGURES)) {
     const mount = document.getElementById(id);
     if (mount) build(mount, data);

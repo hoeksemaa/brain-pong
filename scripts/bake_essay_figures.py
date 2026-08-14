@@ -96,6 +96,135 @@ ESSAY_ORDER = 4          # every stage, including the notch (the game uses 3)
 # much recording either side of it for context.
 CALIB_PAD_S = 3.0
 
+# ── Figure 5. The ADC ────────────────────────────────────────────────────────
+#
+# THE RATE THE FIGURE DRAWS IS NOT THE RATE THE BOARD RUNS, and that is the
+# whole design. At 250 Hz a 10 s window holds 2500 samples: the dots merge into
+# the line they came from, and a reader learns nothing except that the trace is
+# made of ink. So the figure holds a DIGI_VIEW_S window and draws DIGI_N_DOTS
+# samples across it — an honest decimation of the real recording, at a rate
+# chosen to be legible rather than accurate. `digitize.fs_real` and
+# `digitize.fs_shown` are both in the JSON so the prose can name the gap.
+#
+# The window is the SAME at both ends of the toggle. An earlier cut zoomed the
+# axis as the samples appeared, which moved the camera and the operator at once
+# and left the reader unable to tell which of the two had changed the picture.
+#
+# THE RATE IS THE CONSTANT, not the dot count. The window has been retuned twice
+# with the rate held at 10 Hz, so the rate is stated and the number of dots falls
+# out of it — widening the axis adds samples rather than spreading the same ones
+# further apart, which is what a real rate does.
+DIGI_VIEW_S = 3.0        # seconds of recording on the axis, throughout
+DIGI_FS_HZ = 10.0        # samples drawn per second -> one per 100 ms, not 250
+
+# ── Figure 3. Bias drive ─────────────────────────────────────────────────────
+#
+# THE ONLY INVENTED NUMBERS IN THE SERIES. Everything from figure 5 down is the
+# committed recording; this is not, and cannot be. The array only ever contains
+# SRB1-referenced, bias-ON channels — the corpus has no PD_BIAS-off session — so
+# the common-mode the bias loop suppresses was never measured. What follows is a
+# model with stated parameters, and the figure is built so that turning it fully
+# on returns the real recording exactly.
+#
+# THE MECHANISM. Electrode impedances and the amplifier's input impedance form a
+# bridge; common-mode leaks differentially in proportion to how UNBALANCED that
+# bridge is, which dominates over finite CMRR (Metting van Rijn et al., and the
+# ADS1299's own CMRR of -110 dB is far too good to explain any visible hum). For
+# a canthus electrode i measured against the reference earlobe:
+#
+#     ch_i_measured = ch_i_true + V_cm * (Z_srb1 - Z_i) / Z_in
+#
+# Three consequences, one per figure: bias shrinks V_cm (figure 3); SRB1
+# subtraction leaves the per-channel (Z_srb1 - Z_i) term (figure 2); and R - L
+# cancels Z_srb1 entirely, leaving only (Z_L - Z_R) (figure 6). Three different
+# residuals, which is what stops the three figures being one animation.
+#
+# WHAT SETS Z_in. Not the chip — its input impedance is gigaohms and irrelevant
+# here. The bottom of the bridge is the capacitance from each input node to
+# ground, dominated by the unshielded electrode leads. 30-100 pF is normal for
+# plain wire; 100 pF at 60 Hz is 26.5 MOhm.
+#
+# WHAT THIS FIGURE MUST NOT CLAIM. That the ~9 uV of 60 Hz actually present in
+# the recording is what bias left behind. With bias on, this model leaks 1.7-4 uV
+# — and the measured hum is several times that, is 4x larger on R than on L, and
+# correlates between the channels at only +0.24, none of which looks like a
+# shared common-mode. Lead-loop magnetic pickup (differential by cable geometry,
+# and immune to both bias and CMRR), electrode noise and broadband noise in the
+# band are all candidates. The figure shows what bias REMOVES. It says nothing
+# about the composition of what remains.
+# WHAT THE INTERFERENCE LOOKS LIKE. Not a pure sine. Mains carries harmonic
+# distortion, and capacitive coupling makes it worse: the displacement current
+# into the body is C·dV/dt, so it scales with frequency and a 3rd harmonic that is
+# 2 % of the mains VOLTAGE couples in at roughly 6 % of the fundamental's current.
+# The amplitudes below are that, rounded.
+#
+# ONLY ODD HARMONICS, because that is what a symmetric distorted waveform has,
+# and they flatten the peaks rather than skewing them — hence the pi phase on the
+# 3rd. Stopping at the 5th: the 7th would be ~2 % and needs finer rendering than
+# it earns.
+#
+# NO ENVELOPE, though the phenomenon is real. Mains amplitude on a body genuinely
+# wanders — coupling capacitance changes when the subject shifts — and it is
+# measurable in this very recording: the 58-62 Hz Hilbert envelope has sd/mean of
+# 0.22 on R and 0.42 on L, and its own power peaks at 0.061 Hz. A 30 % sinusoidal
+# envelope at 0.13 Hz was tried and dropped: it got the depth and the timescale
+# about right but the CHARACTER wrong. Only 19-25 % of the real envelope's variance
+# sits below 0.3 Hz, so the real thing is erratic — it jumps when someone moves and
+# then holds — where one slow sinusoid breathes too regularly to be believed.
+#
+# WHAT IS NOT MODELLED, and why. Electrode-skin noise is 1-20 uV rms with a 1/f^a
+# spectrum (a between 1.5 and 2), and it dominates the thermal noise of the
+# electrode impedance — but it is ALREADY IN THE RECORDING, along with the EMG,
+# the drift and the lead-loop pickup. Adding it here would count it twice. These
+# two figures model only the interference that gets REMOVED; everything that
+# survives to figure 5 is measured.
+#
+# Grid frequency also wanders by tens of mHz, which is the reason figure 8's notch
+# uses 58-62 Hz bands instead of a single frequency. Too slow to see in 3 s, so it
+# is named in the JSON and not drawn.
+INTERFERENCE_HARMONICS = (   # (order, amplitude relative to fundamental, phase)
+    (1, 1.00, 0.0),
+    (3, 0.07, np.pi),        # pi flattens the peaks, which is what distortion does
+    (5, 0.04, 0.0),
+)
+# Sub-sample rendering steps the browser uses for the analytic part. The 5th
+# harmonic is 300 Hz and the recording is sampled at 250, so drawing this on
+# sample positions would alias it to 50 Hz. 8 steps per sample is 2 kHz, which
+# gives the 300 Hz component ~6.7 points per cycle.
+INTERFERENCE_SUBSTEPS = 8
+
+BIAS_F_HZ            = 60.0        # mains, North America
+BIAS_VCM_OFF_V       = 1.5         # body common-mode with the loop open, amplitude.
+                                   # Kept well inside the ADS1299's input
+                                   # common-mode window (AVSS+0.3 to AVDD-0.3,
+                                   # i.e. ~+/-2.2 V about mid-supply) so the front
+                                   # end is operable in every frame the figure draws.
+BIAS_SUPPRESSION_DB  = 40.0        # what the loop buys. A DRL study measuring this
+                                   # directly reports -92 dB with the loop against
+                                   # -61 dB for electrodes tied to system ground,
+                                   # so ~30 dB over a passive wire; 40 dB total is
+                                   # comfortably in range.
+BIAS_LEAD_C_PF       = 100.0       # lead capacitance to ground -> Z_in
+# Prepped gel gold cups, 5-20 kOhm at 60 Hz. All four electrodes are gel on this
+# rig (both canthi, both earlobes), so the mismatch is a few kOhm — not the tens
+# of kOhm that dry or drying contact would give.
+Z_CANTHUS_R_OHM      = 8_000.0
+Z_CANTHUS_L_OHM      = 12_000.0
+Z_SRB1_OHM           = 15_000.0    # the reference earlobe. Its impedance sets the
+                                   # per-channel residual and cancels in R - L.
+                                   # The BIAS earlobe is a different electrode and
+                                   # a different failure mode: it sits inside the
+                                   # loop and sets the suppression above.
+
+# The converter, as specified. ADS1299-class AFE (SBAS499C): section 9.3.1.3.3
+# for the modulator, 9.3.2.1.1 for the sinc filter, Table 4 for the bandwidth.
+# Only these three numbers are stated; everything else in `adc_chain()` is
+# derived from them, so the block cannot drift from the part.
+ADC_F_CLK_HZ   = 2_048_000.0   # internal oscillator, nominal (SBAS499C 7.5)
+ADC_MOD_DIV    = 2             # f_MOD = f_CLK / 2            (9.3.1.3.3)
+ADC_MOD_ORDER  = 2             # second-order delta-sigma     (9.3.1.3.3)
+ADC_SINC_ORDER = 3             # third-order sinc decimator   (9.3.2.1.1)
+
 # Where a figure showing a filtered stage may start scrolling. Each poll filters
 # a fresh 125-sample buffer from zero state, so there is no whole-record
 # ring-down to skip any more — but the first polls of the record land on the
@@ -346,8 +475,258 @@ def robust_sigma(x):
     return float(1.4826 * np.median(np.abs(x - np.median(x))))
 
 
-def y_span(x, fs, skip_s=0.0):
-    """Panel height that comfortably fits ANY VIEW_S slice of this signal.
+def interference_unit(t, harmonics=None):
+    """The common-mode waveform, normalised to unit peak.
+
+    One function, shared by figures 2 and 3, so the chain between them cannot
+    drift: figure 2 subtracts the reference electrode's share of this and figure 3
+    suppresses the whole thing, and both scale the SAME shape.
+
+    Amplitudes are normalised so max|unit| = 1, which is what lets V_cm be quoted
+    as a peak and stay inside the amplifier's input window.
+    """
+    h = harmonics if harmonics is not None else INTERFERENCE_HARMONICS
+    return sum(a * np.sin(2 * np.pi * k * BIAS_F_HZ * t + p) for k, a, p in h)
+
+
+def interference_model():
+    """Normalise the harmonic amplitudes so the composite peaks at exactly 1."""
+    # Several fundamental periods at fine resolution, so the peak found is true.
+    t = np.arange(0, 5 / BIAS_F_HZ, 1 / (BIAS_F_HZ * 4000))
+    peak = float(np.abs(interference_unit(t)).max())
+    harmonics = [[int(k), round(a / peak, 6), round(p, 6)]
+                 for k, a, p in INTERFERENCE_HARMONICS]
+    return {
+        "f_hz": BIAS_F_HZ,
+        # [order, amplitude, phase], already normalised: the browser evaluates
+        # sum(a·sin(2π·k·f·t + p)) and gets a unit-peak waveform.
+        "harmonics": harmonics,
+        "substeps": INTERFERENCE_SUBSTEPS,
+        "thd_note": "Odd harmonics only, amplitudes scaled for capacitive coupling "
+                    "(displacement current is C·dV/dt, so it rises with frequency). "
+                    "300 Hz is above the recording's 125 Hz Nyquist, which is why "
+                    "the analytic part is drawn at substeps per sample.",
+        "not_modelled": "Electrode-skin noise (1-20 µV rms, 1/f^1.5-2), EMG, drift "
+                        "and lead-loop pickup are already in the recording and are "
+                        "not added here. Grid-frequency wander of tens of mHz — the "
+                        "reason figure 8 notches 58-62 Hz rather than 60 — is too "
+                        "slow to see in a 3 s window. No amplitude envelope: the "
+                        "real one (sd/mean 0.22 on R, 0.42 on L, power peaking at "
+                        "0.061 Hz) is erratic rather than periodic, and a single "
+                        "slow sinusoid read as too tidy.",
+    }
+
+
+def bias_model(sigs, fs, interf):
+    """Figure 3's common-mode leak, per channel, and the panel it needs.
+
+    Returns the amplitude in µV of the 60 Hz term the bias loop REMOVES from each
+    channel — leak(loop open) minus leak(loop closed) — plus the parameters it was
+    derived from, so the prose can name every one of them. See the BIAS_* block
+    for the model and for what this figure is not allowed to claim.
+
+    The browser reconstructs the waveform as amplitude * sin(2*pi*f*t) off the
+    absolute sample index, so nothing needs baking as an array.
+    """
+    z_in = 1.0 / (2 * np.pi * BIAS_F_HZ * BIAS_LEAD_C_PF * 1e-12)
+    closed = 10 ** (-BIAS_SUPPRESSION_DB / 20)      # V_cm with the loop closed
+    z_ch = {"ch_R": Z_CANTHUS_R_OHM, "ch_L": Z_CANTHUS_L_OHM}
+
+    # The same waveform the browser reconstructs, so the span is measured on the
+    # array the figure actually draws. Unit peak; see interference_unit().
+    t = np.arange(next(iter(sigs.values())).size) / fs
+    wave = interference_unit(t, harmonics=interf["harmonics"])
+
+    ch, span = {}, {}
+    for key, z in z_ch.items():
+        # Signed: the leak's polarity follows which electrode is the higher
+        # impedance, so a mismatch that flips sign flips the phase on that channel.
+        alpha = (Z_SRB1_OHM - z) / z_in
+        off = BIAS_VCM_OFF_V * alpha * 1e6          # µV, loop open
+        on = off * closed                           # µV, loop closed
+        ch[key] = {
+            "z_ohm": z,
+            "mismatch_ohm": Z_SRB1_OHM - z,
+            "leak_open_uv": round(off, 2),
+            "leak_closed_uv": round(on, 3),
+            # What the toggle actually removes. At s=1 the injected term is zero
+            # and the trace is the recording, bit for bit.
+            "removed_uv": round(off - on, 2),
+        }
+        # Panel for the loop-OPEN state, by the same worst-slice rule as
+        # everything else but applied to the constructed array.
+        span[key] = y_span(sigs[key] + (off - on) * wave, fs, 0.0, DIGI_VIEW_S)
+
+    # The anti-signal the loop drives into the body, as figure 3's middle panel
+    # draws it. ONE loop produces ONE signal, but the two channels sit behind
+    # different mismatches, so no single anti-signal cancels both exactly — the
+    # panel is drawn at the mean of what it removes from each, and the per-channel
+    # remainder is the (Z_L − Z_R) term figure 6 spends. The arithmetic applied to
+    # R and L stays per-channel exact; only this display trace is averaged.
+    mid = float(np.mean([ch[k]["removed_uv"] for k in ("ch_R", "ch_L")]))
+    span["mid"] = y_span(-mid * wave, fs, 0.0, DIGI_VIEW_S)
+
+    # The differential leak cancels Z_srb1 outright, so it depends only on how the
+    # two canthi differ from each other. Not drawn here; figure 6 spends it.
+    d_alpha = (Z_CANTHUS_L_OHM - Z_CANTHUS_R_OHM) / z_in
+    return {
+        "mid_uv": round(mid, 2),
+        "f_hz": BIAS_F_HZ,
+        "vcm_open_v": BIAS_VCM_OFF_V,
+        "vcm_closed_v": round(BIAS_VCM_OFF_V * closed, 6),
+        "suppression_db": BIAS_SUPPRESSION_DB,
+        "lead_c_pf": BIAS_LEAD_C_PF,
+        "z_in_ohm": round(z_in, 1),
+        "z_srb1_ohm": Z_SRB1_OHM,
+        "ch": ch,
+        "span": span,
+        "diff_leak_open_uv": round(BIAS_VCM_OFF_V * d_alpha * 1e6, 2),
+        "diff_leak_closed_uv": round(BIAS_VCM_OFF_V * closed * d_alpha * 1e6, 3),
+        "invented": True,
+        "note": "Model, not measurement: the corpus has no PD_BIAS-off session, so "
+                "V_cm was never recorded. Applying the loop fully returns the real "
+                "recording exactly. Says nothing about what the residual is made of.",
+    }
+
+
+def srb1_model(sigs, fs, bias, interf):
+    """Figure 2: what the amplifier pins sit at BEFORE the reference is subtracted.
+
+    Same scenario as figure 3 with the loop still open, so the two figures share
+    every parameter. For a canthus electrode i and the reference earlobe:
+
+        V_pin_i  = V_cm·(1 − Z_i/Z_in)     + true_i
+        V_srb1   = V_cm·(1 − Z_srb1/Z_in)
+        ------------------------------------------------------------------
+        V_pin_i − V_srb1 = V_cm·(Z_srb1 − Z_i)/Z_in + true_i
+
+    — which is exactly figure 3's loop-open state. So `V_pin_i = (figure 3's
+    opening trace) + V_srb1`, and subtracting V_srb1 lands on figure 3 exactly.
+    One term, one seam, no slack.
+
+    THE HALF-CELLS NEED NO SPOOFING. V_srb1 also carries the earlobe's own
+    half-cell potential, but the recording's DC offsets — −11.1 mV on R, −38.9 mV
+    on L — ARE already (electrode half-cell − earlobe half-cell). Adding the
+    earlobe's offset to both channels and then subtracting it again is a no-op, so
+    the term subtracted here is the common-mode alone. That the offsets in the
+    recording are differences of half-cells, not absolute electrode potentials, is
+    worth a sentence of prose.
+
+    At the volts scale the two channels are indistinguishable: they differ by
+    ~400 µV out of 3 V, i.e. 0.013 %. That is the figure — two electrodes that
+    look like the same signal, and that signal is mains.
+    """
+    z_in = bias["z_in_ohm"]
+    # (1 − Z_srb1/Z_in) is 0.99943 here; kept explicit because it is the same
+    # divider the channels see, and dropping it would quietly break the identity
+    # above.
+    a_cm = BIAS_VCM_OFF_V * (1 - Z_SRB1_OHM / z_in) * 1e6      # µV
+
+    t = np.arange(next(iter(sigs.values())).size) / fs
+    wave = interference_unit(t, harmonics=interf["harmonics"])
+
+    span = {}
+    for key in ("ch_R", "ch_L"):
+        pin = sigs[key] + (bias["ch"][key]["removed_uv"] + a_cm) * wave
+        span[key] = y_span(pin, fs, 0.0, DIGI_VIEW_S)
+    # The reference electrode gets its own panel, so it needs its own height. It
+    # carries no biopotential and no drift — only the common-mode — which is
+    # exactly why subtracting it removes the one and leaves the other.
+    span["srb1"] = y_span(a_cm * wave, fs, 0.0, DIGI_VIEW_S)
+
+    return {
+        "subtracted_uv": round(a_cm, 1),
+        "span": span,
+        "invented": True,
+        "note": "Same open-loop scenario as `bias`, so the two figures share every "
+                "parameter and figure 2 lands on figure 3's opening frame exactly. "
+                "The reference electrode's half-cell is already inside the "
+                "recording's DC offsets and so is not spoofed.",
+    }
+
+
+def adc_chain(fs):
+    """What the converter does to one sample, derived from the datasheet numbers.
+
+    The answer to "is a sample the first of its interval, the last, or the
+    average" is none of those. Each channel's second-order delta-sigma modulator
+    samples at f_MOD = f_CLK / 2, and a third-order sinc filter decimates that by
+    N = f_MOD / f_DR (SBAS499C 9.3.2.1.1):
+
+        |H(z)| = |(1 - z^-N) / (1 - z^-1)|^3
+
+    which is a boxcar of length N convolved with itself three times. So the
+    impulse response is 3N-2 modulator periods wide — exactly 3 output periods,
+    which is what the datasheet means by "with a step change at input, the filter
+    takes 3 x tDR to settle" — and it is a BELL, peaking at 2.25x its own mean
+    and tapering to zero at both ends. Consecutive samples therefore overlap
+    three deep; they are not independent snapshots of adjacent slots.
+
+    Being symmetric, its centre of mass sits half its width back, so the number
+    stamped at t is an average centred 1.5 output periods EARLIER.
+
+    FIGURE 5 DOES NOT DO THIS. It takes the plain mean of the real samples in
+    each slot — a boxcar, i.e. a first-order sinc — because then the highlighted
+    band tells the whole truth about where its dot came from. The real weighting
+    reaches into the two neighbouring slots, which a one-slot band would lie
+    about. Everything here is baked so the prose can name that gap; nothing here
+    is drawn.
+    """
+    f_mod = ADC_F_CLK_HZ / ADC_MOD_DIV
+    n = int(round(f_mod / fs))
+
+    # The kernel itself, so support and group delay are counted rather than
+    # asserted from a formula that could be mistranscribed.
+    k = np.ones(n) / n
+    for _ in range(ADC_SINC_ORDER - 1):
+        k = np.convolve(k, np.ones(n) / n)
+    support = k.size                      # 3N - 2
+    group_delay = (support - 1) / 2.0     # symmetric FIR
+
+    def mag(f):
+        """|H(f)| of the sinc^ADC_SINC_ORDER decimator. (SBAS499C eq. 7.)"""
+        return abs((np.sin(np.pi * f * n / f_mod)
+                    / (n * np.sin(np.pi * f / f_mod))) ** ADC_SINC_ORDER)
+
+    # -3 dB corner by bisection. Monotone from DC out to the first null at f_DR,
+    # so a bisection on [tiny, f_DR) is exact to the tolerance.
+    target = 10 ** (-3 / 20)
+    lo, hi = 1e-6, fs * 0.999
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if mag(mid) > target:
+            lo = mid
+        else:
+            hi = mid
+    f_3db = (lo + hi) / 2
+
+    return {
+        "part": "ADS1299-class",
+        "datasheet": "SBAS499C 9.3.1.3.3, 9.3.2.1.1, Table 4",
+        "f_clk_hz": ADC_F_CLK_HZ,
+        "f_mod_hz": f_mod,
+        "modulator_order": ADC_MOD_ORDER,
+        "sinc_order": ADC_SINC_ORDER,
+        "decimation_n": n,
+        "filter": "third-order sinc, |H(z)| = |(1-z^-N)/(1-z^-1)|^3",
+        # In output periods, which is the unit that survives a rate change.
+        "support_t_dr": round(support / n, 4),
+        "support_ms": round(support / f_mod * 1e3, 3),
+        "group_delay_t_dr": round(group_delay / n, 4),
+        "group_delay_ms": round(group_delay / f_mod * 1e3, 3),
+        "peak_weight_ratio": round(float(k.max() / k.mean()), 3),
+        "bw_3db_hz": round(f_3db, 2),
+        "bw_3db_fraction_fdr": round(f_3db / fs, 4),
+        # The first null is at the DATA RATE, not at Nyquist — so there is no
+        # brick wall at fs/2 and mains passes nearly intact into the arithmetic.
+        "first_null_hz": float(fs),
+        "atten_nyquist_db": round(float(20 * np.log10(mag(fs / 2))), 2),
+        "atten_60hz_db": round(float(20 * np.log10(mag(60.0))), 2),
+    }
+
+
+def y_span(x, fs, skip_s=0.0, view_s=VIEW_S):
+    """Panel height that comfortably fits ANY `view_s` slice of this signal.
 
     Sized to the worst slice in the whole recording, not the average, so the
     trace can never overflow its panel as the window scrolls. The centre tracks
@@ -356,9 +735,15 @@ def y_span(x, fs, skip_s=0.0):
     A fixed ABSOLUTE axis was tried and rejected: electrode drift across 2m13s
     is 4-5x larger than anything that happens inside one slice, so a typical
     slice occupied ~4% of the panel and the glances were unreadable.
+
+    `view_s` is a parameter because figure 5 zooms the time axis by ten and needs
+    the span that goes with the narrow end. The same argument that rejected an
+    absolute axis rejects keeping the 10 s span through that zoom: a 1 s slice of
+    a raw channel moves a tenth of what a 10 s slice does, so the samples flatten
+    into a straight row of dots and the step has nothing left to show.
     """
     x = x[int(skip_s * fs):]
-    w = int(VIEW_S * fs)
+    w = int(view_s * fs)
     worst = max(np.ptp(x[i:i + w]) for i in range(0, len(x) - w, fs))
     return float(np.ceil(worst * HEADROOM / 50.0) * 50.0)
 
@@ -392,6 +777,19 @@ def main():
 
     labels = [str(v) for v in d["event_labels"]]
     ev = np.asarray(d["event_samples"])
+
+    # ── Figure 5 ──────────────────────────────────────────────────────────────
+    # Nothing to bake but numbers: the figure decimates ch_R / ch_L in the
+    # browser, and those are already in the blob.
+    adc = adc_chain(fs)
+
+    # ── Figure 3 ──────────────────────────────────────────────────────────────
+    sigs_pre = {"ch_R": ch_R - mean_R, "ch_L": ch_L - mean_L}
+    interf = interference_model()
+    bias = bias_model(sigs_pre, fs, interf)
+
+    # ── Figure 2 ──────────────────────────────────────────────────────────────
+    srb1 = srb1_model(sigs_pre, fs, bias, interf)
 
     # ── Figure 9 ──────────────────────────────────────────────────────────────
     # σ is measured on the filtered AMPLITUDE — figure 8's output, the same
@@ -470,6 +868,33 @@ def main():
         "span": {k: y_span(x, fs, VALID_FROM_S if k in stages else 0.0)
                  for k, x in sigs.items()},
         "valid_from_s": VALID_FROM_S,
+        # Figures 2 and 3 share this one waveform, so the chain between them
+        # cannot drift. See interference_model().
+        "interference": interf,
+        # Figure 2. Same invented open-loop scenario as `bias`; see srb1_model().
+        "srb1": srb1,
+        # Figure 3. A MODEL, not a measurement — the only invented numbers in the
+        # series. See the BIAS_* block and bias_model().
+        "bias": bias,
+        # Figure 5. Both rates, because the figure draws the wrong one on
+        # purpose: `fs_real` is the board, `fs_shown` is what the figure samples
+        # at. `adc` is what the converter really does to a sample and is not
+        # drawn — see adc_chain().
+        "digitize": {
+            "fs_real": fs,
+            "fs_shown": DIGI_FS_HZ,
+            "view_s": DIGI_VIEW_S,
+            "n_dots": int(round(DIGI_VIEW_S * DIGI_FS_HZ)),
+            "slot_s": round(1.0 / DIGI_FS_HZ, 6),
+            "samples_per_dot": round(fs / DIGI_FS_HZ, 3),
+            "kind": "mean of the real samples in each slot (boxcar, i.e. sinc^1)",
+            # Panel heights for a view_s window, same worst-slice rule as `span`
+            # but over 3 s rather than 10. The top-level `span` is sized for a
+            # 10 s slice, and a short slice of a raw channel moves a fraction as
+            # far, so reusing it flattens the samples into a straight row of dots.
+            "span": {k: y_span(sigs[k], fs, 0.0, DIGI_VIEW_S) for k in ("ch_R", "ch_L")},
+            "adc": adc,
+        },
         # Figure 8. The three switchable filters, in the order _eog_filter
         # applies them, each with the label its slider carries.
         "filters": {
@@ -561,6 +986,37 @@ def main():
     print(f"         sigma = {sigma:.2f} µV on the filtered AMPLITUDE, span {span_amp:.0f} µV")
     print(f"         (not drawn: the detector's own sigma is {sigma_vel:.1f} µV/s on the "
           f"velocity, {sigma_vel_game:.1f} µV/s at the game's corners)")
+    sr = payload["srb1"]
+    print(f"  fig 2  INVENTED: subtracts {sr['subtracted_uv']/1e6:.4f} V of common-mode "
+          f"(the reference earlobe), panels "
+          + "  ".join(f"{k} {v/1e6:.2f} V" for k, v in sr["span"].items())
+          + " -> figure 3's open state")
+    b = payload["bias"]
+    print(f"  fig 3  INVENTED (no PD_BIAS-off session exists): V_cm {b['vcm_open_v']:g} V "
+          f"-> {b['vcm_closed_v']*1e3:g} mV at {b['suppression_db']:g} dB, "
+          f"Z_in {b['z_in_ohm']/1e6:.1f} MΩ ({b['lead_c_pf']:g} pF leads)")
+    for k, c in b["ch"].items():
+        print(f"         {k}  Z {c['z_ohm']/1e3:g}k, mismatch {c['mismatch_ohm']/1e3:+g}k "
+              f"-> leak {c['leak_open_uv']:.1f} µV open, {c['leak_closed_uv']:.2f} µV closed; "
+              f"removes {c['removed_uv']:.1f} µV, panel {b['span'][k]:.0f} µV")
+    print(f"         R-L leak {b['diff_leak_open_uv']:.1f} µV open -> "
+          f"{b['diff_leak_closed_uv']:.2f} µV closed (Z_srb1 cancels; figure 6 spends this)")
+    dg = payload["digitize"]
+    print(f"  fig 5  {dg['fs_shown']:g} Hz shown, NOT the board's {dg['fs_real']} Hz — "
+          f"{dg['n_dots']} dots over {dg['view_s']:g} s, one per {1e3*dg['slot_s']:g} ms "
+          f"({dg['samples_per_dot']:g} real samples per dot, boxcar mean)")
+    print(f"         spans at {dg['view_s']:g} s  "
+          + "  ".join(f"{k} {v:.0f} (vs {payload['span'][k]:.0f} at {VIEW_S:g} s)"
+                      for k, v in dg["span"].items()) + " µV")
+    print(f"         ADC: sinc^{adc['sinc_order']} decimator, N={adc['decimation_n']}, "
+          f"f_MOD {adc['f_mod_hz']/1e6:g} MHz — one sample is a bell-weighted mean "
+          f"{adc['support_ms']:.2f} ms wide ({adc['support_t_dr']:g} t_DR),")
+    print(f"         centred {adc['group_delay_ms']:.2f} ms back "
+          f"({adc['group_delay_t_dr']:g} t_DR), peak weight {adc['peak_weight_ratio']:g}x mean; "
+          f"-3 dB {adc['bw_3db_hz']:g} Hz ({adc['bw_3db_fraction_fdr']:g} f_DR)")
+    print(f"         first null {adc['first_null_hz']:g} Hz, not Nyquist: "
+          f"{adc['atten_nyquist_db']:g} dB at {fs/2:g} Hz, "
+          f"{adc['atten_60hz_db']:g} dB at 60 Hz")
     print(f"  cues   {len(payload['cues'])} gaze markers")
     sw = payload["detect"]["sweep"]
     print(f"  fig 10 sigma {sigma:.2f} uV, k {k_lo}-{k_hi} step {k_step} "
