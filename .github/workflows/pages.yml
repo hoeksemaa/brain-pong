@@ -6,16 +6,18 @@ name: Deploy EOG data portal to GitHub Pages
 # local-only diagnostic viewer (web/studio/, which needs the Flask /api) is
 # excluded from the public deploy.
 #
-# GOING LIVE (deliberate, two steps — the portal is anonymized but this is the
-# outward-facing publish):
-#   1. Repo Settings → Pages → Source: "GitHub Actions"
-#      (or: gh api -X POST repos/hoeksemaa/brain-pong/pages -f build_type=workflow)
-#   2. Actions → "Deploy EOG data portal to GitHub Pages" → Run workflow
-# Manual-dispatch only on purpose, so merging to main never auto-publishes. To make
-# re-bakes auto-deploy once Pages is enabled, add a `push:` trigger on web/**.
+# GOING LIVE the first time (one-off): Repo Settings → Pages → Source: "GitHub
+# Actions" (or: gh api -X POST repos/hoeksemaa/brain-pong/pages -f build_type=workflow),
+# then run this workflow once from the Actions tab.
+#
+# After that it is hands-off: any push to main that touches web/ (i.e. a committed
+# re-bake via `python scripts/bake_portal.py`) redeploys the site automatically.
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["web/**"]
 
 permissions:
   contents: read
