@@ -175,3 +175,23 @@
 .eog-fig .fig input[type="checkbox"]:checked { background: var(--eog-red); }
 .eog-fig .fig input[type="checkbox"]:checked::after { transform: translateX(20px); }
 .eog-fig .fig input[type="checkbox"]:focus-visible { outline: 2px solid var(--eog-red); outline-offset: 4px; }
+
+/* NARROW SCREENS. The side control column costs 170px a phone does not have,
+   and it was the column — not the plots — squeezing the traces: the canvas
+   re-rasterizes to whatever width it is given, so every pixel handed to the
+   spacer came straight out of the time axis. Stack controls underneath and
+   drop the empty spacer column entirely; plots keep their height, and the
+   window resize listener redraws at the new width. */
+@media (max-width: 640px) {
+  .eog-fig { padding: 0.75rem 0.5rem 0.5rem; }
+  .eog-fig .fig { flex-direction: column; align-items: stretch; }
+  .eog-fig .fig-nocontrol { display: none; }
+  .eog-fig .fig-toggle,
+  .eog-fig .fig-toggles,
+  .eog-fig .fig-slider { flex: 0 0 auto; }
+  .eog-fig .fig-toggle { align-self: center; }
+  .eog-fig .fig-toggles { align-items: center; }
+  .eog-fig .fig-slider { height: auto; justify-content: center; }
+  .eog-fig .fig-stacked .fig-canvas { margin-right: 0; }
+  .eog-fig .fig-slider-below { margin-left: 0; margin-right: 0; }
+}
