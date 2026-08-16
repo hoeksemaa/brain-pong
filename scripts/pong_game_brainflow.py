@@ -940,7 +940,7 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
                 ball['y']  = GAME_HEIGHT - PADDLE_HEIGHT - BALL_RADIUS
                 # In 2-player, spawn powerup rising toward P2
                 if TWO_PLAYER_MODE and random.random() < 0.7:
-                    ptype = random.choice(['fire', 'ice', 'multi'])
+                    ptype = random.choice(['fire', 'multi'])
                     new_powerup_spawns.append({
                         'x':    float(ball['x']),
                         'y':    float(GAME_HEIGHT - PADDLE_HEIGHT - BALL_RADIUS - POWERUP_RADIUS - 2),
@@ -957,7 +957,7 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
                 ball['vy'] = spd * math.cos(a)
                 ball['y']  = PADDLE_HEIGHT + BALL_RADIUS
                 if random.random() < 0.7:
-                    ptype = random.choice(['fire', 'ice', 'multi'])
+                    ptype = random.choice(['fire', 'multi'])
                     new_powerup_spawns.append({
                         'x':    float(ball['x']),
                         'y':    float(PADDLE_HEIGHT + BALL_RADIUS + POWERUP_RADIUS + 2),
@@ -1023,8 +1023,6 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
         if caught:
             if pu['type'] == 'fire':
                 speed_mult = min(4.0, speed_mult * 2.0)
-            elif pu['type'] == 'ice':
-                speed_mult = max(0.25, speed_mult * 0.5)
             elif pu['type'] == 'multi' and not multi_triggered:
                 multi_triggered = True
                 tripled = []

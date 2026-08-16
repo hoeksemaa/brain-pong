@@ -98,9 +98,6 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         if (type === 'fire') {
             ctx.fillStyle = '#ff3333'; ctx.beginPath(); ctx.arc(x, y, POWERUP_RADIUS, 0, 2 * Math.PI); ctx.fill();
             ctx.font = '18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('🔥', x, y);
-        } else if (type === 'ice') {
-            ctx.fillStyle = '#3388ff'; ctx.beginPath(); ctx.arc(x, y, POWERUP_RADIUS, 0, 2 * Math.PI); ctx.fill();
-            ctx.fillStyle = '#fff'; ctx.font = '18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('❄', x, y);
         } else {
             ctx.fillStyle = '#aa33ff'; ctx.beginPath(); ctx.arc(x, y, POWERUP_RADIUS, 0, 2 * Math.PI); ctx.fill();
             ctx.fillStyle = '#fff';
