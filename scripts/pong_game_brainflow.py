@@ -338,6 +338,8 @@ app.layout = html.Div(
                         html.Div(id='overlay-sub', className='osub'),
                         html.Div(id='overlay-hint', className='ohint'),
                     ]),
+                    # CALIBRATING shows this dot only — no text; see updateOverlay.
+                    html.Div(className='calib-dot'),
                 ]),
                 # Kept only so manage_app_flow's status-display Output resolves; not shown.
                 html.H3(id='status-display', className='bp-hidden'),

@@ -242,6 +242,8 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         const stage = document.getElementById('game-stage');
         const t = document.getElementById('overlay-title'), s = document.getElementById('overlay-sub'), h = document.getElementById('overlay-hint');
         if (stage) stage.classList.add('frozen');
+        const ov = document.getElementById('game-overlay');
+        if (ov) ov.classList.remove('calib');
         if (t) { t.textContent = title; t.style.color = color || COL_INK; }
         if (s) s.innerHTML = sub || '';
         if (h) h.textContent = hint || '';
@@ -256,10 +258,15 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         if (status === 'STARTING') {
             setOverlay('BrainPong', '2-player EOG · glance to move', 'press ↻ to start · dumbbell to train', COL_INK);
         } else if (status === 'INSTRUCTIONS') {
-            setOverlay('Get Ready', 'Hands off the keyboard', 'calibrating in ' + cd + 's', COL_P1);
+            // All calibration instructions live here, before the dot appears — the
+            // calibration scene itself must stay text-free so the eyes do not move.
+            setOverlay('Get Ready', 'Hands off the keyboard<br>Look at the red dot · hold still<br>Don’t blink · no talking',
+                       'calibrating in ' + cd + 's', COL_P1);
         } else if (status === 'CALIBRATING') {
-            setOverlay('Calibration', 'Both players — look at the center of the screen<br>Hold still · don’t blink · no talking',
-                       'measuring baseline — ' + cd + 's', COL_P2);
+            // No text — only the pulsing red fixation dot in the middle of the field.
+            setOverlay('', '', '', COL_P2);
+            const ov = document.getElementById('game-overlay');
+            if (ov) ov.classList.add('calib');
         } else if (status === 'PAUSED') {
             setOverlay('Paused', '', 'press ‖ to resume', COL_INK);
         } else if (status === 'GAME_OVER') {
