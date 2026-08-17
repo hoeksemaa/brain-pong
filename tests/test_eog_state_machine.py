@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from brainpong.eog_core import (
-    _run_eog_sm, _make_eog_state, _reset_eog_st,
+    _run_eog_sm, _make_eog_state, _reset_eog_st, begin_play_settle,
     GLANCE_WINDOW_S, ARMED_MIN_WAIT_S, REFRACTORY_S, EOG_BASELINE_S, EOG_SIGMA_THR,
 )
 from synth import SR, calibrated_state, const_window
@@ -151,3 +151,59 @@ def test_reset_returns_to_calibrating_but_keeps_channels():
     assert st['baseline_sigma'] is None
     assert st['ch_L'] == 2 and st['ch_R'] == 3   # channel mapping survives reset
     assert st['cmd_seq'] == 0   # new game restarts the command sequence (anti-twitch)
+
+
+# ── play may not start without a threshold ────────────────────────────────────────
+# The calibration countdown is WALLCLOCK but σ locks on SAMPLES accumulated, so a
+# throttled BCI tick can reach PLAY with baseline_sigma still None. Forcing 'IDLE'
+# there used to send the next poll into _sustained_crossing with sigma=None, raising
+# TypeError — which in the live Dash app kills the detector callback for the whole
+# game, silently. These pin the recovery: stay calibrating, then self-heal.
+
+def test_play_settle_before_sigma_locks_stays_calibrating():
+    st = _make_eog_state()
+    st['sr'] = SR
+    _run_eog_sm(st, const_window(0.5), now=0.0)          # far short of EOG_BASELINE_S
+    assert st['baseline_sigma'] is None
+
+    begin_play_settle(st, now=1.0)
+    assert st['sm'] == 'CALIBRATING'                     # NOT 'IDLE'
+    assert st['settle_until'] > 1.0                      # mute window still armed
+
+
+def test_poll_after_early_play_start_does_not_raise():
+    st = _make_eog_state()
+    st['sr'] = SR
+    _run_eog_sm(st, const_window(0.5), now=0.0)
+    begin_play_settle(st, now=1.0)
+    assert _run_eog_sm(st, RIGHT_SIG, now=2.0) is None   # used to raise TypeError
+
+
+def test_early_play_start_self_heals_once_baseline_fills():
+    st = _make_eog_state()
+    st['sr'] = SR
+    rng = np.random.default_rng(3)
+    _run_eog_sm(st, rng.standard_normal(50) * 3.0, now=0.0)
+    begin_play_settle(st, now=1.0)
+    # Keep feeding the detector; the baseline finishes filling and the SM promotes
+    # itself, so the game recovers a working detector instead of running blind.
+    _run_eog_sm(st, rng.standard_normal(int(EOG_BASELINE_S * SR)) * 3.0, now=2.0)
+    assert st['sm'] == 'IDLE'
+    assert st['baseline_sigma'] == pytest.approx(3.0, rel=0.15)
+
+
+def test_play_settle_with_sigma_locked_goes_idle_as_before():
+    st = calibrated_state()
+    st['sm'] = 'ARMED'
+    st['first_dir'] = 'RIGHT'
+    begin_play_settle(st, now=1.0)
+    assert st['sm'] == 'IDLE' and st['first_dir'] is None   # unchanged happy path
+
+
+def test_idle_without_sigma_recovers_instead_of_raising():
+    # Backstop for any future path that leaves calibration without a threshold.
+    st = _make_eog_state()
+    st['sr'] = SR
+    st['sm'] = 'IDLE'                                    # hand-forced, no σ
+    assert _run_eog_sm(st, RIGHT_SIG, now=1.0) is None
+    assert st['sm'] == 'CALIBRATING'
