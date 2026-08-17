@@ -78,8 +78,7 @@ from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 from brainpong.eog_core import (
     EOG_SIGMA_THR, GLANCE_WINDOW_S, EOG_BASELINE_S, EOG_LPF_HZ, EOG_HPF_HZ,
     eog_diff, _make_eog_state, _eog_filter, _eog_velocity, _sustained_crossing,
-    _run_eog_sm, _reset_eog_st, pipeline_description,
-    _make_velocity_template, _matched_filter, begin_play_settle,
+    _run_eog_sm, _reset_eog_st, pipeline_description, begin_play_settle,
 )
 from brainpong.game_logic import advance_paddle_zone, next_training_target
 from brainpong.recording import save_eog_recording, map_events_to_samples
@@ -174,16 +173,6 @@ _rec = {'active': False, 'start_time': None, 'players': [], 'events': [],
         'last_status': None, 'mode': 'game'}
 
 
-def _detector_signal(eog_st, vel):
-    """The signal the state machine (and live plot) threshold: raw velocity, or —
-    in 'matched' mode — velocity cross-correlated with the saccade template. Used in
-    both _poll_eog and _wave_payload so calibration σ, detection, and the live feed all
-    key off the SAME signal. Falls back to velocity if no template is set yet."""
-    if eog_st.get('detector') == 'matched' and eog_st.get('mf_template') is not None:
-        return _matched_filter(vel, eog_st['mf_template'])
-    return vel
-
-
 def _poll_eog(eog_st, brd):
     """Pull latest window from board `brd`, filter → velocity, return new_sig slice or None.
 
@@ -208,7 +197,7 @@ def _poll_eog(eog_st, brd):
                            lpf_hz=eog_st.get('lpf_hz', EOG_LPF_HZ),
                            hpf_hz=eog_st.get('hpf_hz', EOG_HPF_HZ))
     vel      = _eog_velocity(filtered, sr)
-    return _detector_signal(eog_st, vel)[-n_new:]
+    return vel[-n_new:]
 
 
 # ==============================================================================
@@ -362,11 +351,9 @@ app.layout = html.Div(
             _tuning_row('Ball speed', dcc.Slider(
                 id='ball-speed-slider', min=1, max=12, step=0.5, value=abs(INITIAL_BALL_SPEED_Y),
                 marks={i: _MK(i) for i in range(1, 13, 2)})),
-            _tuning_row('Detector', dcc.RadioItems(
-                id='detector-toggle',
-                options=[{'label': ' Velocity', 'value': 'velocity'},
-                         {'label': ' Matched filter', 'value': 'matched'}],
-                value='velocity', inline=True, inputStyle={'marginLeft': '16px', 'marginRight': '4px'})),
+            # (The Velocity / Matched-filter toggle lived here. Matched filtering is
+            # retired from the live game — see _poll_eog. eog_core._matched_filter is
+            # kept for pipeline.replay of the 63 archived matched-mode recordings.)
             _tuning_row('Sigma threshold (×σ)', dcc.Slider(
                 id='sigma-thr-slider', min=1, max=10, step=0.5, value=EOG_SIGMA_THR,
                 marks={i: _MK(i) for i in range(1, 11)})),
@@ -722,30 +709,29 @@ def update_settings(ball_speed):
     Input('glance-window-slider', 'value'),
     Input('hpf-slider', 'value'),
     Input('lpf-slider', 'value'),
-    Input('detector-toggle', 'value'),
     Input('wave-ymax-slider', 'value'),
 )
-def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, detector, wave_ymax):
+def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, wave_ymax):
     """Live-apply the detector knobs from the browser controls.
 
     Writes straight into both players' state dicts (mutated in place). _run_eog_sm
-    reads sigma_thr / glance_window_s each tick, and _poll_eog / _wave_payload
-    read hpf_hz / lpf_hz / detector each poll — so every knob takes effect on the
-    next detector poll without a restart, and all survive recalibration
-    (_reset_eog_st keeps them), so a New Game locks in whatever the controls read.
-    The `detector` toggle changes which signal the baseline σ is measured on, so it
-    only detects correctly from the next New Game (recalibration). Harmless in
-    keyboard-only mode.
+    reads sigma_thr / glance_window_s each tick, and _poll_eog reads hpf_hz / lpf_hz
+    each poll — so every knob takes effect on the next detector poll without a
+    restart, and all survive recalibration (_reset_eog_st keeps them), so a New Game
+    locks in whatever the controls read. Harmless in keyboard-only mode.
+
+    `detector` is no longer a knob: the live game always runs on velocity. It stays
+    in the store and in the state dict at the constant 'velocity' because every
+    recording writes it to its npz and pipeline.replay reads it back.
     """
     for st in (eog_state, eog_state_p2):
         st['sigma_thr']       = sigma_thr
         st['glance_window_s'] = glance_window
         st['hpf_hz']          = hpf_hz
         st['lpf_hz']          = lpf_hz
-        st['detector']        = detector
         st['wave_ymax']       = wave_ymax
     return {'sigma_thr': sigma_thr, 'glance_window_s': glance_window,
-            'hpf_hz': hpf_hz, 'lpf_hz': lpf_hz, 'detector': detector,
+            'hpf_hz': hpf_hz, 'lpf_hz': lpf_hz, 'detector': 'velocity',
             'wave_ymax': wave_ymax}
 
 
@@ -1484,7 +1470,6 @@ def main():
             eog_state['sr']          = sampling_rate
             eog_state['ch_L']        = all_eeg_channels[EOG_SLOT_L]
             eog_state['ch_R']        = all_eeg_channels[EOG_SLOT_R]
-            eog_state['mf_template'] = _make_velocity_template(sampling_rate)
             print(f"P1 EOG channels: ch_L={eog_state['ch_L']}  ch_R={eog_state['ch_R']}  "
                   f"σ_thr={eog_state['sigma_thr']:.2f}×  glance_window={eog_state['glance_window_s']:.2f}s  "
                   f"(adjust live via the browser sliders)")
@@ -1497,7 +1482,6 @@ def main():
             eog_state_p2['sr']          = sampling_rate     # same model → same rate
             eog_state_p2['ch_L']        = all_eeg_channels[EOG_SLOT_L2]
             eog_state_p2['ch_R']        = all_eeg_channels[EOG_SLOT_R2]
-            eog_state_p2['mf_template'] = _make_velocity_template(sampling_rate)
             print(f"P2 board connected. EOG channels: ch_L={eog_state_p2['ch_L']}  "
                   f"ch_R={eog_state_p2['ch_R']}  σ_thr={eog_state_p2['sigma_thr']:.2f}×  "
                   f"glance_window={eog_state_p2['glance_window_s']:.2f}s")
