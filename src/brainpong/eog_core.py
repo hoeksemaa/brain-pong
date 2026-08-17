@@ -58,7 +58,13 @@ EOG_SIGMA_THR    = 6.0     # crossing threshold in units of baseline σ. Raised 
                            # phantom pair-commands drop. Drop toward 5.5 (live slider) if a noisy rig starts
                            # missing real glances — an under-firing rig wants a lower multiplier, not this.
 EOG_MIN_DUR_MS   = 12.0    # a crossing must persist this long (kills single spikes)
-GLANCE_WINDOW_S  = 0.5     # max time between the two glances of a pair
+GLANCE_WINDOW_S  = 0.7     # max time between the two glances of a pair. Raised 0.5 -> 0.7: the real
+                           # outward->return gap on the cued corpus is p25 0.345 s / p50 0.570 s, so 0.5
+                           # sat at the MEDIAN and discarded about half the pairs by construction. 0.7
+                           # takes glance hit-rate 0.433 -> 0.496 at an UNCHANGED phantom rate
+                           # (7.79 -> 7.78/min, 19 cued recordings). Past ~0.9 s it saturates — the gap
+                           # distribution is empty from 0.9-1.8 s — and phantoms start to climb, so this
+                           # is close to the free end of the trade. Live slider, so it is trivially tunable.
 ARMED_MIN_WAIT_S = 0.05    # min time before the opposite glance counts
 REFRACTORY_S     = 0.8     # dead time after a fired command
 PLAY_SETTLE_S    = 0.7     # detector muted for this long after PLAY begins, so the

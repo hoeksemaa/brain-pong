@@ -118,7 +118,10 @@ def replay(npz_path, width=1400):
     sigma_thr = float(_field(d, 'sigma_thr',       EOG_SIGMA_THR))
     lpf_hz    = float(_field(d, 'lpf_hz',          EOG_LPF_HZ))
     hpf_hz    = float(_field(d, 'hpf_hz',          EOG_HPF_HZ))
-    glance_s  = float(_field(d, 'glance_window_s', GLANCE_WINDOW_S))
+    # 19 pre-eog-v3 recordings carry no glance_window_s. They were played at 0.5 s, so the
+    # fallback is PINNED here and must not track GLANCE_WINDOW_S — otherwise raising the live
+    # default silently re-replays those archived games at a window they never used.
+    glance_s  = float(_field(d, 'glance_window_s', 0.5))
     detector  = str(_field(d, 'detector', 'velocity'))
     matched   = detector == 'matched'
 
