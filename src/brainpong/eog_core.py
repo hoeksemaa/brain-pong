@@ -95,8 +95,11 @@ def _make_eog_state():
         'glance_window_s': GLANCE_WINDOW_S,  # s; max gap between the two glances of a pair
         'lpf_hz': EOG_LPF_HZ,                # Hz; low-pass corner of the filter chain
         'hpf_hz': EOG_HPF_HZ,                # Hz; high-pass corner of the filter chain
-        'detector': 'velocity',             # 'velocity' | 'matched' — detection method (UI toggle)
-        'mf_template': None,                 # saccade template for the matched filter (set at board setup)
+        'detector': 'velocity',              # always 'velocity' live — the matched-filter
+                                             # toggle is retired. Kept because every recording
+                                             # writes this to its npz and pipeline.replay reads
+                                             # it back (archived files may say 'matched').
+        'mf_template': None,                 # saccade template, set by pipeline.replay only
     }
 
 
@@ -202,8 +205,17 @@ def _eog_velocity(x_uv, sr):
     return (yp[4:] + yp[3:-1] - yp[1:-3] - yp[:-4]) / (6.0 * dt)
 
 
-# ── Matched filter (pure) ────────────────────────────────────────────────────────
-
+# ── Matched filter (pure) — REPLAY ONLY, retired from the live game ──────────────
+#
+# The live game always detects on velocity; the in-game Velocity/Matched toggle is
+# gone (see scripts/pong_game_brainflow.py). These two functions stay because 63 of
+# the 144 recordings in data/eog — the whole 2026-07-13 tournament among them — were
+# PLAYED in matched mode and store detector='matched' in their npz. pipeline.replay
+# reads that field, so deleting these would silently change how 44% of the corpus
+# replays. Do not wire them back into the live path: _matched_filter zero-pads the
+# future (np.correlate mode='same'), which costs up to 33% of the response in the
+# newest ~40 ms — exactly the samples the live loop reads.
+#
 def _make_velocity_template(sr, width_ms=MATCHED_TEMPLATE_MS):
     """Unit-norm saccade-velocity template for the matched filter.
 
