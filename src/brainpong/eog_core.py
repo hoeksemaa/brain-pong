@@ -123,8 +123,23 @@ def begin_play_settle(eog_st, now, settle_s=PLAY_SETTLE_S):
     """Call the instant the game enters PLAY: drop the detector to IDLE and mute
     it for ``settle_s`` so the filter startup transient can't phantom-fire and
     jitter the paddle. Idempotent — safe to call every tick while PLAYING; it only
-    re-arms the window on the transition (guarded by the caller)."""
-    eog_st['sm']           = 'IDLE'
+    re-arms the window on the transition (guarded by the caller).
+
+    REFUSES TO LEAVE CALIBRATION WITHOUT A THRESHOLD. The calibration countdown is
+    WALLCLOCK but σ locks on SAMPLES accumulated, so the two can disagree: a throttled
+    BCI tick (backgrounded browser tab, slow callback) or an interrupted calibration
+    can start play with ``baseline_sigma`` still None. Forcing 'IDLE' there sends the
+    next poll into _sustained_crossing with sigma=None, which raises TypeError on
+    ``sigma < 1e-9`` — and in the live Dash app that kills the detector callback for
+    the WHOLE game, silently. So when σ is missing, stay CALIBRATING: the baseline
+    keeps accumulating and _run_eog_sm promotes itself to IDLE the moment it holds
+    EOG_BASELINE_S of signal. The mute window and the overlay reset happen either way.
+    """
+    if eog_st.get('baseline_sigma') is None:
+        eog_st['sm'] = 'CALIBRATING'       # σ not locked yet — finish calibrating first
+        print("[EOG] play began before σ locked — staying in calibration")
+    else:
+        eog_st['sm'] = 'IDLE'
     eog_st['first_dir']    = None
     eog_st['settle_until'] = now + settle_s
     eog_st['fire_log']     = []            # drop calibration-tail fires from the overlay
@@ -293,7 +308,16 @@ def _run_eog_sm(eog_st, new_sig, now, label='EOG'):
             eog_st['first_dir'] = None
         return None
 
-    sigma    = eog_st['baseline_sigma']
+    sigma = eog_st['baseline_sigma']
+    if sigma is None:
+        # Invariant backstop: only CALIBRATING may hold a None σ, and that branch
+        # returns above. Reaching here means something moved the SM out of calibration
+        # without a threshold — recover by calibrating again rather than raising
+        # TypeError inside _sustained_crossing. See begin_play_settle for the path
+        # that used to do exactly this and take the detector down for a whole game.
+        eog_st['sm'] = 'CALIBRATING'
+        return None
+
     crossing = _sustained_crossing(new_sig, sigma, eog_st['sr'],
                                    sigma_thr=eog_st.get('sigma_thr', EOG_SIGMA_THR))
 

@@ -1261,7 +1261,11 @@ def _start_recording(p1_name, p2_name, mode='game'):
     Game without reaching GAME_OVER — or any training session, which never reaches
     GAME_OVER), flush it to disk FIRST so no electrode data is lost, then start the
     fresh block. _stop_and_save_recording is a no-op when nothing is active (first
-    game of the session, or already saved at GAME_OVER), so this never double-saves."""
+    game of the session, or already saved at GAME_OVER), so this never double-saves.
+
+    The tunables captured here are only a FALLBACK: each player entry keeps a live
+    reference to its state dict under 'state', and _lock_recording_tuning re-reads
+    them at CALIBRATING, which is the value that reaches the npz."""
     if _rec['active']:
         _stop_and_save_recording()
     boards = _rec_boards()
@@ -1271,7 +1275,7 @@ def _start_recording(p1_name, p2_name, mode='game'):
     names = {'P1': (p1_name or 'P1').strip() or 'P1',
              'P2': (p2_name or 'P2').strip() or 'P2'}
     players = [{
-        'slot': slot, 'board': brd, 'port': port,
+        'slot': slot, 'board': brd, 'port': port, 'state': st,
         'version': PORT_TO_VERSION.get(port, '?'), 'subject': names[slot],
         'ch_L': st['ch_L'], 'ch_R': st['ch_R'], 'sr': st['sr'],
         'sigma_thr': st.get('sigma_thr'), 'hpf_hz': st.get('hpf_hz'),
@@ -1284,6 +1288,40 @@ def _start_recording(p1_name, p2_name, mode='game'):
     _rec['events']     = []
     summary = ', '.join(f"{p['slot']}={p['subject']}(v{p['version']})" for p in players)
     print(f"[rec] started ({_rec['mode']}) — {len(players)} player(s): {summary}")
+
+
+def _lock_recording_tuning():
+    """Freeze each player's detector config into the recording at CALIBRATING.
+
+    sigma_thr / hpf_hz / lpf_hz / glance_window_s / detector are LIVE slider values
+    (update_eog_tuning writes them straight into the state dict). _start_recording runs
+    at INSTRUCTIONS, so a slider moved between New Game and the calibration countdown
+    was stored with the value it had BEFORE the move. pipeline.replay trusts these
+    fields to reconstruct a session, so a stale one silently replays the game under
+    settings it was never played with.
+
+    Calibration is the instant that makes them true: σ is measured under exactly this
+    filter chain and detector, and the whole game then runs against that σ. (A slider
+    moved mid-game still changes live behaviour without changing the stored value —
+    but lpf/hpf/detector changes already invalidate the locked σ, so the calibration-
+    time config is the one the recording should carry.)"""
+    if not _rec['active']:
+        return
+    changed = []
+    for p in _rec['players']:
+        st = p.get('state')
+        if st is None:                      # no live state (shouldn't happen) → keep the
+            continue                        # INSTRUCTIONS fallback rather than blank it
+        locked = {'sigma_thr': st.get('sigma_thr'), 'hpf_hz': st.get('hpf_hz'),
+                  'lpf_hz': st.get('lpf_hz'),
+                  'glance_window_s': st.get('glance_window_s'),
+                  'detector': st.get('detector', 'velocity')}
+        if any(p.get(k) != v for k, v in locked.items()):
+            changed.append(p['slot'])
+        p.update(locked)
+    if changed:
+        print(f"[rec] tuning re-locked at calibration for {', '.join(changed)} "
+              f"(sliders moved during the countdown)")
 
 
 def _log_event(label):
@@ -1379,6 +1417,7 @@ def manage_recording(app_status, p1_name, p2_name):
     if status == 'INSTRUCTIONS':
         _start_recording(p1_name, p2_name, mode=mode)
     elif status == 'CALIBRATING' and prev == 'INSTRUCTIONS':
+        _lock_recording_tuning()           # freeze the live config σ is measured under
         _log_event('calib_start')
     elif status == 'PLAYING' and prev == 'CALIBRATING':
         _log_event('play_start')
