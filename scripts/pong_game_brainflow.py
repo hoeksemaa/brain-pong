@@ -571,29 +571,45 @@ def clear_bci_stores_on_restart(start_clicks, training_clicks, app_status):
 
 
 WAVE_WINDOW_S = 5.0     # seconds of live EOG feed shown per panel
-WAVE_POINTS   = 480     # peak-preserving downsample target sent to the canvas
+WAVE_POINTS   = 480     # min/max-envelope downsample target sent to the canvas
+WAVE_RANGE_FLOOR_UV = 400.0    # min half-range (µV) so a quiet trace doesn't zoom into noise
+WAVE_RANGE_HEADROOM = 1.25     # show the tallest gaze pulse with this much headroom
+WAVE_RANGE_EMA      = 0.25     # per-tick smoothing of the auto-range (0=frozen, 1=instant)
+WAVE_RAIL_UV        = 187500.0 # ADS1299 ±full-scale referred to input at gain ×24
+WAVE_RAIL_FRAC      = 0.02     # fraction of raw samples at ≥95% rail that flags "no contact"
 
 
-def _decimate_peak(sig, n_out):
-    """Downsample to n_out points, keeping the max-|amplitude| sample per bucket so
-    saccade spikes survive. Presentation-only (feed display), never the detector."""
+def _decimate_minmax(sig, n_out):
+    """Downsample to n_out (lo, hi) envelope pairs. Unlike a peak (max-|·|) decimator,
+    this keeps BOTH extremes per bucket, so a tall spike is drawn at its true height in
+    a thin band rather than smeared into a full-height block, and nothing is hidden.
+    Presentation-only (feed display), never the detector."""
     n = len(sig)
     if n <= n_out:
-        return [round(float(v), 1) for v in sig]
+        v = [round(float(x), 1) for x in sig]
+        return v, v
     idx = np.linspace(0, n, n_out + 1).astype(int)
-    out = []
+    lo, hi = [], []
     for a, b in zip(idx[:-1], idx[1:]):
         seg = sig[a:b] if b > a else sig[a:a + 1]
-        out.append(round(float(seg[int(np.argmax(np.abs(seg)))]), 1))
-    return out
+        lo.append(round(float(seg.min()), 1))
+        hi.append(round(float(seg.max()), 1))
+    return lo, hi
 
 
 def _wave_payload(eog_st, brd):
-    """Compact display payload for a player's live EOG feed: the SAME filtered
-    detector signal the state machine thresholds (eog_diff → _eog_filter →
-    _eog_velocity → _detector_signal), peak-downsampled, plus the σ-threshold line.
-    Reuses the detection DSP for DISPLAY ONLY — it does not feed the detector, mutate
-    eog_st, or change any decision (the state machine still polls independently)."""
+    """Compact display payload for a player's live EOG feed.
+
+    Plots the FILTERED GAZE AMPLITUDE (eog_diff → _eog_filter, in µV) — the legible
+    "where the eyes moved" trace — NOT the wide-dynamic-range velocity/matched-filter
+    response the detector thresholds. (The old panel plotted that response, hard-clamped
+    to a fixed ±range and peak-decimated; on a strong signal the response runs ~10× the
+    range, so the clamp+peak turned clean glances into a full-height "stair-step".)
+    Three fixes: plot amplitude, AUTO-SCALE the range to the signal (smoothed), and use a
+    MIN/MAX envelope instead of peak decimation. When the raw electrodes are railing the
+    payload reports quality='railed' so the panel can show an explicit NO-CONTACT state
+    instead of drawing garbage. DISPLAY ONLY — does not feed the detector, mutate detector
+    decisions, or change σ (the state machine still polls independently)."""
     sr = eog_st['sr']
     if sr is None or brd is None or eog_st['ch_L'] is None:
         return None
@@ -604,18 +620,41 @@ def _wave_payload(eog_st, brd):
     filt = _eog_filter(diff.copy(), sr,
                        lpf_hz=eog_st.get('lpf_hz', EOG_LPF_HZ),
                        hpf_hz=eog_st.get('hpf_hz', EOG_HPF_HZ))
-    vel  = _eog_velocity(filt, sr)
-    sig  = _detector_signal(eog_st, vel)
-    sigma   = eog_st['baseline_sigma']
-    sig_thr = eog_st.get('sigma_thr', EOG_SIGMA_THR)
-    thr = round(float(sig_thr * sigma), 1) if sigma else None
-    # Real detected motions, mapped onto this window's time axis. The window's
-    # right edge is ~now (newest sample); a motion at wallclock t sits at
-    # x = 1 - (now - t)/WAVE_WINDOW_S, so bands scroll left with the trace and
-    # drop off once older than the window. This overlays every directional motion
-    # the glance-pair state machine COUNTED (each arming saccade + each return
-    # saccade), not raw σ crossings — see render.js. Prune in place so fire_log
-    # stays bounded to the visible window (+ small margin).
+
+    # ── contact quality: are the raw electrode channels sitting at the rail? ──
+    raw_uv    = np.abs(data[[eog_st['ch_L'], eog_st['ch_R']]]) * 1e6
+    rail_frac = float(np.mean(raw_uv > 0.95 * WAVE_RAIL_UV)) if raw_uv.size else 0.0
+    sigma     = eog_st['baseline_sigma']
+    if rail_frac > WAVE_RAIL_FRAC:
+        quality = 'railed'
+    elif sigma is None:
+        quality = 'calibrating'
+    else:
+        quality = 'ok'
+
+    # ── auto-scale: half-range = tallest recent gaze pulse + headroom, floored and
+    #    EMA-smoothed so the trace doesn't "breathe" every tick. Railed/pre-calib
+    #    frames don't poison the smoothed range. ──
+    # Scale to the tallest gaze pulse so glances are never clipped. Use the 99.9th
+    # percentile rather than the raw max so a single artifact sample (~1 in 1250)
+    # can't blow up the range; the EMA below damps whatever slips through.
+    peak   = float(np.percentile(np.abs(filt), 99.9)) if filt.size else 0.0
+    target = max(WAVE_RANGE_FLOOR_UV, peak * WAVE_RANGE_HEADROOM)
+    prev   = eog_st.get('wave_autorange') or WAVE_RANGE_FLOOR_UV
+    if quality == 'ok':
+        autorange = (1.0 - WAVE_RANGE_EMA) * prev + WAVE_RANGE_EMA * target
+        eog_st['wave_autorange'] = autorange
+    else:
+        autorange = prev
+
+    lo, hi = _decimate_minmax(filt, WAVE_POINTS)
+
+    # Real detected motions, mapped onto this window's time axis. The window's right
+    # edge is ~now (newest sample); a motion at wallclock t sits at
+    # x = 1 - (now - t)/WAVE_WINDOW_S, so bands scroll left with the trace and drop off
+    # once older than the window. Overlays every directional motion the glance-pair
+    # state machine COUNTED (each arming + each return saccade) — see render.js. Prune
+    # in place so fire_log stays bounded to the visible window (+ small margin).
     now = time.time()
     log = eog_st.get('fire_log')
     fires = []
@@ -625,9 +664,8 @@ def _wave_payload(eog_st, brd):
             x = 1.0 - (now - f['t']) / WAVE_WINDOW_S
             if 0.0 <= x <= 1.0:
                 fires.append({'x': round(x, 4), 'dir': f['cmd']})
-    return {'y': _decimate_peak(sig, WAVE_POINTS), 'thr': thr,
-            'sigma_thr': round(float(sig_thr), 1), 'win_s': WAVE_WINDOW_S,
-            'ymax': eog_st.get('wave_ymax', WAVE_YMAX_DEFAULT), 'fires': fires}
+    return {'lo': lo, 'hi': hi, 'ymax': round(float(autorange), 1),
+            'win_s': WAVE_WINDOW_S, 'quality': quality, 'fires': fires}
 
 
 # Live-feed store fills, on the BCI tick (100 ms, enabled only in CALIBRATING/PLAYING),

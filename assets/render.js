@@ -322,9 +322,11 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     }
 
     // ==========================================================
-    //  WAVEFORM  (fixed ±ymax µV, dashed ±Nσ, second gridlines, soft
-    //  peak-centered glance bands: green = LEFT, red = RIGHT).
-    //  waveData = { y:[...velocity samples...], thr, sigma_thr, win_s, ymax }
+    //  WAVEFORM  — filtered GAZE AMPLITUDE (µV), auto-scaled, drawn as a min/max
+    //  ENVELOPE band. Detection bands (green = LEFT, red = RIGHT) overlay the real
+    //  motions the state machine counted. When the electrodes are railing the panel
+    //  shows an explicit NO-CONTACT state instead of drawing garbage.
+    //  waveData = { lo:[...µV...], hi:[...µV...], ymax, win_s, quality, fires }
     // ==========================================================
     function renderWave(canvasId, waveData) {
         const canvas = document.getElementById(canvasId);
@@ -332,22 +334,37 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         const { ctx, w, h } = fit(canvas);
         ctx.clearRect(0, 0, w, h);
         ctx.font = '9px ui-monospace, monospace';
+        const quality = (waveData && waveData.quality) || 'ok';
         const ymax = (waveData && waveData.ymax) || WAVE_YMAX_DEFAULT;
         const yOf = v => h / 2 - (Math.max(-ymax, Math.min(ymax, v)) / ymax) * (h / 2 - 8);
-        const y = (waveData && waveData.y) || [];
-        const n = y.length;
+        const hi = (waveData && waveData.hi) || [];
+        const lo = (waveData && waveData.lo) || [];
+        const n = hi.length;
         const xOf = i => (n > 1 ? i / (n - 1) : 0) * w;
-        const thr = waveData && waveData.thr;
         const winS = (waveData && waveData.win_s) || 5;
+
+        // NO-CONTACT state: raw electrodes railing → the trace is meaningless. Draw a
+        // clear banner instead of a wall of clamped garbage, so the operator re-seats.
+        if (quality === 'railed') {
+            ctx.fillStyle = 'rgba(255,91,87,.10)'; ctx.fillRect(0, 0, w, h);
+            ctx.strokeStyle = COL_RIGHT; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke(); ctx.setLineDash([]);
+            ctx.fillStyle = COL_RIGHT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.font = '700 12px ui-monospace, monospace';
+            ctx.fillText('⚠ NO CONTACT', w / 2, h / 2 - 8);
+            ctx.font = '9px ui-monospace, monospace';
+            ctx.fillText('re-seat electrode', w / 2, h / 2 + 8);
+            ctx.textAlign = 'left';
+            return null;
+        }
 
         // Detection bands — one per directional motion the glance-pair state machine
         // COUNTED (waveData.fires = [{x, dir}], x in [0,1] along the window): each
         // arming saccade and each return saccade, banded by its own detected
-        // direction. NOT raw σ crossings: green = LEFT, red = RIGHT. Uniform
-        // strength, fixed width, hard edges — no center-weighted fade.
+        // direction. green = LEFT, red = RIGHT.
         const fires = (waveData && waveData.fires) || [];
         if (fires.length) {
-            const half = Math.max(w * 0.015, 8);   // fixed band half-width
+            const half = Math.max(w * 0.015, 8);
             for (const f of fires) {
                 const cx = f.x * w, col = f.dir === 'LEFT' ? COL_LEFT : COL_RIGHT;
                 ctx.globalAlpha = .32; ctx.fillStyle = col;
@@ -363,24 +380,26 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         }
         // zero line
         ctx.strokeStyle = 'rgba(255,255,255,.13)'; ctx.beginPath(); ctx.moveTo(0, yOf(0)); ctx.lineTo(w, yOf(0)); ctx.stroke();
-        // dashed sigma lines
-        if (thr) {
-            ctx.save(); ctx.setLineDash([5, 5]); ctx.strokeStyle = COL_SIGMA;
-            ctx.beginPath(); ctx.moveTo(0, yOf(thr)); ctx.lineTo(w, yOf(thr)); ctx.stroke();
-            ctx.beginPath(); ctx.moveTo(0, yOf(-thr)); ctx.lineTo(w, yOf(-thr)); ctx.stroke(); ctx.restore();
-            const st = (waveData && waveData.sigma_thr) || '';
-            ctx.fillStyle = COL_SIGMA; ctx.textBaseline = 'alphabetic';
-            ctx.fillText('+' + st + 'σ', 4, yOf(thr) - 3); ctx.fillText('-' + st + 'σ', 4, yOf(-thr) + 10);
-        }
-        // axis labels (µV on the left, with the ±ymax)
-        const ymaxLbl = (ymax / 1000) + 'k µV';
-        ctx.fillStyle = COL_INK_DIM; ctx.textBaseline = 'top'; ctx.fillText('+' + ymaxLbl, 4, 3);
-        ctx.textBaseline = 'bottom'; ctx.fillText('-' + ymaxLbl, 4, h - 12);
-        // trace
+
+        // axis labels — auto-scaled ±range, shown in µV or mV as appropriate
+        const rngLbl = ymax >= 1000 ? ('±' + (ymax / 1000).toFixed(1) + ' mV')
+                                    : ('±' + Math.round(ymax) + ' µV');
+        ctx.fillStyle = COL_INK_DIM; ctx.textBaseline = 'top'; ctx.fillText(rngLbl, 4, 3);
+        if (quality === 'calibrating') { ctx.fillStyle = COL_SIGMA; ctx.fillText('calibrating…', 4, 15); }
+
+        // trace — filled min/max envelope of the gaze amplitude
         if (n) {
-            ctx.lineJoin = 'round'; ctx.lineWidth = 1.6; ctx.strokeStyle = COL_TRACE;
             ctx.beginPath();
-            for (let k = 0; k < n; k++) { const x = xOf(k), yy = yOf(y[k]); k ? ctx.lineTo(x, yy) : ctx.moveTo(x, yy); }
+            for (let k = 0; k < n; k++) { const x = xOf(k), yy = yOf(hi[k]); k ? ctx.lineTo(x, yy) : ctx.moveTo(x, yy); }
+            for (let k = n - 1; k >= 0; k--) { ctx.lineTo(xOf(k), yOf(lo[k])); }
+            ctx.closePath();
+            ctx.globalAlpha = .30; ctx.fillStyle = COL_TRACE; ctx.fill(); ctx.globalAlpha = 1;
+            ctx.lineJoin = 'round'; ctx.lineWidth = 1.4; ctx.strokeStyle = COL_TRACE;
+            ctx.beginPath();
+            for (let k = 0; k < n; k++) { const x = xOf(k), yy = yOf(hi[k]); k ? ctx.lineTo(x, yy) : ctx.moveTo(x, yy); }
+            ctx.stroke();
+            ctx.beginPath();
+            for (let k = 0; k < n; k++) { const x = xOf(k), yy = yOf(lo[k]); k ? ctx.lineTo(x, yy) : ctx.moveTo(x, yy); }
             ctx.stroke();
         }
         return null;
