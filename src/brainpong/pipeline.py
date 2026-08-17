@@ -120,6 +120,10 @@ def replay(npz_path, width=1400):
     hpf_hz    = float(_field(d, 'hpf_hz',          EOG_HPF_HZ))
     glance_s  = float(_field(d, 'glance_window_s', GLANCE_WINDOW_S))
     detector  = str(_field(d, 'detector', 'velocity'))
+    # Absent on every pre-v3 file → 0.0 → _deferred_crossing degrades to the immediate
+    # detector those games actually ran, so legacy replay stays bit-identical.
+    defer_ms  = float(_field(d, 'defer_ms',       0.0))
+    cand_thr  = float(_field(d, 'cand_sigma_thr', 0.0))
     matched   = detector == 'matched'
 
     ev_s = d['event_samples'].astype(int) if 'event_samples' in d.files else np.array([], int)
@@ -136,6 +140,7 @@ def replay(npz_path, width=1400):
     st.update({'ch_L': ch_l, 'ch_R': ch_r, 'sr': sr,
                'sigma_thr': sigma_thr, 'glance_window_s': glance_s,
                'lpf_hz': lpf_hz, 'hpf_hz': hpf_hz, 'detector': detector,
+               'defer_ms': defer_ms, 'cand_sigma_thr': cand_thr,
                'mf_template': _make_velocity_template(sr)})
 
     stage_keys = ['detrend', 'highpass', 'velocity'] + (['matched'] if matched else [])
@@ -260,7 +265,7 @@ def replay(npz_path, width=1400):
     return {
         'sr': sr, 'duration': round(dur, 2), 'detector': detector,
         'params': {'sigma_thr': sigma_thr, 'lpf_hz': lpf_hz, 'hpf_hz': hpf_hz,
-                   'glance_window_s': glance_s},
+                   'glance_window_s': glance_s, 'defer_ms': defer_ms},
         'poll_s': POLL_S, 'settle_s': SETTLE_S,
         'calib': {'t_start': round(t_calib, 2),
                   't_locked': round(sigma_lock_t, 2) if sigma_lock_t else None,

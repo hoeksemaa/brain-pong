@@ -77,6 +77,7 @@ from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 # without standing up Dash/the board; don't re-inline them here.
 from brainpong.eog_core import (
     EOG_SIGMA_THR, GLANCE_WINDOW_S, EOG_BASELINE_S, EOG_LPF_HZ, EOG_HPF_HZ,
+    EOG_DEFER_MS, EOG_CAND_SIGMA_THR,
     eog_diff, _make_eog_state, _eog_filter, _eog_velocity, _sustained_crossing,
     _run_eog_sm, _reset_eog_st, pipeline_description, begin_play_settle,
 )
@@ -354,6 +355,12 @@ app.layout = html.Div(
             # (The Velocity / Matched-filter toggle lived here. Matched filtering is
             # retired from the live game — see _poll_eog. eog_core._matched_filter is
             # kept for pipeline.replay of the 63 archived matched-mode recordings.)
+            # EXPERIMENT, default 0 = off. The deferred confirm measured WORSE through
+            # the state machine (hit 0.433 -> 0.361 at matched phantom rate, p=0.0053);
+            # the slider is here to re-test it on a live rig, not because it is wanted.
+            _tuning_row('Decision delay (ms)', dcc.Slider(
+                id='defer-ms-slider', min=0, max=400, step=25, value=EOG_DEFER_MS,
+                marks={v: _MK(v) for v in (0, 100, 200, 300, 400)})),
             _tuning_row('Sigma threshold (×σ)', dcc.Slider(
                 id='sigma-thr-slider', min=1, max=10, step=0.5, value=EOG_SIGMA_THR,
                 marks={i: _MK(i) for i in range(1, 11)})),
@@ -375,7 +382,7 @@ app.layout = html.Div(
                                                     'two_player': TWO_PLAYER_MODE}),
         dcc.Store(id='eog-tuning-store',      data={'sigma_thr': EOG_SIGMA_THR, 'glance_window_s': GLANCE_WINDOW_S,
                                                     'lpf_hz': EOG_LPF_HZ, 'hpf_hz': EOG_HPF_HZ, 'detector': 'velocity',
-                                                    'wave_ymax': WAVE_YMAX_DEFAULT}),
+                                                    'defer_ms': EOG_DEFER_MS, 'wave_ymax': WAVE_YMAX_DEFAULT}),
         dcc.Store(id='game-state-store',     data=get_initial_game_state()),
         dcc.Store(id='app-status-store',     data={'status': 'STARTING', 'countdown': 0, 'mode': 'game',
                                                     'game_id': 0}),
@@ -709,9 +716,10 @@ def update_settings(ball_speed):
     Input('glance-window-slider', 'value'),
     Input('hpf-slider', 'value'),
     Input('lpf-slider', 'value'),
+    Input('defer-ms-slider', 'value'),
     Input('wave-ymax-slider', 'value'),
 )
-def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, wave_ymax):
+def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, defer_ms, wave_ymax):
     """Live-apply the detector knobs from the browser controls.
 
     Writes straight into both players' state dicts (mutated in place). _run_eog_sm
@@ -729,10 +737,11 @@ def update_eog_tuning(sigma_thr, glance_window, hpf_hz, lpf_hz, wave_ymax):
         st['glance_window_s'] = glance_window
         st['hpf_hz']          = hpf_hz
         st['lpf_hz']          = lpf_hz
+        st['defer_ms']        = defer_ms
         st['wave_ymax']       = wave_ymax
     return {'sigma_thr': sigma_thr, 'glance_window_s': glance_window,
             'hpf_hz': hpf_hz, 'lpf_hz': lpf_hz, 'detector': 'velocity',
-            'wave_ymax': wave_ymax}
+            'defer_ms': defer_ms, 'wave_ymax': wave_ymax}
 
 
 def _advance_training(state, bci_command, bci_command_p2, key_data):
@@ -1267,6 +1276,8 @@ def _start_recording(p1_name, p2_name, mode='game'):
         'sigma_thr': st.get('sigma_thr'), 'hpf_hz': st.get('hpf_hz'),
         'lpf_hz': st.get('lpf_hz'), 'glance_window_s': st.get('glance_window_s'),
         'detector': st.get('detector', 'velocity'),
+        'defer_ms': st.get('defer_ms', EOG_DEFER_MS),
+        'cand_sigma_thr': st.get('cand_sigma_thr', EOG_CAND_SIGMA_THR),
     } for slot, brd, st, port in boards]
     _rec['active']     = True
     _rec['start_time'] = time.time()
@@ -1301,7 +1312,9 @@ def _lock_recording_tuning():
         locked = {'sigma_thr': st.get('sigma_thr'), 'hpf_hz': st.get('hpf_hz'),
                   'lpf_hz': st.get('lpf_hz'),
                   'glance_window_s': st.get('glance_window_s'),
-                  'detector': st.get('detector', 'velocity')}
+                  'detector': st.get('detector', 'velocity'),
+                  'defer_ms': st.get('defer_ms', EOG_DEFER_MS),
+                  'cand_sigma_thr': st.get('cand_sigma_thr', EOG_CAND_SIGMA_THR)}
         if any(p.get(k) != v for k, v in locked.items()):
             changed.append(p['slot'])
         p.update(locked)
@@ -1371,7 +1384,9 @@ def _save_one_recording(p, start_t, stop_t, n_players, stamp):
         ch_L=0, ch_R=1, n_players=n_players, board_version=p['version'],
         serial_port=p['port'], player_slot=p['slot'], sigma_thr=p['sigma_thr'],
         hpf_hz=p['hpf_hz'], lpf_hz=p['lpf_hz'], glance_window_s=p['glance_window_s'],
-        detector=detector, event_samples=ev_s, event_labels=ev_l, stamp=stamp)
+        detector=detector, defer_ms=p.get('defer_ms', 0.0),
+        cand_sigma_thr=p.get('cand_sigma_thr', 0.0),
+        event_samples=ev_s, event_labels=ev_l, stamp=stamp)
     print(f"[rec] saved {p['slot']} ({p['subject']}) → {path}  [{n_samp} samp, {n_samp / sr:.1f}s]")
 
 

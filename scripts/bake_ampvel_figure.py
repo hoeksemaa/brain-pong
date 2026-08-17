@@ -30,8 +30,7 @@ the figure's argument, measured before they were chosen:
   (±308 µV) sits ABOVE the recording's peak (265 µV): it cannot fire at all,
   0/80 cued glances. Velocity's slimmer margin (peaks 2.2× its 6σ) still
   clears: 77/80. The one-shot calibration fragility is a known wound: #36
-  moved σ to MAD for exactly this, and pipeline-v3 adds a baseline-σ quality
-  gate.
+  moved σ to MAD for exactly this, and a baseline-σ quality gate is planned.
 
 The poll discipline mirrors bake_essay_figures.live_chain: 125-sample buffer
 (0.4 s settle + 0.1 s new) per 0.1 s poll, chain applied from zero IIR state,

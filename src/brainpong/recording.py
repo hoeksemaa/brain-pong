@@ -4,7 +4,7 @@ Writes one npz per player in the same schema as ``scripts/record_eog.py``
 (so the existing corpus + analysis tooling load it unchanged), extended with
 the game-context fields the pong recorder needs: player count, board version,
 serial port, player slot, and the live detector config (sigma / HPF / LPF /
-glance window). Protocol tag ``eog-v3``.
+glance window / deferred-confirm). Protocol tag ``eog-v3``.
 
 Only the two EOG channels are stored (``eeg`` is ``(2, N)`` volts: row 0 = ch_L,
 row 1 = ch_R), because CH3-8 are powered down in firmware and carry nothing.
@@ -66,7 +66,8 @@ def save_eog_recording(out_dir, subject_id, eeg, unix_start, sr, *,
                        gain, board, montage, notes, tags, ch_L, ch_R,
                        n_players, board_version, serial_port, player_slot,
                        sigma_thr, hpf_hz, lpf_hz, glance_window_s,
-                       detector='velocity', event_samples=(), event_labels=(),
+                       detector='velocity', defer_ms=0.0, cand_sigma_thr=0.0,
+                       event_samples=(), event_labels=(),
                        protocol_version=PROTOCOL_VERSION, stamp=None):
     """Write one player's EOG recording to ``<out_dir>/<ts>-<subject>.npz``.
 
@@ -117,5 +118,10 @@ def save_eog_recording(out_dir, subject_id, eeg, unix_start, sr, *,
         lpf_hz           = np.array([lpf_hz]),
         glance_window_s  = np.array([glance_window_s]),
         detector         = np.array([detector]),
+        # ── pipeline-v3 deferred-confirm detector ──
+        # defer_ms = 0 means the pre-v3 immediate detector, which is also what every
+        # archived file without these fields replays as. See eog_core._deferred_crossing.
+        defer_ms         = np.array([defer_ms]),
+        cand_sigma_thr   = np.array([cand_sigma_thr]),
     )
     return path

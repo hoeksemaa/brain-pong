@@ -58,13 +58,22 @@ def _feed_oscillation(freq, amp_sigma, sigma=1.0, dur_s=3.0, poll_s=0.1):
     return cmds
 
 
-@pytest.mark.parametrize("freq", [3.0, 5.0, 8.0])
-def test_suprathreshold_oscillation_reproduces_spurious_fire(freq):
-    # KNOWN DEFECT: a clean oscillation above threshold drives phantom commands.
-    cmds = _feed_oscillation(freq, amp_sigma=10.0)
-    assert len(cmds) >= 1, (
-        f"{freq} Hz oscillation produced no command — if a mitigation landed, "
-        "flip this test to assert zero spurious fires."
+# KNOWN DEFECT: a clean oscillation above threshold drives phantom commands, because
+# _sustained_crossing accepts a sustained run of EITHER sign and the pair logic then
+# reads alternating lobes as a glance pair.
+#
+# The pipeline-v3 deferred confirm does NOT fix this. Measured over 1-12 Hz at 10σ, it
+# takes the phantom count from 23 to 20 — the opposite-sign run closes the deferral
+# window early, but the lobe's own peak still clears the bar, so it confirms anyway.
+# Asserted over a SWEEP rather than per-frequency: at 5 Hz the half-period is exactly
+# the 100 ms poll, so that one frequency aliases to zero commands purely by poll phase.
+# Pinning a single frequency made this test hostage to that coincidence.
+def test_suprathreshold_oscillation_reproduces_spurious_fire():
+    total = sum(len(_feed_oscillation(f, amp_sigma=10.0))
+                for f in (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0))
+    assert total >= 10, (
+        f"10σ oscillation sweep produced only {total} commands — if a real mitigation "
+        "landed, flip this test to assert zero spurious fires."
     )
 
 

@@ -54,3 +54,24 @@ def threshold_runs(sig, thr):
         return 0
     rises = int(np.sum((~above[:-1]) & above[1:]))
     return rises + (1 if above[0] else 0)
+
+
+def confirm_crossing(st, sig, t0, poll_s=0.1, max_polls=8):
+    """Drive the SM with `sig` from t0 until its deferred detector RESOLVES the
+    candidate, returning (result, t_resolved).
+
+    The live loop hands the SM one poll_s slice per tick, and since pipeline-v3 a
+    crossing is confirmed defer_ms after it is nominated — not on the poll that
+    found it. Tests that care about the glance-PAIR protocol (arm / fire / timeout /
+    refractory) should use this so they exercise the real detector instead of
+    assuming a crossing lands on the first window. With defer_ms=0 it resolves on
+    the first poll, so it is correct for the legacy path too.
+    """
+    from brainpong.eog_core import _run_eog_sm
+    t = t0
+    for _ in range(max_polls):
+        r = _run_eog_sm(st, sig, now=t)
+        if st.get('pend_until') is None:      # nominated candidate now confirmed/discarded
+            return r, t
+        t += poll_s
+    raise AssertionError(f"crossing never resolved within {max_polls} polls")
