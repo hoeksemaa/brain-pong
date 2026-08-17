@@ -1025,25 +1025,25 @@ def update_game_physics(_, state, bci_command, bci_command_p2, app_status, key_d
                 speed_mult = min(4.0, speed_mult * 2.0)
             elif pu['type'] == 'multi' and not multi_triggered:
                 multi_triggered = True
-                tripled = []
+                split = []
                 for b in balls_remaining:
                     spd = math.hypot(b['vx'], b['vy'])
                     if spd < 0.01:
                         spd = target_speed
                     # Preserve the source ball's vertical direction so the split
                     # balls continue the way it was already travelling (a ball
-                    # heading down splits into three heading down), instead of
+                    # heading down splits into two heading down), instead of
                     # always launching up toward the top paddle.
                     vdir = 1.0 if b['vy'] >= 0 else -1.0
-                    for _ in range(3):
+                    for _ in range(2):
                         a = random.uniform(-math.pi / 3, math.pi / 3)
-                        tripled.append({
+                        split.append({
                             'x':  float(b['x']),
                             'y':  float(b['y']),
                             'vx': float(spd * math.sin(a)),
                             'vy': float(vdir * abs(spd * math.cos(a))),
                         })
-                balls_remaining = tripled
+                balls_remaining = split
             continue
 
         active_powerups.append(pu)

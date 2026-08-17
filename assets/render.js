@@ -101,7 +101,7 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
         } else {
             ctx.fillStyle = '#aa33ff'; ctx.beginPath(); ctx.arc(x, y, POWERUP_RADIUS, 0, 2 * Math.PI); ctx.fill();
             ctx.fillStyle = '#fff';
-            for (const o of [{ dx: 0, dy: -6 }, { dx: -5, dy: 4 }, { dx: 5, dy: 4 }]) { ctx.beginPath(); ctx.arc(x + o.dx, y + o.dy, 3, 0, 2 * Math.PI); ctx.fill(); }
+            for (const o of [{ dx: -5, dy: 0 }, { dx: 5, dy: 0 }]) { ctx.beginPath(); ctx.arc(x + o.dx, y + o.dy, 3.5, 0, 2 * Math.PI); ctx.fill(); }
         }
         ctx.restore();
     }
