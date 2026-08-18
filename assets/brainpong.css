@@ -192,9 +192,16 @@ html, body {
 .game-overlay .otitle { font-size: clamp(64px, 13vh, 170px); margin-bottom: clamp(12px, 2.5vh, 30px); line-height: .95; }
 .game-overlay .osub  { font-family: 'm6x11', ui-monospace, monospace; font-size: clamp(26px, 4.6vh, 58px); color: var(--ink); line-height: 1.5; }
 .game-overlay .ohint { font-family: 'm6x11', ui-monospace, monospace; font-size: clamp(20px, 3.2vh, 40px); color: var(--ink-dim); margin-top: clamp(16px, 3vh, 40px); letter-spacing: .06em; text-transform: uppercase; }
-/* CALIBRATING shows no text at all — only this dot, the fixation target. It sits in
-   the centre of the play field and pulses so the eyes have something to hold on. */
-.game-overlay .calib-dot { display: none; width: clamp(18px, 3vh, 34px); aspect-ratio: 1; border-radius: 50%;
+/* CALIBRATING shows no text at all — only this dot, the fixation target. It is
+   absolutely centred on the overlay (which is the play field box), NOT laid out in
+   the overlay grid: the empty title/sub/hint divs still carry their margins, and in
+   grid flow those margins pushed the dot below the true centre. The player must look
+   at the same point in calibration and in the game, so the dot must sit exactly on
+   the field centre. `translate` (not `transform`) does the centring, so the pulse
+   animation keeps the transform property for itself. */
+.game-overlay .calib-dot { display: none; position: absolute; left: 50%; top: 50%;
+  translate: -50% -50%;
+  width: clamp(18px, 3vh, 34px); aspect-ratio: 1; border-radius: 50%;
   background: #ff2d2d; box-shadow: 0 0 clamp(10px, 2vh, 26px) rgba(255, 45, 45, .85);
   animation: calib-pulse 1.2s ease-in-out infinite; }
 .game-overlay.calib .calib-dot { display: block; }
