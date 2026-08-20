@@ -318,9 +318,10 @@
       `Every recording here is horizontal <b>EOG</b> (electrooculography): the small voltage that appears ` +
       `beside your eyes when you glance left or right. Two electrodes read that voltage, and it drives a Pong paddle. ` +
       `This site holds the full recording corpus of the <a href="https://github.com/hoeksemaa/brain-pong">BrainPong</a> project: ` +
-      `<b>${c.n_recordings}</b> recordings from <b>${c.n_subjects}</b> people, ` +
+      `<b>${c.n_recordings}</b> recordings from <b>${c.n_named_subjects}</b> people ` +
+      `plus <b>${c.n_slot_recordings}</b> recorded at unnamed stations, ` +
       `${c.total_hours} hours of signal, collected ${fmtSpan(c.date_start, c.date_end)}. ` +
-      `All names except the project owner's are pseudonyms.`));
+      `Every name here is a pseudonym.`));
     d.appendChild(el("p", null,
       `<b>Pick a recording from the list on the left.</b> Each one shows three raw traces: the right-minus-left ` +
       `difference (the signal the game reads), and each electrode on its own. ` +
@@ -365,7 +366,10 @@
         <b style="color:#ff9d5c">RIGHT</b> cue during a training run).</li>
       </ul>
       <p>Each plot is a min/max envelope of the full recording, so short spikes stay visible.
-      All subjects played with consent; every name except the project owner's is a pseudonym.</p>
+      All subjects played with consent, and every name here is a pseudonym &mdash; the project
+      owner's included. <i>Unattributed</i> covers recordings made at a station where no name was
+      entered; those cannot be traced to a person at all, and are pooled rather than counted as
+      individuals.</p>
       <p>More: <a href="cmrr/">why bad electrode contact ruins the signal ↗</a> ·
       <a href="https://github.com/hoeksemaa/brain-pong">source code on GitHub ↗</a></p>
       <button class="tbtn close">Close</button>`;

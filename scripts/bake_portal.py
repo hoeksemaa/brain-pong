@@ -10,14 +10,18 @@ with **no server, no write endpoints, and no real names anywhere in the output**
 
 Privacy by construction
 -----------------------
-Named subjects are replaced with stable pseudonyms (``<first-name>`` -> ``Player A``)
-*before* anything is written; recording ids become ``<date>-<time>-<slug>`` so the
-name never appears in a filename or URL either; free-form ``notes`` (which can name
-people) are dropped entirely. The owner keeps his own name by choice (``OWNER``);
-the already-anonymous ``P1``/``P2`` slot files pass through unchanged. Pseudonym
+EVERY subject is replaced with a stable pseudonym (``<first-name>`` -> ``Player A``)
+*before* anything is written — the project owner included, so the published tree has
+no real name in it at all. Recording ids become ``<date>-<time>-<slug>`` so a name
+never reaches a filename or URL either, and free-form ``notes`` (which can name
+people) are dropped entirely. The ``P1``/``P2`` slot recordings are pooled into a
+single ``Unattributed`` bucket: they are station slots, not individuals. Pseudonym
 letters are assigned in order of each subject's first recording, so adding newer
 recordings never renames an already-published subject. Result: the baked tree is
 name-free and safe to commit + deploy.
+
+The corpus under ``data/eog/`` is NOT touched — it keeps the real names it was
+recorded under, and this script only ever reads it.
 
 Outputs (all under ``web/portal-data/``)
   manifest.json  — one lean row per recording (metadata + tags + spark)
@@ -74,7 +78,6 @@ REPO = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO / "data" / "eog"
 OUT_DIR = REPO / "web" / "portal-data"
 
-OWNER = "john"           # the project owner keeps his own name (his data, his call)
 WIDTH = 1400             # min/max decimation buckets per ribbon
 SPARK_BUCKETS = 64
 
@@ -171,16 +174,47 @@ _LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{2,}$")   # drop char-splat artifa
 
 # ── anonymization ────────────────────────────────────────────────────────────────
 
+# The two anonymous station slots the recorder falls back to when no name is typed.
+# They are NOT two people: 72 recordings across both tournament nights share these
+# two labels, and the identity behind them was never captured, so they can only be
+# pooled — never split into individuals, and never resolved to anyone. Publishing
+# them as "P1" and "P2" made meta.json report two extra "subjects", so they collapse
+# into ONE honest bucket that is visibly not a person.
+SLOT_SUBJECTS = ("p1", "p2")
+SLOT_LABEL = ("Unattributed", "unattributed")
+
+
+def canon_subject(subj):
+    """Canonical identity key for the subject token parsed out of a filename stem.
+
+    The recorder takes the player name as free text, so ONE person can arrive under
+    several spellings: the 2026-08-17 tournament recorded 'bradley' and 'BRADLEY'
+    sixteen seconds apart, plus 'brandon'/'BRANDON' and 'laika'/'LAIKA'. Case-fold so
+    one person draws one pseudonym. Without this the map keys on the exact string,
+    each casing draws its own letter, and the portal publishes phantom participants —
+    28 tokens for 25 real identities, overstating the headline count by three."""
+    return subj.strip().lower()
+
+
 def build_anon_map(first_seen):
-    """real subject -> (display pseudonym, url slug), from {subject: earliest stem}.
+    """canonical subject -> (display pseudonym, url slug), from {canon: earliest stem}.
+
+    EVERY person is pseudonymised, the project owner included. The portal is the
+    public face of a corpus recorded from volunteers; the owner exempting himself
+    while publishing everyone else under a letter is the wrong asymmetry, and it also
+    leaves exactly one real name in an otherwise name-free tree for a reader to
+    notice. Only the station slots (see SLOT_SUBJECTS) stay unlettered, because they
+    are not people.
 
     Letters follow each subject's FIRST recording (not the alphabet), so baking in
-    newer recordings — even from new people — never renames an existing subject
-    and never breaks an already-shared portal URL."""
-    special = {OWNER: (OWNER, OWNER), "P1": ("P1", "P1"), "P2": ("P2", "P2")}
-    named = sorted((s for s in first_seen if s not in special),
+    newer recordings — even from new people — never renames an already-published
+    subject and never breaks a shared portal URL. That guarantee covers new DATA, not
+    policy changes: dropping the owner exemption inserts him at his true first
+    appearance and shifts every letter after it, once."""
+    slots = {s: SLOT_LABEL for s in SLOT_SUBJECTS} if SLOT_LABEL else {}
+    named = sorted((s for s in first_seen if s not in slots),
                    key=lambda s: (first_seen[s], s))
-    out = {s: special[s] for s in first_seen if s in special}
+    out = {s: slots[s] for s in first_seen if s in slots}
     for i, s in enumerate(named):
         letter = chr(ord("A") + i) if i < 26 else f"A{i}"
         out[s] = (f"Player {letter}", f"player{letter}")
@@ -210,7 +244,7 @@ def bake(width):
     first_seen = {}
     for p in paths:
         _, _, _, subj = parse_stem(p.stem)
-        first_seen.setdefault(subj, p.stem)
+        first_seen.setdefault(canon_subject(subj), p.stem)
     anon = build_anon_map(first_seen)
 
     # Clean rec/ so retired ids (renamed/removed recordings) don't linger in git.
@@ -227,7 +261,8 @@ def bake(width):
     for p in paths:
         stem = p.stem
         date, tm, session, subj = parse_stem(stem)
-        disp, slug = anon.get(subj, (subj, re.sub(r"[^A-Za-z0-9]", "", subj) or "x"))
+        disp, slug = anon.get(canon_subject(subj),
+                              (subj, re.sub(r"[^A-Za-z0-9]", "", subj) or "x"))
 
         rid = f"{session}-{slug}"
         if rid in used_ids:                       # same person, same second (rare)
@@ -328,6 +363,14 @@ def bake(width):
             "n_recordings": len(manifest),
             "n_sessions": len(sess_members),
             "n_subjects": len(subjects_present),
+            # Quote THIS wherever a number of PEOPLE is meant. n_subjects counts
+            # display labels, and one label ("Unattributed") pools 72 recordings
+            # from an unknown number of additional people, so quoting it as a
+            # participant count overstates it.
+            "n_named_subjects": len([s for s in subjects_present
+                                     if not SLOT_LABEL or s != SLOT_LABEL[0]]),
+            "n_slot_recordings": sum(1 for r in manifest
+                                     if SLOT_LABEL and r["subject"] == SLOT_LABEL[0]),
             "total_hours": round(total_seconds / 3600, 2),
             "date_start": dates[0] if dates else None,
             "date_end": dates[-1] if dates else None,
@@ -340,7 +383,6 @@ def bake(width):
             "session_type": tag_group("Session type", "session_type", ["game", "training", "cued"]),
         },
         "subjects": subjects_present,
-        "owner": OWNER,
     }
 
     (OUT_DIR / "manifest.json").write_text(
