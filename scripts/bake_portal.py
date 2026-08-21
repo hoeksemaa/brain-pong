@@ -154,7 +154,25 @@ def load(path):
 
 # ── tag derivation (deterministic ruleset) ───────────────────────────────────────
 
-def derive_tags(m, date):
+# Dates on which a public BrainPong tournament was held. Being on one of these
+# dates is necessary but NOT sufficient — see derive_tags.
+TOURNAMENT_DATES = ("2026-07-13", "2026-08-17")
+
+
+def derive_tags(m, date, session_size):
+    """Per-recording tags. `session_size` is how many recordings share this session
+    key, i.e. how many people were at the rig for that match.
+
+    A tournament recording is one made on a tournament DATE in a TWO-PLAYER session.
+    The head-to-head requirement is what separates the event from the owner's own
+    solo work on the same evening: 2026-08-17 ran as paired matches from 18:26 to
+    20:14 and then, after everyone had gone, seven solo recordings at 22:24-22:47.
+    Tagging by date alone would file those seven as tournament matches.
+
+    Note the tag marks "recorded during a tournament", not "was a competitive rally"
+    -- the interleaved training runs inside a match are tagged too, which is how
+    2026-07-13 has always been tagged (33 sessions, all two-player, all tournament).
+    That date is unaffected by the two-player requirement."""
     proto = m["protocol"]
     if proto == "eog-v2-labeled":
         session_type = "cued"
@@ -164,7 +182,7 @@ def derive_tags(m, date):
         session_type = "game"
 
     return {
-        "tournament": (date == "2026-07-13"),
+        "tournament": date in TOURNAMENT_DATES and session_size == 2,
         "session_type": session_type,
     }
 
@@ -242,9 +260,11 @@ def bake(width):
     # Pass 1: earliest stem per real subject (paths are stem-sorted = time-sorted),
     # so pseudonym letters follow first appearance and stay stable across re-bakes.
     first_seen = {}
+    session_size = {}
     for p in paths:
-        _, _, _, subj = parse_stem(p.stem)
+        _, _, session, subj = parse_stem(p.stem)
         first_seen.setdefault(canon_subject(subj), p.stem)
+        session_size[session] = session_size.get(session, 0) + 1
     anon = build_anon_map(first_seen)
 
     # Clean rec/ so retired ids (renamed/removed recordings) don't linger in git.
@@ -278,7 +298,7 @@ def bake(width):
         wired = np.vstack([m["eeg"][m["ch_l"]], m["eeg"][m["ch_r"]]])
         status, rail_frac = _rail_status(wired, m["gain"])
         ceil = round(_ceil_uv(m["gain"]), 1)
-        tags = derive_tags(m, date)
+        tags = derive_tags(m, date, session_size.get(session, 1))
 
         # spark: coarse midpoint of the clinical band, normalized
         clin = _bp(diff, sr, 0.5, 30.0)
