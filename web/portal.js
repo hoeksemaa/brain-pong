@@ -153,7 +153,7 @@
   function renderStats() {
     const c = state.meta.corpus;
     const items = [
-      [c.n_recordings, "recordings"], [c.n_subjects, "people"],
+      [c.n_recordings, "recordings"], [c.n_named_subjects, "people"],
       [c.total_hours + "h", "of signal"],
       [`${c.date_start.slice(5)} – ${c.date_end.slice(5)}`, "2026"],
     ];
@@ -261,15 +261,15 @@
 
     const head = el("div", "dhead");
     const ttl = el("div"); ttl.appendChild(el("div", "dtitle", r.subject + (row.opponent ? ` <span class="opp">vs ${row.opponent}</span>` : "")));
-    ttl.appendChild(el("div", "dsub", `${r.date} at ${r.time} · ${humanDur(r.duration)} · ${r.fs} samples/s`));
+    ttl.appendChild(el("div", "dsub", `${r.date} · ${r.time} · ${humanDur(r.duration)} · ${r.fs} samples/s`));
     head.appendChild(ttl); wrap.appendChild(head);
 
     const badges = el("div", "badges");
     if (r.tags.tournament) badges.appendChild(el("span", "badge tour", "🏆 Tournament"));
-    badges.appendChild(el("span", "badge", `Session <b>${r.tags.session_type}</b>`));
-    if (r.n_players === 2) badges.appendChild(el("span", "badge", "2-player match"));
+    badges.appendChild(el("span", "badge", `<b>${r.tags.session_type}</b>`));
+    if (r.n_players === 2) badges.appendChild(el("span", "badge", "2-player"));
     const q = QUALITY[r.status] || r.status;
-    const qb = el("span", "badge q-" + r.status, `Signal <b>${q}</b>` + (r.rail_pct > 0 ? ` · ${r.rail_pct.toFixed(1)}% at limit` : ""));
+    const qb = el("span", "badge q-" + r.status, `<b>${q}</b>` + (r.rail_pct > 0 ? ` · ${r.rail_pct.toFixed(1)}% at limit` : ""));
     badges.appendChild(qb);
     wrap.appendChild(badges);
 
@@ -277,12 +277,7 @@
     const card = el("div", "card");
     const ch = el("div", "cardhead");
     ch.appendChild(el("span", "clabel", "RAW SIGNAL"));
-    ch.appendChild(el("span", "csub", "three traces, no filtering — exactly as recorded, in microvolts (µV)"));
     card.appendChild(ch);
-
-    card.appendChild(el("div", "plotnote",
-      `<b style="color:${THEME.rib}">R − L</b> is the difference between the two electrodes — the signal the game reads. ` +
-      `A glance to the right moves it up; a glance to the left moves it down. Below it: each electrode alone.`));
 
     const pp = el("div", "plot");
     const dcv = el("canvas"); pp.appendChild(dcv);
@@ -296,7 +291,7 @@
       const key = el("div", "eventkey");
       const kinds = [...new Set(r.events.map(e => e.label))];
       const shown = kinds.slice(0, 6);
-      key.appendChild(el("span", null, `<b>${r.events.length}</b> game/cue events marked as vertical lines:`));
+      key.appendChild(el("span", null, `<b>${r.events.length}</b> events`));
       for (const k of shown) key.appendChild(el("span", null, k));
       if (kinds.length > 6) key.appendChild(el("span", null, `+${kinds.length - 6} more`));
       card.appendChild(key);
@@ -323,17 +318,8 @@
     const d = el("div", "dash");
     d.appendChild(el("h2", null, "Play Pong with your eyes."));
     d.appendChild(el("p", null,
-      `Every recording here is horizontal <b>EOG</b> (electrooculography): the small voltage that appears ` +
-      `beside your eyes when you glance left or right. Two electrodes read that voltage, and it drives a Pong paddle. ` +
-      `This site holds the full recording corpus of the <a href="https://github.com/hoeksemaa/brain-pong">BrainPong</a> project: ` +
-      `<b>${c.n_recordings}</b> recordings from <b>${c.n_named_subjects}</b> people ` +
-      `plus <b>${c.n_slot_recordings}</b> recorded at unnamed stations, ` +
-      `${c.total_hours} hours of signal, collected ${fmtSpan(c.date_start, c.date_end)}. ` +
-      `Every name here is a pseudonym.`));
-    d.appendChild(el("p", null,
-      `<b>Pick a recording from the list on the left.</b> Each one shows three raw traces: the right-minus-left ` +
-      `difference (the signal the game reads), and each electrode on its own. ` +
-      `Use the filters to narrow the list, or open <b>About</b> for help reading the plots.`));
+      `Horizontal <b>EOG</b>: the small voltage beside your eyes when you glance left or right. ` +
+      `Two electrodes read it, and it drives a Pong paddle. Every name here is a pseudonym.`));
     // quality bar
     const bar = el("div", "qbar");
     for (const [k, col] of [["ok", THEME.status.ok], ["railing", THEME.status.railing], ["flat", THEME.status.flat]]) {
@@ -346,11 +332,6 @@
     leg.appendChild(el("span", null, `<b style="color:${THEME.status.flat}">${q.flat||0}</b> flat`));
     d.appendChild(leg);
     main.appendChild(d);
-  }
-  function fmtSpan(a, b) {
-    const MON = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-    const f = d => { const [y,m] = d.split("-"); return `${MON[+m-1]} ${y}`; };
-    return f(a) === f(b) ? `in ${f(a)}` : `from ${f(a)} to ${f(b)}`;
   }
 
   // ── about modal ─────────────────────────────────────────────────────────────
