@@ -218,6 +218,7 @@
     if (!state.filtered.length) { list.appendChild(el("li", "empty", "No recordings match these filters.")); return; }
     for (const r of state.filtered) {
       const li = el("li", "recitem" + (state.sel === r.id ? " sel" : ""));
+      li.dataset.id = r.id;
       const head = el("div", "rihead");
       head.appendChild(el("span", "rdot " + r.status));
       head.appendChild(el("span", "rsub", r.subject + (r.opponent ? ` <span style="color:var(--faint);font-weight:400">vs ${r.opponent}</span>` : "")));
@@ -236,11 +237,18 @@
     }
   }
 
+  // Move the selection highlight in place. Selecting a recording must NOT go
+  // through renderList(): that clears #reclist, which collapses the scroller and
+  // throws the sidebar back to the top (and redraws all 191 sparklines for nothing).
+  function markSelected() {
+    for (const li of $("#reclist").children) li.classList.toggle("sel", li.dataset.id === state.sel);
+  }
+
   // ── detail view ─────────────────────────────────────────────────────────────
   async function selectRec(id) {
     state.sel = id;
     $("#main").innerHTML = '<div class="empty">loading…</div>';
-    renderList();
+    markSelected();
     try { state.detail = await DATA.rec(id); }
     catch (e) { $("#main").innerHTML = `<div class="empty">Could not load recording (${e}).</div>`; return; }
     syncURL();
