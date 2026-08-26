@@ -38,6 +38,7 @@ Usage
 """
 import argparse
 import functools
+import hashlib
 import json
 import re
 import sys
@@ -237,16 +238,32 @@ def norm_event(label):
 SLOT_SUBJECTS = ("p1", "p2")
 SLOT_LABEL = ("Unattributed", "unattributed")
 
-# Beside the corpus, NOT under web/. The map is keyed on the canonical subject, which
-# IS the real first name — web/ is rsync-deployed wholesale to GitHub Pages, so a map
-# under there would publish every real name in the corpus, i.e. exactly the failure
-# this whole bake exists to prevent. data/ already holds the real names (the
-# data/eog/*.npz filenames carry them) and is never deployed.
+# The map is keyed on a DIGEST of the canonical subject, never on the name itself. A
+# plaintext key list would be one file that reads out "<name> is Player G" for the
+# whole corpus — the single artefact this bake exists to avoid — and it is not needed:
+# a digest is just as stable a key, so the letters it protects are unchanged.
+#
+# What that does NOT buy: the npz filenames in data/eog/ carry the real first names,
+# so anyone with the corpus can hash a name and look up its letter. The digest keeps
+# the map from BEING a name list; it is not a secret. Making the pseudonyms hold
+# against someone holding the corpus would mean renaming the npz themselves.
+#
+# Still beside the corpus and NOT under web/ — that tree is rsync-deployed wholesale
+# to GitHub Pages, and nothing about the subject mapping belongs on the public site.
 MAP_PATH = REPO / "data" / "portal-anon-map.json"
-MAP_NOTE = ("PRIVATE — keys are real first names. Never copy this file (or its "
-            "contents) under web/: that tree is deployed wholesale to GitHub Pages. "
-            "Letters are append-only: never reassign one, never reuse one whose "
-            "subject has left the corpus.")
+MAP_SALT = "brainpong-portal-anon-v1"   # fixed: changing it re-keys the whole map
+MAP_NOTE = ("Keys are salted digests of the canonical subject, not names. Never copy "
+            "this file (or its contents) under web/: that tree is deployed wholesale "
+            "to GitHub Pages. Letters are append-only: never reassign one, never "
+            "reuse one whose subject has left the corpus.")
+
+
+def subject_key(canon):
+    """Stable, non-identifying key for a canonical subject."""
+    return hashlib.sha256(f"{MAP_SALT}:{canon}".encode()).hexdigest()[:16]
+
+
+_HEXKEY_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 def _letter(i):
@@ -294,23 +311,31 @@ def build_anon_map(first_seen):
     policy changes: dropping the owner exemption inserts him at his true first
     appearance and shifts every letter after it, once."""
     slots = {s: SLOT_LABEL for s in SLOT_SUBJECTS} if SLOT_LABEL else {}
+    slot_keys = {subject_key(s) for s in slots}
     prev = json.loads(MAP_PATH.read_text()) if MAP_PATH.exists() else {}
-    assigned = {s: l for s, l in prev.get("assigned", {}).items() if s not in slots}
+    # A row written before the keys were hashed is re-keyed, letter kept — the whole
+    # point of the map is that a letter, once published, never moves.
+    assigned = {}
+    for k, letter in prev.get("assigned", {}).items():
+        k = k if _HEXKEY_RE.match(k) else subject_key(canon_subject(k))
+        if k not in slot_keys:
+            assigned[k] = letter
     # Continue past the highest index EVER used, retired subjects included.
     nxt = max((_letter_index(l) for l in assigned.values()), default=-1) + 1
 
     named = sorted((s for s in first_seen if s not in slots),
                    key=lambda s: (first_seen[s], s))
     for s in named:
-        if s not in assigned:
-            assigned[s] = _letter(nxt)
+        if subject_key(s) not in assigned:
+            assigned[subject_key(s)] = _letter(nxt)
             nxt += 1
     MAP_PATH.write_text(json.dumps({"note": MAP_NOTE, "assigned": assigned},
                                    indent=2, sort_keys=True) + "\n")
 
     out = {s: slots[s] for s in first_seen if s in slots}
     for s in named:
-        out[s] = (f"Player {assigned[s]}", f"player{assigned[s]}")
+        letter = assigned[subject_key(s)]
+        out[s] = (f"Player {letter}", f"player{letter}")
     return out
 
 
