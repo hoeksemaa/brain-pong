@@ -116,8 +116,11 @@ def _decimate(y, width, sr, nd):
     starts = edges[:-1]
     mn = _round(np.minimum.reduceat(seg, starts), nd)
     mx = _round(np.maximum.reduceat(seg, starts), nd)
-    centers = [round(float(v), 3) for v in (edges[:-1] + edges[1:]) / 2.0 / sr]
-    return centers, mn, mx
+    # LEFT edges, not bucket centres: the n<=width branch above returns sample times
+    # from zero, and a t[0] half a bucket in makes the two branches mean different
+    # things — portal.js clips events to [t[0], t[-1]] and would drop every t=0 event.
+    left = [round(float(v), 3) for v in edges[:-1] / sr]
+    return left, mn, mx
 
 
 # ── npz loading (full metadata, version tolerant) ───────────────────────────────
@@ -154,16 +157,22 @@ def load(path):
 
 # ── tag derivation (deterministic ruleset) ───────────────────────────────────────
 
-# Dates on which a public BrainPong tournament was held. Being on one of these
-# dates is necessary but NOT sufficient — see derive_tags.
-TOURNAMENT_DATES = ("2026-07-13", "2026-08-17")
+# The public BrainPong tournaments, in the order they were held: date -> tag slug.
+# Being on one of these dates is necessary but NOT sufficient — see derive_tags.
+# The two nights were separate events with different fields of players, so they carry
+# separate tags: one flat "tournament" bucket could not answer "who played the second
+# one?", and the numbering is the way a reader already talks about them. Slugs (not
+# display text) are what lands in the tags and in ?tour= — see TOURNAMENT_LABELS.
+TOURNAMENTS = {"2026-07-13": "tournament-1", "2026-08-17": "tournament-2"}
+TOURNAMENT_LABELS = {"tournament-1": "Tournament 1", "tournament-2": "Tournament 2"}
 
 
 def derive_tags(m, date, session_size):
     """Per-recording tags. `session_size` is how many recordings share this session
     key, i.e. how many people were at the rig for that match.
 
-    A tournament recording is one made on a tournament DATE in a TWO-PLAYER session.
+    The tournament tag is the event's slug ("tournament-1"/"tournament-2") for a
+    recording made on a tournament DATE in a TWO-PLAYER session, and None otherwise.
     The head-to-head requirement is what separates the event from the owner's own
     solo work on the same evening: 2026-08-17 ran as paired matches from 18:26 to
     20:14 and then, after everyone had gone, seven solo recordings at 22:24-22:47.
@@ -182,12 +191,39 @@ def derive_tags(m, date, session_size):
         session_type = "game"
 
     return {
-        "tournament": date in TOURNAMENT_DATES and session_size == 2,
+        "tournament": TOURNAMENTS.get(date) if session_size == 2 else None,
         "session_type": session_type,
     }
 
 
 _LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{2,}$")   # drop char-splat artifacts
+_WHO_RE = re.compile(r"^(p[12])_(.*)$", re.I)
+_FAST_RE = re.compile(r"^fast_", re.I)
+
+
+def norm_event(label):
+    """Raw npz label -> (kind, text, who), the shape portal.js draws.
+
+    The raw strings are free-form and inconsistently cased ('LEFT', 'p1_target_left',
+    'FAST_LEFT'), so the portal used to key its glyph off the first character: the 20
+    distinct labels in the corpus collapse to 5 distinct first letters, and nine of
+    them — every p1_/p2_ label, whatever the player actually did — all drew "p".
+    Deciding direction here, once, is the only way the drawn glyph can be right."""
+    s = str(label)
+    m = _WHO_RE.match(s)
+    who = None
+    if m:
+        who, s = m.group(1).lower(), m.group(2)
+    body = _FAST_RE.sub("", s, count=1).lower()   # FAST_ is a cue speed, not a direction
+    if body.endswith("left"):
+        kind = "left"
+    elif body.endswith("right"):
+        kind = "right"
+    elif body in ("rest", "baseline"):
+        kind = "rest"
+    else:
+        kind = "marker"
+    return kind, s.replace("_", " ").lower(), who
 
 
 # ── anonymization ────────────────────────────────────────────────────────────────
@@ -200,6 +236,25 @@ _LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{2,}$")   # drop char-splat artifa
 # into ONE honest bucket that is visibly not a person.
 SLOT_SUBJECTS = ("p1", "p2")
 SLOT_LABEL = ("Unattributed", "unattributed")
+
+# Beside the corpus, NOT under web/. The map is keyed on the canonical subject, which
+# IS the real first name — web/ is rsync-deployed wholesale to GitHub Pages, so a map
+# under there would publish every real name in the corpus, i.e. exactly the failure
+# this whole bake exists to prevent. data/ already holds the real names (the
+# data/eog/*.npz filenames carry them) and is never deployed.
+MAP_PATH = REPO / "data" / "portal-anon-map.json"
+MAP_NOTE = ("PRIVATE — keys are real first names. Never copy this file (or its "
+            "contents) under web/: that tree is deployed wholesale to GitHub Pages. "
+            "Letters are append-only: never reassign one, never reuse one whose "
+            "subject has left the corpus.")
+
+
+def _letter(i):
+    return chr(ord("A") + i) if i < 26 else f"A{i}"
+
+
+def _letter_index(letter):
+    return int(letter[1:]) if len(letter) > 1 else ord(letter) - ord("A")
 
 
 def canon_subject(subj):
@@ -217,6 +272,15 @@ def canon_subject(subj):
 def build_anon_map(first_seen):
     """canonical subject -> (display pseudonym, url slug), from {canon: earliest stem}.
 
+    The assignment is PERSISTED to MAP_PATH and only ever appended to. Assigning by
+    enumerate() over the subjects currently present looked stable, but six subjects
+    hold exactly one recording, so deleting one npz slid every later letter up: every
+    rec/<id>.json is renamed and every shared ?rec= URL breaks. Worse than the dead
+    links, a reader holding a copy of the old site can diff the two letter sequences
+    and read off WHO was removed — and a withdrawal request is the likeliest reason a
+    recording would ever be removed. A retired subject therefore keeps its row here
+    and its letter stays permanently spent.
+
     EVERY person is pseudonymised, the project owner included. The portal is the
     public face of a corpus recorded from volunteers; the owner exempting himself
     while publishing everyone else under a letter is the wrong asymmetry, and it also
@@ -230,12 +294,23 @@ def build_anon_map(first_seen):
     policy changes: dropping the owner exemption inserts him at his true first
     appearance and shifts every letter after it, once."""
     slots = {s: SLOT_LABEL for s in SLOT_SUBJECTS} if SLOT_LABEL else {}
+    prev = json.loads(MAP_PATH.read_text()) if MAP_PATH.exists() else {}
+    assigned = {s: l for s, l in prev.get("assigned", {}).items() if s not in slots}
+    # Continue past the highest index EVER used, retired subjects included.
+    nxt = max((_letter_index(l) for l in assigned.values()), default=-1) + 1
+
     named = sorted((s for s in first_seen if s not in slots),
                    key=lambda s: (first_seen[s], s))
+    for s in named:
+        if s not in assigned:
+            assigned[s] = _letter(nxt)
+            nxt += 1
+    MAP_PATH.write_text(json.dumps({"note": MAP_NOTE, "assigned": assigned},
+                                   indent=2, sort_keys=True) + "\n")
+
     out = {s: slots[s] for s in first_seen if s in slots}
-    for i, s in enumerate(named):
-        letter = chr(ord("A") + i) if i < 26 else f"A{i}"
-        out[s] = (f"Player {letter}", f"player{letter}")
+    for s in named:
+        out[s] = (f"Player {assigned[s]}", f"player{assigned[s]}")
     return out
 
 
@@ -333,8 +408,12 @@ def bake(width):
         _, d_mn, d_mx = _decimate(diff, width, sr, 0)   # 1 µV resolution on ±k signals
         _, l_mn, l_mx = _decimate(m["eeg"][m["ch_l"]] * 1e6, width, sr, 0)
         _, r_mn, r_mx = _decimate(m["eeg"][m["ch_r"]] * 1e6, width, sr, 0)
-        events = [{"t": round(int(s) / sr, 2), "label": str(lab)}
-                  for s, lab in zip(m["ev_s"], m["ev_l"]) if _LABEL_RE.match(str(lab))]
+        events = []
+        for s, lab in zip(m["ev_s"], m["ev_l"]):
+            if not _LABEL_RE.match(str(lab)):
+                continue
+            kind, text, who = norm_event(lab)
+            events.append({"t": round(int(s) / sr, 2), "kind": kind, "text": text, "who": who})
 
         detail = {
             "id": rid, "date": date, "time": tm, "session": session, "subject": disp,
@@ -367,6 +446,12 @@ def bake(width):
             c[k] = c.get(k, 0) + 1
         return c
 
+    def tour_values():
+        d = dist(lambda r: r["tags"]["tournament"])
+        keys = [k for k in TOURNAMENTS.values() if d.get(k)] + [None]
+        return [{"v": k, "label": TOURNAMENT_LABELS.get(k, "Other days"), "count": d.get(k, 0)}
+                for k in keys if d.get(k)]
+
     dates = sorted(r["date"] for r in manifest)
     subjects_present = sorted({r["subject"] for r in manifest})
     quality = dist(lambda r: r["status"])
@@ -382,8 +467,8 @@ def bake(width):
         "corpus": {
             "n_recordings": len(manifest),
             "n_sessions": len(sess_members),
-            "n_subjects": len(subjects_present),
-            # Quote THIS wherever a number of PEOPLE is meant. n_subjects counts
+            "n_subject_labels": len(subjects_present),
+            # Quote THIS wherever a number of PEOPLE is meant. n_subject_labels counts
             # display labels, and one label ("Unattributed") pools 72 recordings
             # from an unknown number of additional people, so quoting it as a
             # participant count overstates it.
@@ -397,9 +482,9 @@ def bake(width):
             "quality": quality,
         },
         "tags": {
-            "tournament": {"label": "Tournament",
-                           "values": [{"v": True, "count": dist(lambda r: r["tags"]["tournament"]).get(True, 0)},
-                                      {"v": False, "count": dist(lambda r: r["tags"]["tournament"]).get(False, 0)}]},
+            # Values carry their own display label so a third tournament needs no
+            # portal.js edit. None ("no event") is last and named for the reader.
+            "tournament": {"label": "Event", "values": tour_values()},
             "session_type": tag_group("Session type", "session_type", ["game", "training", "cued"]),
         },
         "subjects": subjects_present,

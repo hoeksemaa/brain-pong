@@ -5,13 +5,18 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>BrainPong — EOG Data Portal</title>
   <meta name="description" content="Browse every EOG recording from the BrainPong project — play Pong with your eyes. Raw left, raw right, and right-minus-left traces for each session.">
+  <meta property="og:title" content="BrainPong — EOG Data Portal">
+  <meta property="og:description" content="Browse every EOG recording from the BrainPong project — play Pong with your eyes. Raw left, raw right, and right-minus-left traces for each session.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://hoeksemaa.github.io/brain-pong/">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>%E2%97%B4</text></svg>">
   <link rel="stylesheet" href="portal.css">
 </head>
 <body>
   <div class="app">
     <header class="topbar">
-      <div class="brand"><b>◴</b> BrainPong <span>EOG Data Portal</span></div>
+      <h1 class="brand"><a href="./" id="homeLink"><b>◴</b> BrainPong <span>EOG Data Portal</span></a></h1>
       <div class="corpus-stats" id="stats"></div>
       <div class="topactions">
         <button class="tbtn" id="aboutBtn" title="What is this site?">About</button>
@@ -20,18 +25,18 @@
     </header>
     <div class="body">
       <aside class="sidebar">
-        <div class="searchwrap"><input id="search" type="search" placeholder="Search subject…" autocomplete="off"></div>
+        <div class="searchwrap"><input id="search" type="search" placeholder="Search subject…" aria-label="Search recordings by subject" autocomplete="off"></div>
         <details class="filterbox" id="filterbox" open>
           <summary>Filters</summary>
           <div class="filters" id="filters"></div>
         </details>
-        <div class="listmeta" id="listmeta"></div>
+        <div class="listmeta" id="listmeta" role="status" aria-live="polite"></div>
         <ul class="reclist" id="reclist"></ul>
       </aside>
       <main class="main" id="main"></main>
     </div>
   </div>
-  <div class="modal" id="aboutModal" hidden></div>
+  <dialog class="modal" id="aboutModal" aria-labelledby="aboutTitle"></dialog>
   <script src="portal.js"></script>
 </body>
 </html>

@@ -1,0 +1,28 @@
+{
+  "assigned": {
+    "aaron": "F",
+    "allen": "P",
+    "amber": "V",
+    "anthony": "A",
+    "atin": "E",
+    "bradley": "R",
+    "brandon": "S",
+    "christy": "H",
+    "david": "C",
+    "esther": "L",
+    "evan": "K",
+    "fisola": "W",
+    "german": "B",
+    "hart": "D",
+    "john": "G",
+    "joseph": "U",
+    "laika": "Q",
+    "omar2": "M",
+    "robert": "O",
+    "simon": "I",
+    "whom": "T",
+    "xiq": "J",
+    "ze'ev": "N"
+  },
+  "note": "PRIVATE \u2014 keys are real first names. Never copy this file (or its contents) under web/: that tree is deployed wholesale to GitHub Pages. Letters are append-only: never reassign one, never reuse one whose subject has left the corpus."
+}
