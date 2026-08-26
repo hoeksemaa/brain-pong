@@ -124,6 +124,19 @@
       const bot = h - padB, yh = ym(opts.ceil), yl = ym(-opts.ceil);
       const hiIn = yh > padT && yh < bot, loIn = yl > padT && yl < bot;
       const ch = clamp(yh, padT, bot), cl = clamp(yl, padT, bot);
+      // A panel must never look clean when the bake has called the recording clipped, and
+      // three things conspire to make it: robust autoscale sets A from the 99th percentile,
+      // which excludes the railed samples by construction; the envelope is clipped to the
+      // box, so the excursion is cut away rather than shown; and the bake calls a recording
+      // railing at 0.9*ceil (bake_portal.py:66) while the band below is drawn at 1.0*ceil,
+      // so a lead resting at 0.93*ceil never reaches the line at all. The R−L panel is worst
+      // hit: its bound is 2*ceil, which only 2 of 237 recordings ever reach.
+      // So take the answer from the badge's own source instead of re-deriving it here.
+      if (opts.railing && !hiIn && !loIn) {
+        ctx.fillStyle = THEME.rail; ctx.textAlign = "right"; ctx.font = "9px "+THEME.mono;
+        ctx.fillRect(PADL, padT, w-PADR-PADL, 2); ctx.fillRect(PADL, bot-2, w-PADR-PADL, 2);
+        ctx.fillText("CLIPPED · limit off scale", w-PADR-3, padT+12);
+      }
       if (hiIn || loIn) {
         ctx.fillStyle = THEME.railFill;
         if (hiIn) ctx.fillRect(PADL, padT, w-PADR-PADL, ch-padT);
@@ -167,9 +180,25 @@
     // a lead pinned to the rail then reads "+0.0 / -0.0" — the flattest-looking panel on
     // the site. 1000 µV is 1 mV: switch the unit with the number so the two agree.
     const hi = off + A, lo = off - A, mv = Math.max(Math.abs(hi), Math.abs(lo)) >= 1000;
-    const lab = v => { const x = mv ? v/1000 : v, a = Math.abs(x); return (x<0?"-":"+") + a.toFixed(a>=100?0:a>=10?1:2); };
-    ctx.fillText(lab(hi), PADL-5, padT+9); ctx.fillText(lab(lo), PADL-5, h-padB-2);
-    if (opts.unit && !narrow){ ctx.save(); ctx.translate(11,(padT+h-padB)/2); ctx.rotate(-Math.PI/2); ctx.textAlign="center"; ctx.fillStyle=THEME.muted; ctx.font="9px "+THEME.mono; ctx.fillText(mv?"mV":"µV",0,0); ctx.restore(); }
+    const sc = mv ? 1000 : 1, unit = mv ? "mV" : "µV", span = 2 * A / sc;
+    // Decimals come from the SPAN, not from each edge on its own. Per-edge precision let a
+    // 200 µV window about -175 mV print "-175" at both ends, and a rail-pinned lead print
+    // "+0.00 / -0.00" — the very string this labelling replaced.
+    const dp = span >= 100 ? 0 : span >= 10 ? 1 : span >= 1 ? 2 : 3;
+    const lab = (v, d = dp) => (v < 0 ? "-" : "+") + Math.abs(v / sc).toFixed(d);
+    let top = lab(hi), bottom = lab(lo);
+    // A constant trace has no range to print. Give its value once and name it, rather than
+    // print one number twice and imply a span that is not there.
+    if (top === bottom) { top = lab(off, Math.abs(off / sc) >= 100 ? 1 : 2); bottom = "flat"; }
+    ctx.fillText(top, PADL-5, padT+9); ctx.fillText(bottom, PADL-5, h-padB-2);
+    // The unit is not optional: mV and µV differ by 1000x, and the rotated label is hidden
+    // on every phone (a 390px viewport gives a 340px canvas, under NARROW). Put it under the
+    // top tick there instead of dropping it.
+    if (opts.unit) {
+      ctx.fillStyle = THEME.muted; ctx.font = "9px "+THEME.mono;
+      if (narrow) { ctx.textAlign = "right"; ctx.fillText(unit, PADL-5, padT+20); }
+      else { ctx.save(); ctx.translate(11,(padT+h-padB)/2); ctx.rotate(-Math.PI/2); ctx.textAlign="center"; ctx.fillText(unit,0,0); ctx.restore(); }
+    }
     if (opts.name){ ctx.fillStyle=opts.nameColor||THEME.text; ctx.textAlign="left"; ctx.font="600 11px "+THEME.ui; ctx.fillText(opts.name, PADL+4, padT+11); }
     if (opts.ruler){ ctx.fillStyle=THEME.muted; ctx.font="10px "+THEME.mono; ctx.textAlign="center";
       const nt = narrow ? 4 : 8;
@@ -471,13 +500,14 @@
     // keeps one rail excursion from squashing the real eye movements into a hairline.
     drawTrace(PLOT.d, r.t, [{ mn: r.diff.mn, mx: r.diff.mx, fill: THEME.ribFill, stroke: THEME.rib }], {
       height: 240, center: true, robust: true, ruler: true, ceil: r.ceil_uv * 2, events: r.events,
+      railing: r.status === "railing",
       unit: "µV", name: "R − L (right minus left)", nameColor: THEME.rib,
       band, scaleTo: scale, handles: true,
     });
     drawTrace(PLOT.l, r.t, [{ mn: r.channels.l.mn, mx: r.channels.l.mx, fill: hexA(THEME.L, .12), stroke: THEME.L }],
-      { height: 116, center: true, robust: true, ceil: r.ceil_uv, unit: "µV", name: "Left electrode", nameColor: THEME.L, band, scaleTo: scale });
+      { height: 116, center: true, robust: true, ceil: r.ceil_uv, unit: "µV", name: "Left electrode", nameColor: THEME.L, band, scaleTo: scale, railing: r.status === "railing" });
     drawTrace(PLOT.r, r.t, [{ mn: r.channels.r.mn, mx: r.channels.r.mx, fill: hexA(THEME.R, .12), stroke: THEME.R }],
-      { height: 116, center: true, robust: true, ceil: r.ceil_uv, ruler: true, unit: "µV", name: "Right electrode", nameColor: THEME.R, band, scaleTo: scale });
+      { height: 116, center: true, robust: true, ceil: r.ceil_uv, ruler: true, unit: "µV", name: "Right electrode", nameColor: THEME.R, band, scaleTo: scale, railing: r.status === "railing" });
   }
 
   // ── detail view ─────────────────────────────────────────────────────────────
