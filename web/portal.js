@@ -10,7 +10,7 @@
     mono: "ui-monospace,Menlo,monospace", ui: "Inter,system-ui,sans-serif",
     rib: "#7ef0b0", ribFill: "rgba(126,240,176,0.12)",
     rail: "#ff6b81", railFill: "rgba(255,107,129,0.08)",
-    evL: "#5b8cff", evR: "#ff9d5c", evO: "#5b6b86",
+    evL: "#5b8cff", evR: "#ff9d5c", evO: "#5b6b86", evRest: "#93a0b8",
     L: "#4ea8ff", R: "#ff9d5c",
     status: { ok: "#34d399", railing: "#fb7185", flat: "#fbbf24" },
     dim: "rgba(8,10,16,0.70)", edge: "#7ef0b0",   // studio viewer's trim colours
@@ -29,13 +29,26 @@
   const QUALITY = {   // plain-language names for the bake's status field
     ok: "good", railing: "clipped", flat: "flat",
   };
+  // Display text for an event tag ("tournament-1" -> "Tournament 1"), read from the
+  // bake's own labels so adding a third tournament is a bake-only change. "none" is
+  // the sentinel a Set (and a URL) can carry for "tagged with no event".
+  const tourLabel = v => {
+    if (v === "none" || v === null) return "Other days";
+    const hit = (state.meta?.tags.tournament.values || []).find(x => x.v === v);
+    return hit ? hit.label : v;
+  };
+  const ISODATE = /^\d{4}-\d{2}-\d{2}$/;
+  const debounce = (fn, ms) => { let h; return () => { clearTimeout(h); h = setTimeout(fn, ms); }; };
 
   // ── data layer (pure static fetch) ──────────────────────────────────────────
   const base = "./portal-data";
+  // Pages answers a missing file with an HTML page, so without the ok check the
+  // failure arrives as a SyntaxError quoting "<!DOCTYPE " instead of the status.
+  const grab = u => fetch(u).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
   const DATA = {
-    meta: () => fetch(`${base}/meta.json`).then(r => r.json()),
-    manifest: () => fetch(`${base}/manifest.json`).then(r => r.json()),
-    rec: id => fetch(`${base}/rec/${encodeURIComponent(id)}.json`).then(r => { if (!r.ok) throw r.status; return r.json(); }),
+    meta: () => grab(`${base}/meta.json`),
+    manifest: () => grab(`${base}/manifest.json`),
+    rec: id => grab(`${base}/rec/${encodeURIComponent(id)}.json`),
   };
 
   const state = {
@@ -44,7 +57,7 @@
     drag: null,        // {t0,t1} window being dragged out right now
     edge: null,        // "t0" | "t1" — which edge the pointer is dragging
     sortDesc: true,
-    f: { q: "", tour: null, st: new Set(), qual: new Set(), df: "", dt: "" },
+    f: { q: "", tour: new Set(), st: new Set(), qual: new Set(), df: "", dt: "" },
   };
 
   const PLOT = { d: null, l: null, r: null };   // the three live canvases
@@ -63,6 +76,15 @@
     for (let i = t.length - 1; i >= 0; i--) ctx.lineTo(xm(t[i]), ym(mn[i]));
     ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
     if (stroke) { ctx.beginPath(); for (let i = 0; i < t.length; i++){const y=ym((mn[i]+mx[i])/2); i?ctx.lineTo(xm(t[i]),y):ctx.moveTo(xm(t[i]),y);} ctx.strokeStyle=stroke; ctx.lineWidth=1.1; ctx.stroke(); }
+  }
+  const EVCOL = { left: THEME.evL, right: THEME.evR, rest: THEME.evRest, marker: THEME.evO };
+  const EVGLYPH = { left: "←", right: "→", rest: "·" };   // marker gets no glyph: its tick already is the mark
+  // The plot and the legend must agree on which marks exist, so both go through here.
+  function evPick(events, x0, x1) {
+    let evs = events || [];
+    if (evs.length > 50) evs = evs.filter(e => e.kind !== "marker");   // a cue flood is unreadable; the gaze kinds carry the meaning
+    const shown = evs.filter(e => e.t >= x0 && e.t <= x1);
+    return { shown, dropped: (events ? events.length : 0) - shown.length };
   }
   function drawTrace(cv, t, series, opts) {
     opts = opts || {};
@@ -91,27 +113,40 @@
     ctx.fillStyle = THEME.panel; ctx.fillRect(0, 0, w, h);
     ctx.strokeStyle = THEME.grid; ctx.lineWidth = 1;
     for (const f of [0.25,0.5,0.75]){const y=lerp(padT,h-padB,f);ctx.beginPath();ctx.moveTo(PADL,y);ctx.lineTo(w-PADR,y);ctx.stroke();}
-    ctx.strokeStyle = THEME.zero; ctx.beginPath(); ctx.moveTo(PADL, ym(0)); ctx.lineTo(w-PADR, ym(0)); ctx.stroke();
+    // The panel is centred on off, so 0 is often nowhere near the middle — and on a
+    // railed lead it is off the panel entirely. Draw it only where it really falls.
+    if (off-A <= 0 && 0 <= off+A) { ctx.strokeStyle = THEME.zero; ctx.beginPath(); ctx.moveTo(PADL, ym(0)); ctx.lineTo(w-PADR, ym(0)); ctx.stroke(); }
 
-    if (opts.ceil && opts.ceil < A * 0.99) {
-      ctx.fillStyle = THEME.railFill;
-      ctx.fillRect(PADL, padT, w-PADR-PADL, ym(opts.ceil)-padT);
-      ctx.fillRect(PADL, ym(-opts.ceil), w-PADR-PADL, (h-padB)-ym(-opts.ceil));
-      ctx.strokeStyle = THEME.rail; ctx.setLineDash([4,3]);
-      for (const c of [opts.ceil,-opts.ceil]){ctx.beginPath();ctx.moveTo(PADL,ym(c));ctx.lineTo(w-PADR,ym(c));ctx.stroke();}
-      ctx.setLineDash([]); ctx.fillStyle=THEME.rail; ctx.font="10px "+THEME.mono; ctx.textAlign="right"; ctx.fillText("LIMIT",w-PADR-3,ym(opts.ceil)+11);
-    }
-    if (opts.events && opts.events.length) {
-      let evs = opts.events;
-      if (evs.length > 50) evs = evs.filter(e => /^(LEFT|RIGHT|REST)$/.test(e.label));
-      const letters = evs.length <= 30;
-      for (const e of evs) { if (e.t<x0||e.t>x1) continue; const x=xm(e.t);
-        const col = e.label==="LEFT"?THEME.evL : e.label==="RIGHT"?THEME.evR : THEME.evO;
-        ctx.strokeStyle=col; ctx.globalAlpha=.28; ctx.beginPath(); ctx.moveTo(x,padT); ctx.lineTo(x,h-padB); ctx.stroke(); ctx.globalAlpha=1;
-        if (letters){ ctx.fillStyle=col; ctx.font="9px "+THEME.mono; ctx.textAlign="center"; ctx.fillText(e.label[0], x, padT+9); }
+    if (opts.ceil) {
+      // A raw voltage cannot be compared against A, which is a half-range about off. Map
+      // each rail into plot coordinates instead and test it alone: centred on off, one
+      // rail is often on the panel while the other is far outside it. ym inverts: yh < yl.
+      const bot = h - padB, yh = ym(opts.ceil), yl = ym(-opts.ceil);
+      const hiIn = yh > padT && yh < bot, loIn = yl > padT && yl < bot;
+      const ch = clamp(yh, padT, bot), cl = clamp(yl, padT, bot);
+      if (hiIn || loIn) {
+        ctx.fillStyle = THEME.railFill;
+        if (hiIn) ctx.fillRect(PADL, padT, w-PADR-PADL, ch-padT);
+        if (loIn) ctx.fillRect(PADL, cl, w-PADR-PADL, bot-cl);
+        ctx.strokeStyle = THEME.rail; ctx.setLineDash([4,3]);
+        for (const y of [hiIn?ch:null, loIn?cl:null]) { if (y===null) continue; ctx.beginPath(); ctx.moveTo(PADL,y); ctx.lineTo(w-PADR,y); ctx.stroke(); }
+        ctx.setLineDash([]); ctx.fillStyle=THEME.rail; ctx.font="10px "+THEME.mono; ctx.textAlign="right";
+        ctx.fillText("LIMIT", w-PADR-3, clamp(hiIn ? ch+11 : cl-4, padT+10, bot-2));
       }
     }
+    if (opts.events && opts.events.length) {
+      const evs = evPick(opts.events, x0, x1).shown, glyphs = evs.length <= 30;
+      for (const e of evs) { const x=xm(e.t);
+        const col = EVCOL[e.kind] || THEME.evO;
+        ctx.strokeStyle=col; ctx.globalAlpha=.28; ctx.beginPath(); ctx.moveTo(x,padT); ctx.lineTo(x,h-padB); ctx.stroke(); ctx.globalAlpha=1;
+        if (glyphs && EVGLYPH[e.kind]){ ctx.fillStyle=col; ctx.font="10px "+THEME.ui; ctx.textAlign="center"; ctx.fillText(EVGLYPH[e.kind], x, padT+9); }
+      }
+    }
+    // robust autoscale puts ~1% of the samples outside the box by construction, and
+    // unclipped they paint over the unit label and the time ruler.
+    ctx.save(); ctx.beginPath(); ctx.rect(PADL, padT, w-PADR-PADL, (h-padB)-padT); ctx.clip();
     for (const s of series) envelope(ctx, t, s.mn, s.mx, xm, ym, s.fill, s.stroke);
+    ctx.restore();
 
     if (opts.band) {   // dim the context, keep the window bright (studio viewer)
       const t0 = Math.min(opts.band.t0, opts.band.t1), t1 = Math.max(opts.band.t0, opts.band.t1);
@@ -128,9 +163,13 @@
     }
 
     ctx.fillStyle = THEME.muted; ctx.font = "10px "+THEME.mono; ctx.textAlign = "right";
-    const lab = v => v>=1000?(v/1000).toFixed(v>=10000?0:1)+"k":v.toFixed(A<10?1:0);
-    ctx.fillText(`+${lab(A)}`, PADL-5, padT+9); ctx.fillText(`-${lab(A)}`, PADL-5, h-padB-2);
-    if (opts.unit && !narrow){ ctx.save(); ctx.translate(11,(padT+h-padB)/2); ctx.rotate(-Math.PI/2); ctx.textAlign="center"; ctx.fillStyle=THEME.muted; ctx.font="9px "+THEME.mono; ctx.fillText(opts.unit,0,0); ctx.restore(); }
+    // The edges are off+A and off-A, not ±A. Printing them as ±A hides the offset, and
+    // a lead pinned to the rail then reads "+0.0 / -0.0" — the flattest-looking panel on
+    // the site. 1000 µV is 1 mV: switch the unit with the number so the two agree.
+    const hi = off + A, lo = off - A, mv = Math.max(Math.abs(hi), Math.abs(lo)) >= 1000;
+    const lab = v => { const x = mv ? v/1000 : v, a = Math.abs(x); return (x<0?"-":"+") + a.toFixed(a>=100?0:a>=10?1:2); };
+    ctx.fillText(lab(hi), PADL-5, padT+9); ctx.fillText(lab(lo), PADL-5, h-padB-2);
+    if (opts.unit && !narrow){ ctx.save(); ctx.translate(11,(padT+h-padB)/2); ctx.rotate(-Math.PI/2); ctx.textAlign="center"; ctx.fillStyle=THEME.muted; ctx.font="9px "+THEME.mono; ctx.fillText(mv?"mV":"µV",0,0); ctx.restore(); }
     if (opts.name){ ctx.fillStyle=opts.nameColor||THEME.text; ctx.textAlign="left"; ctx.font="600 11px "+THEME.ui; ctx.fillText(opts.name, PADL+4, padT+11); }
     if (opts.ruler){ ctx.fillStyle=THEME.muted; ctx.font="10px "+THEME.mono; ctx.textAlign="center";
       const nt = narrow ? 4 : 8;
@@ -148,7 +187,7 @@
   function passes(r) {
     const f = state.f, t = r.tags;
     if (f.q && !r.subject.toLowerCase().includes(f.q.toLowerCase())) return false;
-    if (f.tour !== null && t.tournament !== f.tour) return false;
+    if (f.tour.size && !f.tour.has(t.tournament || "none")) return false;
     if (f.st.size && !f.st.has(t.session_type)) return false;
     if (f.qual.size && !f.qual.has(r.status)) return false;
     if (f.df && r.date < f.df) return false;
@@ -161,27 +200,60 @@
     syncURL();
     renderList();
   }
+  // An empty list must name what emptied it: a junk ?df= hid all 191 rows while both
+  // date boxes looked blank, because <input type=date> discards a bad value in silence.
+  function activeFilters() {
+    const f = state.f, a = [];
+    if (f.q) a.push(`search "${f.q}"`);
+    if (f.tour.size) a.push([...f.tour].map(tourLabel).join(" or "));
+    if (f.st.size) a.push([...f.st].join(" or "));
+    if (f.qual.size) a.push([...f.qual].map(v => QUALITY[v] || v).join(" or "));
+    if (f.df) a.push(`from ${f.df}`);
+    if (f.dt) a.push(`to ${f.dt}`);
+    return a;
+  }
+  function resetFilters() {          // six active filters took six actions to clear
+    const f = state.f;
+    f.q = ""; f.tour.clear(); f.st.clear(); f.qual.clear(); f.df = ""; f.dt = "";
+    const s = $("#search"); if (s) s.value = "";
+    recompute(); renderFilters();    // the selected recording is deliberately left alone
+    if (s) s.focus();                // the button that called this just removed itself
+  }
 
   // ── URL state (shareable filtered views) ────────────────────────────────────
   function syncURL() {
     const f = state.f, p = new URLSearchParams();
     if (f.q) p.set("q", f.q);
-    if (f.tour !== null) p.set("tour", f.tour ? "1" : "0");
     const setCSV = (k, s) => { if (s.size) p.set(k, [...s].join(",")); };
-    setCSV("st", f.st); setCSV("qual", f.qual);
+    setCSV("tour", f.tour); setCSV("st", f.st); setCSV("qual", f.qual);
     if (f.df) p.set("df", f.df); if (f.dt) p.set("dt", f.dt);
     if (state.sel) p.set("rec", state.sel);
     if (state.sel && state.view) { p.set("t0", state.view.t0.toFixed(3)); p.set("t1", state.view.t1.toFixed(3)); }
     const qs = p.toString();
     history.replaceState(null, "", qs ? "?" + qs : location.pathname);
   }
+  // Every value is checked against what the corpus actually has: an unrecognized one
+  // is dropped, never turned into a filter. ?tour=true used to mean tour=false and hide
+  // every tournament recording, and ?qual=bogus emptied the list with no chip lit.
+  // state.meta must already be set when this runs.
   function loadURL() {
     const p = new URLSearchParams(location.search), f = state.f;
     f.q = p.get("q") || "";
-    f.tour = p.has("tour") ? p.get("tour") === "1" : null;
-    const getCSV = (k, s) => { const v = p.get(k); if (v) v.split(",").forEach(x => s.add(x)); };
-    getCSV("st", f.st); getCSV("qual", f.qual);
-    f.df = p.get("df") || ""; f.dt = p.get("dt") || "";
+    const getCSV = (k, s, ok) => { s.clear(); const v = p.get(k); if (v) v.split(",").forEach(x => { if (ok.has(x)) s.add(x); }); };
+    // ?tour= used to be the boolean 1/0 of a single "tournament" tag. Links shared
+    // before the two nights were split still open the view they promised: 1 = both
+    // tournaments, 0 = everything else.
+    const tr = p.get("tour");
+    if (tr === "1" || tr === "0") {
+      f.tour.clear();
+      for (const { v } of state.meta.tags.tournament.values) if ((v !== null) === (tr === "1")) f.tour.add(v || "none");
+    } else {
+      getCSV("tour", f.tour, new Set(state.meta.tags.tournament.values.map(x => x.v || "none")));
+    }
+    getCSV("st", f.st, new Set(state.meta.tags.session_type.values.map(x => x.v)));
+    getCSV("qual", f.qual, new Set(Object.keys(QUALITY)));
+    const day = v => ISODATE.test(v || "") ? v : "";
+    f.df = day(p.get("df")); f.dt = day(p.get("dt"));
     const t0 = parseFloat(p.get("t0")), t1 = parseFloat(p.get("t1"));
     pendingView = (isFinite(t0) && isFinite(t1) && t1 > t0) ? { t0, t1 } : null;
     return p.get("rec");
@@ -190,88 +262,120 @@
   // ── corpus stats (top bar) ──────────────────────────────────────────────────
   function renderStats() {
     const c = state.meta.corpus;
+    // total_hours is the sum of all 191 durations, and 70 of the 121 sessions ran two
+    // recordings over the same wall clock. "of signal" reads as elapsed time and is
+    // wrong by 57%; the sum of durations is exactly "recorded hours".
+    const y0 = c.date_start.slice(0, 4), y1 = c.date_end.slice(0, 4);
     const items = [
       [c.n_recordings, "recordings"], [c.n_named_subjects, "people"],
-      [c.total_hours + "h", "of signal"],
-      [`${c.date_start.slice(5)} – ${c.date_end.slice(5)}`, "2026"],
+      [c.total_hours + "h", "recorded hours"],
+      [`${c.date_start.slice(5)} – ${c.date_end.slice(5)}`, y0 === y1 ? y0 : `${y0} – ${y1}`],
     ];
     const box = $("#stats"); box.innerHTML = "";
     for (const [v, k] of items) { const c2 = el("div", "cstat"); c2.appendChild(el("div", "v", v)); c2.appendChild(el("div", "k", k)); box.appendChild(c2); }
   }
 
   // ── filter UI ───────────────────────────────────────────────────────────────
+  // renderFilters() destroys the very button the reader just pressed, and focus falls
+  // to <body>. Every count here comes from state.meta, which is fetched once and never
+  // written again, so nothing in a group moves when a filter changes except which chips
+  // are lit — repainting them in place is the whole update.
   function chipGroup(title, values, sel, labelFn, statusClass) {
     const g = el("div", "fgroup");
-    const h = el("h4", null, title);
-    if (sel.size) { const c = el("span", "clr", "clear"); c.onclick = () => { sel.clear(); recompute(); renderFilters(); }; h.appendChild(c); }
-    g.appendChild(h);
-    const chips = el("div", "chips");
+    g.setAttribute("role", "group"); g.setAttribute("aria-label", title);
+    const h = el("div", "fh", title);
+    const c = el("button", "clr", "clear"); c.type = "button";
+    h.appendChild(c); g.appendChild(h);
+    const chips = el("div", "chips"), items = [];
+    const paint = () => {
+      for (const [b, v] of items) { const on = sel.has(v); b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); }
+      c.hidden = !sel.size;
+    };
+    c.onclick = () => { sel.clear(); recompute(); paint(); const f0 = chips.firstElementChild; if (f0) f0.focus(); };
     for (const { v, count } of values) {
       const label = labelFn ? labelFn(v) : String(v);
-      const active = sel.has(v);
-      const cls = "chip" + (active ? " on" : "") + (statusClass ? " st-" + v : "");
-      const b = el("button", cls, `${label}<span class="n">${count}</span>`);
-      b.onclick = () => { active ? sel.delete(v) : sel.add(v); recompute(); renderFilters(); };
-      chips.appendChild(b);
+      const b = el("button", "chip" + (statusClass ? " st-" + v : ""), `${label}<span class="n">${count}</span>`);
+      b.type = "button";
+      b.onclick = () => { sel.has(v) ? sel.delete(v) : sel.add(v); recompute(); paint(); };
+      items.push([b, v]); chips.appendChild(b);
     }
+    paint();
     g.appendChild(chips); return g;
   }
   function renderFilters() {
     const wrap = $("#filters"); wrap.innerHTML = "";
     const meta = state.meta, f = state.f;
 
-    // tournament day (boolean toggle)
-    const tv = meta.tags.tournament.values;
-    const tg = el("div", "fgroup"); tg.appendChild(el("h4", null, "Event"));
-    const tchips = el("div", "chips");
-    for (const { v, count } of tv) {
-      const b = el("button", "chip" + (f.tour === v ? " on tour" : ""), `${v ? "Tournament day" : "Other days"}<span class="n">${count}</span>`);
-      b.onclick = () => { f.tour = f.tour === v ? null : v; recompute(); renderFilters(); };
-      tchips.appendChild(b);
-    }
-    tg.appendChild(tchips); wrap.appendChild(tg);
+    // Event: one chip per tournament plus "Other days" — a boolean toggle could not
+    // say which night, and the two are what a reader wants to compare.
+    const tv = meta.tags.tournament.values.map(x => ({ v: x.v || "none", count: x.count }));
+    wrap.appendChild(chipGroup(meta.tags.tournament.label, tv, f.tour, tourLabel));
 
     wrap.appendChild(chipGroup("Session type", meta.tags.session_type.values, f.st));
 
     const qv = ["ok", "railing", "flat"].map(s => ({ v: s, count: (meta.corpus.quality[s] || 0) })).filter(x => x.count);
     wrap.appendChild(chipGroup("Signal quality", qv, f.qual, v => QUALITY[v] || v, true));
 
-    // date range
-    const dg = el("div", "fgroup"); dg.appendChild(el("h4", null, "Date range"));
+    // date range — the one group built outside chipGroup, so it was the one group
+    // with no way back. Rebuilding it on change would take focus out of the box
+    // mid-entry, so the link is built once and only shown when it has work to do.
+    const dg = el("div", "fgroup"), dh = el("div", "fh", "Date range");
+    dg.setAttribute("role", "group"); dg.setAttribute("aria-label", "Date range");
+    const dc = el("button", "clr", "clear"); dc.type = "button";
+    dh.appendChild(dc); dg.appendChild(dh);
+    const syncClr = () => { dc.style.display = (f.df || f.dt) ? "" : "none"; };
     const dr = el("div", "daterow");
-    const di = (val, on) => { const i = el("input"); i.type = "date"; i.value = val; i.min = meta.corpus.date_start; i.max = meta.corpus.date_end; i.onchange = () => { on(i.value); recompute(); }; return i; };
-    dr.appendChild(di(f.df, v => f.df = v)); dr.appendChild(el("span", null, "→")); dr.appendChild(di(f.dt, v => f.dt = v));
-    dg.appendChild(dr); wrap.appendChild(dg);
+    // both boxes announce as "date" with nothing to tell them apart, so each is named
+    const di = (val, on, id, name) => { const i = el("input"); i.type = "date"; i.id = id; i.setAttribute("aria-label", name); i.value = val; i.min = meta.corpus.date_start; i.max = meta.corpus.date_end; i.onchange = () => { on(i.value); syncClr(); recompute(); }; return i; };
+    const d0 = di(f.df, v => f.df = v, "dateFrom", "Earliest date"), d1 = di(f.dt, v => f.dt = v, "dateTo", "Latest date");
+    dc.onclick = () => { f.df = ""; f.dt = ""; d0.value = ""; d1.value = ""; syncClr(); recompute(); d0.focus(); };
+    dr.appendChild(d0); dr.appendChild(el("span", null, "→")); dr.appendChild(d1);
+    syncClr(); dg.appendChild(dr); wrap.appendChild(dg);
   }
 
   // ── sidebar list ────────────────────────────────────────────────────────────
+  const sparkCol = r => THEME.status[r.status] || "#b388ff";
   function renderList() {
     const meta = $("#listmeta"); meta.innerHTML = "";
-    meta.appendChild(el("span", null, `<b style="color:var(--ink)">${state.filtered.length}</b> of ${state.recs.length} recordings`));
+    const why = activeFilters();
+    const left = el("span"); left.style.cssText = "display:flex;align-items:center;gap:9px";
+    left.appendChild(el("span", null, `<b style="color:var(--ink)">${state.filtered.length}</b> of ${state.recs.length} recordings`));
+    if (why.length) { const rb = el("button", "sortbtn", "Reset all"); rb.onclick = resetFilters; left.appendChild(rb); }
+    meta.appendChild(left);
     const sb = el("button", "sortbtn", state.sortDesc ? "↓ Newest" : "↑ Oldest");
     sb.onclick = () => { state.sortDesc = !state.sortDesc; recompute(); };
     meta.appendChild(sb);
 
     const list = $("#reclist"); list.innerHTML = "";
-    if (!state.filtered.length) { list.appendChild(el("li", "empty", "No recordings match these filters.")); return; }
+    if (!state.filtered.length) {
+      const li = el("li", "empty");   // textContent: the search term is whatever the reader typed
+      li.textContent = why.length ? `No recordings match ${why.join(" · ")}.` : "No recordings.";
+      list.appendChild(li); return;
+    }
     for (const r of state.filtered) {
-      const li = el("li", "recitem" + (state.sel === r.id ? " sel" : ""));
-      li.dataset.id = r.id;
-      const head = el("div", "rihead");
+      // a <button> so the row takes Enter, Space and focus; the children are spans
+      // because a button may only hold phrasing content.
+      const li = el("li"), b = el("button", "recitem" + (state.sel === r.id ? " sel" : ""));
+      b.type = "button"; b.dataset.id = r.id;
+      const head = el("span", "rihead");
       head.appendChild(el("span", "rdot " + r.status));
       head.appendChild(el("span", "rsub", r.subject + (r.opponent ? ` <span style="color:var(--faint);font-weight:400">vs ${r.opponent}</span>` : "")));
       head.appendChild(el("span", "rdate", r.date.slice(5)));
       head.appendChild(el("span", "rlen", humanDur(r.duration)));
-      li.appendChild(head);
-      const tags = el("div", "ritags");
-      if (r.tags.tournament) tags.appendChild(el("span", "ttag tour", "tournament"));
+      b.appendChild(head);
+      const tags = el("span", "ritags");
+      if (r.tags.tournament) tags.appendChild(el("span", "ttag tour", tourLabel(r.tags.tournament).toLowerCase()));
       tags.appendChild(el("span", "ttag", r.tags.session_type));
       if (r.n_players === 2) tags.appendChild(el("span", "ttag", "2-player"));
-      li.appendChild(tags);
-      const spark = el("canvas", "spark"); li.appendChild(spark);
-      li.onclick = () => selectRec(r.id);
-      list.appendChild(li);
-      requestAnimationFrame(() => drawSpark(spark, r.spark, THEME.status[r.status] || "#b388ff"));
+      // quality was a 7px dot and a stroke colour and nothing else
+      tags.appendChild(el("span", "ttag q-" + r.status, QUALITY[r.status] || r.status));
+      b.appendChild(tags);
+      const spark = el("canvas", "spark"); spark.setAttribute("aria-hidden", "true"); b.appendChild(spark);
+      b.onclick = () => selectRec(r.id);
+      li.appendChild(b); list.appendChild(li);
+      // two rebuilds in one task (init does it on every deep link) leaves the first
+      // 191 canvases detached with 191 draws still queued against them.
+      requestAnimationFrame(() => { if (spark.isConnected) drawSpark(spark, r.spark, sparkCol(r)); });
     }
   }
 
@@ -279,7 +383,16 @@
   // through renderList(): that clears #reclist, which collapses the scroller and
   // throws the sidebar back to the top (and redraws all 191 sparklines for nothing).
   function markSelected() {
-    for (const li of $("#reclist").children) li.classList.toggle("sel", li.dataset.id === state.sel);
+    for (const b of $("#reclist").querySelectorAll(".recitem")) b.classList.toggle("sel", b.dataset.id === state.sel);
+  }
+  // A spark's backing store is sized in device px when the row is built, so a width
+  // change leaves every one of them stretched until an unrelated filter rebuilds the list.
+  function redrawSparks() {
+    const by = new Map(state.recs.map(r => [r.id, r]));
+    for (const b of $("#reclist").querySelectorAll(".recitem")) {
+      const cv = b.querySelector("canvas"), r = by.get(b.dataset.id);
+      if (cv && r) drawSpark(cv, r.spark, sparkCol(r));
+    }
   }
 
   // ── analysis window (studio viewer behaviour) ───────────────────────────────
@@ -353,8 +466,11 @@
     // Mid-drag the band follows the cursor even before it is wide enough to commit,
     // so the edges track the pointer; the y-scale only follows a committed window.
     const band = state.drag || state.view, scale = state.view;
+    // R − L is a difference of two electrodes, so it can swing to twice one electrode's
+    // full scale before anything clips. Its LIMIT belongs there, not at ceil_uv. robust
+    // keeps one rail excursion from squashing the real eye movements into a hairline.
     drawTrace(PLOT.d, r.t, [{ mn: r.diff.mn, mx: r.diff.mx, fill: THEME.ribFill, stroke: THEME.rib }], {
-      height: 240, center: true, ruler: true, ceil: r.ceil_uv, events: r.events,
+      height: 240, center: true, robust: true, ruler: true, ceil: r.ceil_uv * 2, events: r.events,
       unit: "µV", name: "R − L (right minus left)", nameColor: THEME.rib,
       band, scaleTo: scale, handles: true,
     });
@@ -365,12 +481,29 @@
   }
 
   // ── detail view ─────────────────────────────────────────────────────────────
+  // textContent, never innerHTML: a fetch failure can carry markup in its message,
+  // and the parser then swallows the status code and welds the sentences together.
+  function fail(msg) { const m = $("#main"); m.innerHTML = ""; const d = el("div", "empty"); d.textContent = msg; m.appendChild(d); }
   async function selectRec(id) {
     state.sel = id;
     $("#main").innerHTML = '<div class="empty">loading…</div>';
     markSelected();
-    try { state.detail = await DATA.rec(id); }
-    catch (e) { $("#main").innerHTML = `<div class="empty">Could not load recording (${e}).</div>`; return; }
+    // Two fast clicks race. The id is held here and re-checked after the await, so a
+    // late fetch can never paint over the row the reader actually chose, and the URL
+    // is written on both paths — list, panel and address bar always name the same id.
+    let rec;
+    try { rec = await DATA.rec(id); }
+    catch (e) {
+      if (state.sel !== id) return;
+      console.error("recording did not load:", id, e);
+      state.detail = null; state.view = null; state.drag = null; state.edge = null;
+      PLOT.d = PLOT.l = PLOT.r = null;      // the resize redraw must not find a stale canvas
+      fail("This recording could not be loaded. It may no longer be part of the corpus.");
+      syncURL();
+      return;
+    }
+    if (state.sel !== id) return;
+    state.detail = rec;
     state.view = clampView(pendingView, state.detail); pendingView = null; state.drag = null; state.edge = null;
     syncURL();
     renderDetail();
@@ -378,18 +511,26 @@
     // leave the reader looking at the list they just tapped.
     if (isPhone()) $("#main").scrollIntoView({ behavior: "smooth", block: "start" });
   }
+  // Everything this page has to say is on three canvases, and a canvas says nothing.
+  function plotAlt(cv, r, name, nev) {
+    cv.setAttribute("role", "img");
+    cv.setAttribute("aria-label",
+      `${name}: ${humanDur(r.duration)} at ${r.fs} samples per second, ` +
+      `${(r.rail_pct || 0).toFixed(1)}% of samples at the amplifier limit, ` +
+      `${nev} event mark${nev === 1 ? "" : "s"} drawn.`);
+  }
   function renderDetail() {
     const r = state.detail, main = $("#main"); main.innerHTML = "";
     const row = state.recs.find(x => x.id === r.id) || {};
     const wrap = el("div", "detail");
 
     const head = el("div", "dhead");
-    const ttl = el("div"); ttl.appendChild(el("div", "dtitle", r.subject + (row.opponent ? ` <span class="opp">vs ${row.opponent}</span>` : "")));
+    const ttl = el("div"); ttl.appendChild(el("h2", "dtitle", r.subject + (row.opponent ? ` <span class="opp">vs ${row.opponent}</span>` : "")));
     ttl.appendChild(el("div", "dsub", `${r.date} · ${r.time} · ${humanDur(r.duration)} · ${r.fs} samples/s`));
     head.appendChild(ttl); wrap.appendChild(head);
 
     const badges = el("div", "badges");
-    if (r.tags.tournament) badges.appendChild(el("span", "badge tour", "🏆 Tournament"));
+    if (r.tags.tournament) badges.appendChild(el("span", "badge tour", "🏆 " + tourLabel(r.tags.tournament)));
     badges.appendChild(el("span", "badge", `<b>${r.tags.session_type}</b>`));
     if (r.n_players === 2) badges.appendChild(el("span", "badge", "2-player"));
     const q = QUALITY[r.status] || r.status;
@@ -410,15 +551,21 @@
     const stack = el("div", "stack");
     const lrow = el("div", "chrow"), lcv = el("canvas"); lrow.appendChild(lcv);
     const rrow = el("div", "chrow"), rcv = el("canvas"); rrow.appendChild(rcv);
+    // The aria-label and the legend must report what the plot actually draws, so both
+    // read the same selection. Only the R−L plot is given the events, so only it marks.
+    const [ea, eb] = fullRange(r), ev = evPick(r.events, ea, eb);
+    plotAlt(dcv, r, "R minus L, the right electrode minus the left", ev.shown.length);
+    plotAlt(lcv, r, "Left electrode alone", 0);
+    plotAlt(rcv, r, "Right electrode alone", 0);
     stack.appendChild(lrow); stack.appendChild(rrow); card.appendChild(stack);
 
-    if (r.events && r.events.length) {
+    if (ev.shown.length || ev.dropped) {
       const key = el("div", "eventkey");
-      const kinds = [...new Set(r.events.map(e => e.label))];
-      const shown = kinds.slice(0, 6);
-      key.appendChild(el("span", null, `<b>${r.events.length}</b> events`));
-      for (const k of shown) key.appendChild(el("span", null, k));
-      if (kinds.length > 6) key.appendChild(el("span", null, `+${kinds.length - 6} more`));
+      const names = [...new Set(ev.shown.map(e => e.text))];
+      key.appendChild(el("span", null, `<b>${ev.shown.length}</b> events drawn`));
+      for (const k of names.slice(0, 6)) key.appendChild(el("span", null, k));
+      if (names.length > 6) key.appendChild(el("span", null, `+${names.length - 6} more`));
+      if (ev.dropped) key.appendChild(el("span", null, `${ev.dropped} not drawn`));   // never let the count overstate the plot
       card.appendChild(key);
     }
     wrap.appendChild(card);
@@ -452,13 +599,23 @@
     d.appendChild(leg);
     main.appendChild(d);
   }
+  // The dashboard is the only place that says what EOG is, and state.sel was a one-way
+  // door: opening one recording hid that explanation for the rest of the session.
+  function goHome() {
+    state.sel = null; state.detail = null; state.view = null; state.drag = null; state.edge = null;
+    PLOT.d = PLOT.l = PLOT.r = null; pendingView = null;
+    markSelected();
+    syncURL();          // state.sel is null, so rec/t0/t1 fall out of the query string
+    renderDashboard();
+  }
+  window.__goHome = goHome;   // the brand link calls this; still exported so a test can drive it
 
   // ── about modal ─────────────────────────────────────────────────────────────
   function showAbout() {
     const m = $("#aboutModal");
     m.innerHTML = "";
     const box = el("div", "box");
-    box.innerHTML = `<h2>About this site</h2>
+    box.innerHTML = `<h2 id="aboutTitle">About this site</h2>
       <p><b>BrainPong</b> is a hobby project: play Pong with your eyes. Two electrodes beside the eyes read
       <b>electrooculography</b> (EOG) — the natural voltage of the eye, which shifts when you glance left or right.
       A Cerelog X8 board digitizes the voltage, and the game moves the paddle from it in real time.
@@ -468,8 +625,10 @@
         <li><b style="color:#7ef0b0">R − L</b> — the right electrode minus the left electrode. This is the signal
         the game reads. A glance right moves the trace up; a glance left moves it down.</li>
         <li><b style="color:#4ea8ff">Left</b> / <b style="color:#ff9d5c">Right</b> — each electrode alone, unfiltered.</li>
-        <li><b style="color:#ff6b81">LIMIT</b> — red dashed lines mark the amplifier's range. A trace pinned there
-        is clipped, not real signal. Recordings marked <i>clipped</i> or <i>flat</i> had electrode problems.</li>
+        <li><b style="color:#ff6b81">LIMIT</b> — red dashed lines mark how far that plot's trace can go before it
+        clips: one electrode's full scale on <b>Left</b> and <b>Right</b>, and twice that on <b>R − L</b>, because the
+        difference of two electrodes can reach twice as far. A trace pinned on the lines is clipped, not real signal.
+        Recordings marked <i>clipped</i> or <i>flat</i> had electrode problems.</li>
         <li>Vertical colored lines are game or cue events (for example a <b style="color:#5b8cff">LEFT</b> /
         <b style="color:#ff9d5c">RIGHT</b> cue during a training run).</li>
       </ul>
@@ -480,11 +639,13 @@
       individuals.</p>
       <p>More: <a href="cmrr/">why bad electrode contact ruins the signal ↗</a> ·
       <a href="https://github.com/hoeksemaa/brain-pong">source code on GitHub ↗</a></p>
-      <button class="tbtn close">Close</button>`;
-    m.appendChild(box); m.hidden = false;
-    const close = () => { m.hidden = true; };
-    box.querySelector(".close").onclick = close;
-    m.onclick = e => { if (e.target === m) close(); };
+      <button class="tbtn close" type="button" autofocus>Close</button>`;
+    m.appendChild(box);
+    // showModal(), not a hidden attribute: Escape, the top layer, focus containment and
+    // focus restore to the About button all come from the platform this way.
+    m.showModal();
+    box.querySelector(".close").onclick = () => m.close();
+    m.onclick = e => { if (e.target === m) m.close(); };   // the dialog fills the viewport, so it is the scrim
   }
 
   const isPhone = () => window.matchMedia("(max-width:860px)").matches;
@@ -502,27 +663,44 @@
   async function init() {
     let meta, manifest;
     try { [meta, manifest] = await Promise.all([DATA.meta(), DATA.manifest()]); }
-    catch (e) { $("#main").innerHTML = `<div class="empty">Could not load portal data (${e}).<br>Run <code>python scripts/bake_portal.py</code> then reload.</div>`; return; }
-    state.meta = meta; state.recs = manifest.recordings;
+    catch (e) {
+      // Whoever reads this screen followed a shared link and cannot run a bake script.
+      console.error("portal data did not load:", e);
+      fail("The recordings could not be loaded. Please reload the page, or try again shortly.");
+      return;
+    }
+    state.meta = meta; state.recs = manifest.recordings;   // loadURL checks the taxonomy, so meta must be in place first
     const selId = loadURL();
     renderStats();
     renderFilters();
     $("#search").value = state.f.q;
-    $("#search").oninput = e => { state.f.q = e.target.value; recompute(); };
+    const search = debounce(recompute, 150);               // otherwise every keystroke rebuilds 191 rows and 191 canvases
+    $("#search").oninput = e => { state.f.q = e.target.value; search(); };
     $("#aboutBtn").onclick = showAbout;
+    // the brand is the only way back to the dashboard once a recording is open
+    $("#homeLink").onclick = e => { e.preventDefault(); goHome(); };
     syncFilterBox();
     recompute();
     if (selId && state.recs.some(r => r.id === selId)) await selectRec(selId);
     else renderDashboard();
+    window.addEventListener("popstate", () => {
+      const id = loadURL();
+      renderFilters(); $("#search").value = state.f.q; recompute();
+      if (!id || !state.recs.some(r => r.id === id)) { goHome(); return; }
+      // Same recording, different window: rescale in place rather than re-fetching it.
+      if (id === state.sel && state.detail) { applyView(clampView(pendingView, state.detail)); pendingView = null; }
+      else selectRec(id);
+    });
     let lastW = window.innerWidth;
-    window.addEventListener("resize", () => {
-      syncFilterBox();
-      // Height-only resizes are the phone address bar showing/hiding. Rebuilding
-      // the detail there would throw away the reader's scroll position on a scroll.
+    const onResize = debounce(() => {
+      // Height-only resizes are the phone address bar showing/hiding. Acting on them
+      // would throw away the reader's scroll position on a scroll.
       if (window.innerWidth === lastW) return;
       lastW = window.innerWidth;
-      if (state.detail && state.sel) renderDetail();
-    });
+      if (state.detail) drawPlots();   // redraw the canvases; renderDetail would rebuild #main and reset the scroll
+      redrawSparks();
+    }, 150);
+    window.addEventListener("resize", () => { syncFilterBox(); onResize(); });
     window.__ready = true;
   }
   document.addEventListener("DOMContentLoaded", init);

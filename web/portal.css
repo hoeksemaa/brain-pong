@@ -2,7 +2,9 @@
 :root{
   --bg:#0b0e14; --bg2:#0d1019; --panel:#10141d; --panel2:#141b2b;
   --line:#1e2430; --line2:#2a3550;
-  --ink:#e6e9f0; --ink2:#aeb6c7; --muted:#8b93a7; --faint:#6b7387;
+  /* --faint also lands on the selected row (#171d2b), the lightest ground it sits on;
+     4.5:1 there is what sets its value — #6b7387 measured 3.55:1. */
+  --ink:#e6e9f0; --ink2:#aeb6c7; --muted:#8b93a7; --faint:#7f879a;
   --accent:#6e8bff; --accent-ink:#aab6ff; --accent2:#2dd4bf; --accent3:#b388ff;
   --rib:#7ef0b0; --rail:#ff6b81;
   --ok:#34d399; --warn:#fbbf24; --bad:#fb7185;
@@ -13,11 +15,14 @@
 html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:13.5px/1.5 var(--ui)}
 button,input{font-family:inherit}
 a{color:var(--accent-ink);text-decoration:none}
+/* every control on the page is reachable by keyboard, so every control has to show it */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
 
 /* ── top bar ── */
 .topbar{display:flex;align-items:center;gap:20px;padding:11px 18px;background:var(--bg2);border-bottom:1px solid var(--line);flex-wrap:wrap}
-.brand{font-size:15px;font-weight:700;white-space:nowrap}
+.brand{margin:0;font-size:15px;font-weight:700;white-space:nowrap}
+.brand a{color:inherit}
 .brand b{color:var(--accent);font-weight:800;margin-right:2px}
 .brand span{color:var(--muted);font-weight:600;font-size:13px;margin-left:4px}
 .corpus-stats{display:flex;gap:18px;flex-wrap:wrap;flex:1;min-width:200px}
@@ -34,13 +39,13 @@ a{color:var(--accent-ink);text-decoration:none}
 .sidebar{background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
 .searchwrap{padding:12px 12px 8px}
 #search{width:100%;background:var(--panel);border:1px solid var(--line2);border-radius:9px;color:var(--ink);padding:8px 11px;font-size:12.5px}
-#search:focus{outline:none;border-color:var(--accent)}
+#search:focus{border-color:var(--accent)}
 .filterbox{border-bottom:1px solid var(--line);min-height:0;display:flex;flex-direction:column}
 .filterbox>summary{display:none}
 .filters{padding:0 12px 6px;overflow:auto;max-height:46vh}
 .fgroup{margin-bottom:11px}
-.fgroup h4{margin:8px 0 6px;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);display:flex;justify-content:space-between}
-.fgroup h4 .clr{color:var(--accent-ink);cursor:pointer;font-weight:700;letter-spacing:0;text-transform:none}
+.fgroup .fh{margin:8px 0 6px;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);display:flex;justify-content:space-between}
+.fgroup .fh .clr{background:transparent;border:0;padding:0;font:inherit;color:var(--accent-ink);cursor:pointer;font-weight:700;letter-spacing:0;text-transform:none}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chip{font-size:11.5px;padding:4px 10px;border:1px solid var(--line2);border-radius:999px;color:var(--muted);background:transparent;cursor:pointer;transition:all .12s;white-space:nowrap}
 .chip:hover{color:var(--ink2);border-color:#38445c}
@@ -60,25 +65,35 @@ a{color:var(--accent-ink);text-decoration:none}
 .listmeta{display:flex;align-items:center;justify-content:space-between;padding:9px 14px 7px;font-size:11px;color:var(--muted);border-bottom:1px solid var(--line)}
 .listmeta .sortbtn{background:transparent;border:1px solid var(--line2);color:var(--ink2);border-radius:7px;padding:3px 9px;font-size:11px;cursor:pointer}
 .reclist{list-style:none;margin:0;padding:8px 10px;overflow:auto;flex:1}
-.recitem{padding:10px 11px;border:1px solid transparent;border-radius:11px;margin-bottom:7px;cursor:pointer;transition:background .12s}
+.reclist li{list-style:none}
+/* the row is a <button> so Enter, Space and focus come for free; these resets are only
+   here to make it render exactly like the <li> it used to be */
+.recitem{display:block;width:100%;text-align:left;font:inherit;color:inherit;background:transparent;
+  padding:10px 11px;border:1px solid transparent;border-radius:11px;margin-bottom:7px;cursor:pointer;transition:background .12s}
 .recitem:hover{background:#161b26}
 .recitem.sel{background:#171d2b;border-color:var(--line2);box-shadow:0 0 0 1px #6e8bff22}
 .rihead{display:flex;align-items:baseline;gap:8px}
 .rdot{width:7px;height:7px;border-radius:50%;flex:none;align-self:center}
-.rdot.ok{background:var(--ok)}.rdot.railing{background:var(--bad)}.rdot.flat{background:var(--warn)}
+/* green on red is 1.40:1, so the shape has to say it too: disc / square / bar */
+.rdot.ok{background:var(--ok)}
+.rdot.railing{background:var(--bad);border-radius:1px}
+.rdot.flat{background:var(--warn);height:3px;border-radius:1px}
 .rsub{font-weight:700;font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
 .rdate{color:var(--muted);font-size:11px;font-family:var(--mono);white-space:nowrap}
 .rlen{color:var(--faint);font-size:11px;font-family:var(--mono)}
 .ritags{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
 .ttag{font-size:9.5px;padding:1px 6px;border-radius:5px;background:#1a2233;color:var(--muted);letter-spacing:.02em}
 .ttag.tour{background:#3a2d17;color:#ffcf8f}
+.ttag.q-ok{background:#34d39916;color:var(--ok)}
+.ttag.q-railing{background:#fb718516;color:var(--bad)}
+.ttag.q-flat{background:#fbbf2416;color:var(--warn)}
 .spark{width:100%;display:block;margin-top:6px}
 
 /* ── main ── */
 .main{overflow:auto;padding:0}
 .detail{padding:18px 22px 40px;max-width:1200px}
 .dhead{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:6px}
-.dhead .dtitle{font-size:19px;font-weight:800}
+.dhead .dtitle{margin:0;font-size:19px;font-weight:800}
 .dhead .dsub{font-size:12.5px;color:var(--muted);font-family:var(--mono)}
 .dhead .opp{color:var(--accent3)}
 .badges{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0 18px}
@@ -121,8 +136,12 @@ a{color:var(--accent-ink);text-decoration:none}
 .empty{padding:60px;color:var(--muted);text-align:center}
 
 /* about modal */
-.modal{position:fixed;inset:0;background:rgba(5,7,11,.72);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
-.modal[hidden]{display:none}
+/* a real <dialog>: Escape, the top layer, the focus trap and focus restore all come from
+   the platform. The element itself fills the viewport, so it is also the scrim's hit area. */
+.modal{position:fixed;inset:0;width:100%;max-width:100%;height:100%;max-height:100%;margin:0;border:0;
+  background:transparent;color:var(--ink);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
+.modal:not([open]){display:none}
+.modal::backdrop{background:rgba(5,7,11,.72)}
 .modal .box{background:var(--panel);border:1px solid var(--line2);border-radius:16px;max-width:640px;max-height:88vh;overflow:auto;padding:26px 28px;line-height:1.6}
 .modal h2{margin:0 0 10px;font-size:18px}
 .modal p{color:var(--ink2);margin:0 0 12px}
