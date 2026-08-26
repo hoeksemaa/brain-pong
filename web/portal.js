@@ -13,6 +13,7 @@
     evL: "#5b8cff", evR: "#ff9d5c", evO: "#5b6b86",
     L: "#4ea8ff", R: "#ff9d5c",
     status: { ok: "#34d399", railing: "#fb7185", flat: "#fbbf24" },
+    sel: "rgba(110,139,255,0.16)", selEdge: "#6e8bff",
   };
   const PADL = 46, PADR = 10;
   const $ = (s, r = document) => r.querySelector(s);
@@ -37,9 +38,14 @@
 
   const state = {
     meta: null, recs: [], filtered: [], sel: null, detail: null,
+    view: null,        // {t0,t1} zoom window, null = whole recording
+    drag: null,        // {t0,t1} band being dragged out right now
     sortDesc: true,
     f: { q: "", tour: null, st: new Set(), qual: new Set(), df: "", dt: "" },
   };
+
+  const PLOT = { d: null, l: null, r: null, cv: null };   // live canvases + the one being dragged
+  let pendingView = null;                                  // ?t0/?t1 from the URL, applied once
 
   // ── canvas kit ──────────────────────────────────────────────────────────────
   function setup(cv, h) {
@@ -48,24 +54,34 @@
     const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
     return { ctx, w, h };
   }
-  function envelope(ctx, t, mn, mx, xm, ym, fill, stroke) {
-    ctx.beginPath(); ctx.moveTo(xm(t[0]), ym(mx[0]));
-    for (let i = 1; i < t.length; i++) ctx.lineTo(xm(t[i]), ym(mx[i]));
-    for (let i = t.length - 1; i >= 0; i--) ctx.lineTo(xm(t[i]), ym(mn[i]));
+  function envelope(ctx, t, mn, mx, xm, ym, fill, stroke, lo, hi) {
+    if (hi <= lo) return;
+    ctx.beginPath(); ctx.moveTo(xm(t[lo]), ym(mx[lo]));
+    for (let i = lo + 1; i <= hi; i++) ctx.lineTo(xm(t[i]), ym(mx[i]));
+    for (let i = hi; i >= lo; i--) ctx.lineTo(xm(t[i]), ym(mn[i]));
     ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
-    if (stroke) { ctx.beginPath(); for (let i = 0; i < t.length; i++){const y=ym((mn[i]+mx[i])/2); i?ctx.lineTo(xm(t[i]),y):ctx.moveTo(xm(t[i]),y);} ctx.strokeStyle=stroke; ctx.lineWidth=1.1; ctx.stroke(); }
+    if (stroke) { ctx.beginPath(); for (let i = lo; i <= hi; i++){const y=ym((mn[i]+mx[i])/2); i>lo?ctx.lineTo(xm(t[i]),y):ctx.moveTo(xm(t[i]),y);} ctx.strokeStyle=stroke; ctx.lineWidth=1.1; ctx.stroke(); }
   }
   function drawTrace(cv, t, series, opts) {
     opts = opts || {};
     const { ctx, w, h } = setup(cv, opts.height || 70);
     if (!t || !t.length) { ctx.fillStyle = THEME.panel; ctx.fillRect(0,0,w,h); return; }
-    const padT = 8, padB = opts.ruler ? 18 : 8, x0 = t[0], x1 = t[t.length-1];
+    const padT = 8, padB = opts.ruler ? 18 : 8;
+    // Slice to the zoom window rather than clipping: it keeps the fill inside the
+    // box AND makes the y-axis scale to the visible signal instead of to a rail
+    // excursion parked somewhere off screen.
+    let lo = 0, hi = t.length - 1;
+    if (opts.view) {
+      while (lo < hi && t[lo + 1] <= opts.view.t0) lo++;
+      while (hi > lo && t[hi - 1] >= opts.view.t1) hi--;
+    }
+    const x0 = opts.view ? opts.view.t0 : t[lo], x1 = opts.view ? opts.view.t1 : t[hi];
     const xm = tt => lerp(PADL, w - PADR, (tt - x0) / (x1 - x0 || 1));
     let off = 0;
-    if (opts.center) { const m=[]; for (const s of series) for (let i=0;i<t.length;i++) m.push((s.mn[i]+s.mx[i])/2); off = median(m); }
+    if (opts.center) { const m=[]; for (const s of series) for (let i=lo;i<=hi;i++) m.push((s.mn[i]+s.mx[i])/2); off = median(m); }
     let A;
-    if (opts.robust) { const av=[]; for (const s of series) for (let i=0;i<t.length;i++) av.push(Math.abs(s.mn[i]-off),Math.abs(s.mx[i]-off)); A=pctl(av,99)*1.15; }
-    else { A=1e-6; for (const s of series) for (let i=0;i<t.length;i++) A=Math.max(A,Math.abs(s.mn[i]-off),Math.abs(s.mx[i]-off)); A*=1.12; }
+    if (opts.robust) { const av=[]; for (const s of series) for (let i=lo;i<=hi;i++) av.push(Math.abs(s.mn[i]-off),Math.abs(s.mx[i]-off)); A=pctl(av,99)*1.15; }
+    else { A=1e-6; for (const s of series) for (let i=lo;i<=hi;i++) A=Math.max(A,Math.abs(s.mn[i]-off),Math.abs(s.mx[i]-off)); A*=1.12; }
     A = Math.max(A, 1e-6);
     const ym = v => lerp(padT, h - padB, (A - (v - off)) / (2 * A));
 
@@ -92,14 +108,24 @@
         if (letters){ ctx.fillStyle=col; ctx.font="9px "+THEME.mono; ctx.textAlign="center"; ctx.fillText(e.label[0], x, padT+9); }
       }
     }
-    for (const s of series) envelope(ctx, t, s.mn, s.mx, xm, ym, s.fill, s.stroke);
+    for (const s of series) envelope(ctx, t, s.mn, s.mx, xm, ym, s.fill, s.stroke, lo, hi);
+
+    if (opts.band) {   // the drag in progress
+      const a = clamp(xm(Math.min(opts.band.t0, opts.band.t1)), PADL, w-PADR);
+      const b = clamp(xm(Math.max(opts.band.t0, opts.band.t1)), PADL, w-PADR);
+      ctx.fillStyle = THEME.sel; ctx.fillRect(a, padT, b-a, (h-padB)-padT);
+      ctx.strokeStyle = THEME.selEdge; ctx.lineWidth = 1;
+      for (const x of [a,b]) { ctx.beginPath(); ctx.moveTo(x,padT); ctx.lineTo(x,h-padB); ctx.stroke(); }
+    }
 
     ctx.fillStyle = THEME.muted; ctx.font = "10px "+THEME.mono; ctx.textAlign = "right";
     const lab = v => v>=1000?(v/1000).toFixed(v>=10000?0:1)+"k":v.toFixed(A<10?1:0);
     ctx.fillText(`+${lab(A)}`, PADL-5, padT+9); ctx.fillText(`-${lab(A)}`, PADL-5, h-padB-2);
     if (opts.unit){ ctx.save(); ctx.translate(11,(padT+h-padB)/2); ctx.rotate(-Math.PI/2); ctx.textAlign="center"; ctx.fillStyle=THEME.muted; ctx.font="9px "+THEME.mono; ctx.fillText(opts.unit,0,0); ctx.restore(); }
     if (opts.name){ ctx.fillStyle=opts.nameColor||THEME.text; ctx.textAlign="left"; ctx.font="600 11px "+THEME.ui; ctx.fillText(opts.name, PADL+4, padT+11); }
-    if (opts.ruler){ ctx.fillStyle=THEME.muted; ctx.font="10px "+THEME.mono; ctx.textAlign="center"; for(let i=0;i<=8;i++){const tt=lerp(x0,x1,i/8);ctx.fillText(tt.toFixed(0)+"s",xm(tt),h-4);} }
+    if (opts.ruler){ ctx.fillStyle=THEME.muted; ctx.font="10px "+THEME.mono; ctx.textAlign="center";
+      const dp = (x1-x0) >= 40 ? 0 : (x1-x0) >= 8 ? 1 : 2;
+      for(let i=0;i<=8;i++){const tt=lerp(x0,x1,i/8);ctx.fillText(tt.toFixed(dp)+"s",xm(tt),h-4);} }
   }
   function drawSpark(cv, spark, color) {
     const { ctx, w, h } = setup(cv, 20);
@@ -136,6 +162,7 @@
     setCSV("st", f.st); setCSV("qual", f.qual);
     if (f.df) p.set("df", f.df); if (f.dt) p.set("dt", f.dt);
     if (state.sel) p.set("rec", state.sel);
+    if (state.sel && state.view) { p.set("t0", state.view.t0.toFixed(3)); p.set("t1", state.view.t1.toFixed(3)); }
     const qs = p.toString();
     history.replaceState(null, "", qs ? "?" + qs : location.pathname);
   }
@@ -146,6 +173,8 @@
     const getCSV = (k, s) => { const v = p.get(k); if (v) v.split(",").forEach(x => s.add(x)); };
     getCSV("st", f.st); getCSV("qual", f.qual);
     f.df = p.get("df") || ""; f.dt = p.get("dt") || "";
+    const t0 = parseFloat(p.get("t0")), t1 = parseFloat(p.get("t1"));
+    pendingView = (isFinite(t0) && isFinite(t1) && t1 > t0) ? { t0, t1 } : null;
     return p.get("rec");
   }
 
@@ -244,6 +273,69 @@
     for (const li of $("#reclist").children) li.classList.toggle("sel", li.dataset.id === state.sel);
   }
 
+  // ── zoom (drag a span on any trace; all three share one time axis) ──────────
+  // Below three buckets there is nothing left to draw: the bake decimates each
+  // recording to ~1400 min/max buckets, so this is the real resolution floor.
+  function minSpan(r) { const t = r && r.t; return (t && t.length > 1) ? 3 * (t[t.length-1] - t[0]) / (t.length - 1) : 0; }
+  function fullRange(r) { const t = r.t; return [t[0], t[t.length-1]]; }
+  function clampView(v, r) {
+    if (!v || !r || !r.t || r.t.length < 2) return null;
+    const [a, b] = fullRange(r);
+    const t0 = clamp(Math.min(v.t0, v.t1), a, b), t1 = clamp(Math.max(v.t0, v.t1), a, b);
+    return (t1 - t0) >= minSpan(r) ? { t0, t1 } : null;
+  }
+  function evtToT(e, cv) {
+    const rect = cv.getBoundingClientRect(), r = state.detail;
+    const [a, b] = state.view ? [state.view.t0, state.view.t1] : fullRange(r);
+    const f = (e.clientX - rect.left - PADL) / (rect.width - PADL - PADR);
+    return clamp(a + (b - a) * f, a, b);
+  }
+  function setView(v) { state.view = v; syncURL(); syncZoomUI(); drawPlots(); }
+  function syncZoomUI() {
+    const box = $("#zoombox"); if (!box) return;
+    box.innerHTML = ""; box.hidden = !state.view;
+    if (!state.view) return;
+    const { t0, t1 } = state.view, dp = (t1 - t0) >= 8 ? 1 : 2;
+    box.appendChild(el("span", "zrange", `${t0.toFixed(dp)}–${t1.toFixed(dp)}s`));
+    const b = el("button", "zreset", "reset");
+    b.onclick = () => setView(null);
+    box.appendChild(b);
+  }
+  function attachZoom(cv) {
+    cv.addEventListener("pointerdown", e => {
+      if (e.button || !state.detail) return;
+      const tt = evtToT(e, cv);
+      state.drag = { t0: tt, t1: tt }; PLOT.cv = cv;
+      cv.setPointerCapture(e.pointerId);          // keeps the drag alive outside the canvas
+      drawPlots(); e.preventDefault();
+    });
+    cv.addEventListener("pointermove", e => {
+      if (!state.drag || PLOT.cv !== cv) return;
+      state.drag.t1 = evtToT(e, cv); drawPlots();
+    });
+    const end = () => {
+      if (!state.drag || PLOT.cv !== cv) return;
+      const d = state.drag; state.drag = null; PLOT.cv = null;
+      const v = clampView(d, state.detail);
+      v ? setView(v) : drawPlots();               // too short to be a drag: treat as a click
+    };
+    cv.addEventListener("pointerup", end);
+    cv.addEventListener("pointercancel", end);
+    cv.addEventListener("dblclick", () => setView(null));
+  }
+  function drawPlots() {
+    const r = state.detail; if (!r || !PLOT.d) return;
+    const view = state.view, band = state.drag;
+    drawTrace(PLOT.d, r.t, [{ mn: r.diff.mn, mx: r.diff.mx, fill: THEME.ribFill, stroke: THEME.rib }], {
+      height: 240, center: true, ruler: true, ceil: r.ceil_uv, events: r.events,
+      unit: "µV", name: "R − L (right minus left)", nameColor: THEME.rib, view, band,
+    });
+    drawTrace(PLOT.l, r.t, [{ mn: r.channels.l.mn, mx: r.channels.l.mx, fill: hexA(THEME.L, .12), stroke: THEME.L }],
+      { height: 116, center: true, robust: true, ceil: r.ceil_uv, unit: "µV", name: "Left electrode", nameColor: THEME.L, view, band });
+    drawTrace(PLOT.r, r.t, [{ mn: r.channels.r.mn, mx: r.channels.r.mx, fill: hexA(THEME.R, .12), stroke: THEME.R }],
+      { height: 116, center: true, robust: true, ceil: r.ceil_uv, ruler: true, unit: "µV", name: "Right electrode", nameColor: THEME.R, view, band });
+  }
+
   // ── detail view ─────────────────────────────────────────────────────────────
   async function selectRec(id) {
     state.sel = id;
@@ -251,6 +343,7 @@
     markSelected();
     try { state.detail = await DATA.rec(id); }
     catch (e) { $("#main").innerHTML = `<div class="empty">Could not load recording (${e}).</div>`; return; }
+    state.view = clampView(pendingView, state.detail); pendingView = null; state.drag = null;
     syncURL();
     renderDetail();
   }
@@ -277,6 +370,7 @@
     const card = el("div", "card");
     const ch = el("div", "cardhead");
     ch.appendChild(el("span", "clabel", "RAW SIGNAL"));
+    const zb = el("span", "zoombox"); zb.id = "zoombox"; zb.hidden = true; ch.appendChild(zb);
     card.appendChild(ch);
 
     const pp = el("div", "plot");
@@ -299,16 +393,10 @@
     wrap.appendChild(card);
     main.appendChild(wrap);
 
-    requestAnimationFrame(() => {
-      drawTrace(dcv, r.t, [{ mn: r.diff.mn, mx: r.diff.mx, fill: THEME.ribFill, stroke: THEME.rib }], {
-        height: 240, center: true, ruler: true, ceil: r.ceil_uv, events: r.events,
-        unit: "µV", name: "R − L (right minus left)", nameColor: THEME.rib,
-      });
-      drawTrace(lcv, r.t, [{ mn: r.channels.l.mn, mx: r.channels.l.mx, fill: hexA(THEME.L, .12), stroke: THEME.L }],
-        { height: 116, center: true, robust: true, ceil: r.ceil_uv, unit: "µV", name: "Left electrode", nameColor: THEME.L });
-      drawTrace(rcv, r.t, [{ mn: r.channels.r.mn, mx: r.channels.r.mx, fill: hexA(THEME.R, .12), stroke: THEME.R }],
-        { height: 116, center: true, robust: true, ceil: r.ceil_uv, ruler: true, unit: "µV", name: "Right electrode", nameColor: THEME.R });
-    });
+    PLOT.d = dcv; PLOT.l = lcv; PLOT.r = rcv; PLOT.cv = null;
+    for (const cv of [dcv, lcv, rcv]) attachZoom(cv);
+    syncZoomUI();
+    requestAnimationFrame(drawPlots);
   }
 
   // ── dashboard (nothing selected) ────────────────────────────────────────────
@@ -384,6 +472,7 @@
     if (selId && state.recs.some(r => r.id === selId)) await selectRec(selId);
     else renderDashboard();
     window.addEventListener("resize", () => { if (state.detail && state.sel) renderDetail(); });
+    window.addEventListener("keydown", e => { if (e.key === "Escape" && state.view) setView(null); });
     window.__ready = true;
   }
   document.addEventListener("DOMContentLoaded", init);
