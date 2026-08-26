@@ -35,7 +35,9 @@ a{color:var(--accent-ink);text-decoration:none}
 .searchwrap{padding:12px 12px 8px}
 #search{width:100%;background:var(--panel);border:1px solid var(--line2);border-radius:9px;color:var(--ink);padding:8px 11px;font-size:12.5px}
 #search:focus{outline:none;border-color:var(--accent)}
-.filters{padding:0 12px 6px;overflow:auto;max-height:46%;border-bottom:1px solid var(--line)}
+.filterbox{border-bottom:1px solid var(--line);min-height:0;display:flex;flex-direction:column}
+.filterbox>summary{display:none}
+.filters{padding:0 12px 6px;overflow:auto;max-height:46vh}
 .fgroup{margin-bottom:11px}
 .fgroup h4{margin:8px 0 6px;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);display:flex;justify-content:space-between}
 .fgroup h4 .clr{color:var(--accent-ink);cursor:pointer;font-weight:700;letter-spacing:0;text-transform:none}
@@ -96,8 +98,10 @@ a{color:var(--accent-ink);text-decoration:none}
 .plot canvas{width:100%;display:block;border-radius:8px}
 .stack{padding:10px 12px 13px;display:flex;flex-direction:column;gap:9px}
 .chrow canvas{width:100%;display:block;border:1px solid var(--line);border-radius:8px}
-/* the R−L plot takes the window drag; the electrode plots only reflect it */
-.plot canvas{cursor:crosshair;touch-action:none}
+/* the R−L plot takes the window drag; the electrode plots only reflect it.
+   pan-y keeps a vertical swipe scrolling the page while a sideways drag
+   still sets the window — touch-action:none would trap the scroll. */
+.plot canvas{cursor:crosshair;touch-action:pan-y}
 .zoombox{margin-left:auto;display:flex;align-items:center;gap:9px}
 .zoombox[hidden]{display:none}
 .zrange{font-family:var(--mono);font-size:11px;color:var(--accent-ink)}
@@ -126,8 +130,46 @@ a{color:var(--accent-ink);text-decoration:none}
 .modal li{margin-bottom:7px}
 .modal .close{margin-top:8px}
 
+/* ── phones ──
+   The desktop shell is a fixed 100vh box with two independently scrolling panes.
+   That cannot work on a phone: the panes divide one short viewport, so the detail
+   gets a sliver and the document itself cannot scroll to reach it. Below the
+   breakpoint the shell becomes an ordinary flowing document instead. */
 @media (max-width:860px){
-  .body{grid-template-columns:1fr;grid-template-rows:auto 1fr}
-  .sidebar{max-height:44vh}
-  .filters{max-height:38vh}
+  html,body{height:auto}
+  .app{height:auto;min-height:100vh;overflow:visible}
+  .body{display:block;overflow:visible}
+  .sidebar{border-right:none;border-bottom:1px solid var(--line);overflow:visible}
+  .main{overflow:visible}
+
+  /* filters fold away, so a shared ?rec= link is not buried under four groups */
+  .filterbox>summary{display:flex;align-items:center;gap:7px;list-style:none;cursor:pointer;
+    padding:10px 14px;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .filterbox>summary::-webkit-details-marker{display:none}
+  .filterbox>summary::after{content:"▾";font-size:12px;letter-spacing:0}
+  .filterbox[open]>summary::after{content:"▴"}
+  .filterbox>summary:hover{color:var(--ink2)}
+  .filters{max-height:none}
+
+  /* the list scrolls inside a capped box; the page scrolls past it to the detail */
+  .reclist{max-height:52vh}
+
+  /* comfortable touch targets */
+  .chip{padding:7px 13px;font-size:12.5px}
+  .tbtn,.listmeta .sortbtn{padding:8px 13px}
+  .recitem{padding:12px 12px}
+  .zreset{padding:6px 12px}
+
+  /* the top bar has to give the content room */
+  .topbar{gap:10px 14px;padding:9px 14px}
+  /* the base rule is flex:1 (basis 0), so width:100% is ignored and the stats
+     get squeezed to a few px. Give them a real basis so they wrap to own row. */
+  .corpus-stats{flex:1 0 100%;gap:14px;order:3;min-width:0}
+  .cstat .v{font-size:13.5px}
+  .cstat .k{font-size:9px}
+  .detail{padding:14px 12px 32px}
+  .dhead .dtitle{font-size:17px}
+  .dhead .dsub{font-size:11.5px}
+  .modal{padding:12px}
+  .modal .box{padding:20px 18px}
 }
