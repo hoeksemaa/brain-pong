@@ -5,7 +5,11 @@ left/right eye movements off a [Cerelog X8](https://cerelog.com) and drives the 
 The setup is receive-only — it measures the small natural voltages your eye movements produce on the
 skin; nothing is ever sent back into the body.
 
-![BrainPong — a live 2-player EOG match. The right-hand panels are each player's eye signal; the green/red bands mark every glance the detector fires on as it drives the paddles.](assets/brainpong-demo.gif)
+![The last match of the 2026-08-17 tournament, replayed — Player Q (top) vs Player U (bottom). The right-hand panels are each player's eye signal; the green/red bands mark every glance the detector fires on as it drives the paddles.](assets/brainpong-demo.gif)
+
+Twenty seconds of session `20260817-201403`, streamed back into the live game by
+`scripts/bake_demo_gif.py` — the eyes, the detection and the paddles are the recording's;
+only the ball is re-simulated, so the score is the replay's rather than the night's.
 
 ## How it works
 
@@ -33,6 +37,7 @@ signature rather than raw amplitude, which keeps it robust to drift.
 - `src/brainpong/eog_core.py` — shared realtime glance-pair detector; single source of truth for 1- and 2-player paths.
 - `scripts/record_eog.py` — cued LEFT/RIGHT/REST recorder → labeled `.npz` for training/eval.
 - `scripts/filtered_plot.py` — live scrolling plot of the board signal (are the electrodes alive?).
+- `scripts/bake_demo_gif.py` — replays a recorded 2-player match through the real game (mock boards + headless browser) and bakes the clip above. No hardware.
 
 **Offline eval pipeline**
 - `src/brainpong/preprocess.py` — `npz → PrepResult` (filtering / normalization variants).
