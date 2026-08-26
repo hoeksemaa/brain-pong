@@ -1,9 +1,9 @@
 {
   "timestamp": "20260521T213316Z",
   "recordings": [
-    "/Users/john/Dev/brain-pong/recordings/eog/20260513-175241-john.npz",
-    "/Users/john/Dev/brain-pong/recordings/eog/20260519-145529-aaron.npz",
-    "/Users/john/Dev/brain-pong/recordings/eog/20260519-153629-german.npz"
+    "/Users/Player G/Dev/brain-pong/recordings/eog/20260513-175241-playerG.npz",
+    "/Users/Player G/Dev/brain-pong/recordings/eog/20260519-145529-playerF.npz",
+    "/Users/Player G/Dev/brain-pong/recordings/eog/20260519-153629-playerB.npz"
   ],
   "combinations": [
     {
@@ -21,7 +21,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 386.0,
@@ -380,7 +380,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 464.0,
@@ -739,7 +739,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.94,
           "n": 50,
           "lat_med_ms": 438.0,
@@ -1114,7 +1114,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.44,
           "n": 50,
           "lat_med_ms": 480.0,
@@ -1473,7 +1473,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.04,
           "n": 50,
           "lat_med_ms": 360.0,
@@ -1832,7 +1832,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.24,
           "n": 50,
           "lat_med_ms": 402.0,
@@ -2207,7 +2207,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.6,
           "n": 50,
           "lat_med_ms": 480.0,
@@ -2566,7 +2566,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.06,
           "n": 50,
           "lat_med_ms": 376.0,
@@ -2925,7 +2925,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.42,
           "n": 50,
           "lat_med_ms": 428.0,
@@ -3300,7 +3300,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 388.0,
@@ -3659,7 +3659,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 472.0,
@@ -4018,7 +4018,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 440.0,
@@ -4393,7 +4393,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.6,
           "n": 50,
           "lat_med_ms": 496.0,
@@ -4752,7 +4752,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.96,
           "n": 50,
           "lat_med_ms": 416.0,
@@ -5111,7 +5111,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.74,
           "n": 50,
           "lat_med_ms": 448.0,
@@ -5486,7 +5486,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.44,
           "n": 50,
           "lat_med_ms": 480.0,
@@ -5845,7 +5845,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.04,
           "n": 50,
           "lat_med_ms": 360.0,
@@ -6204,7 +6204,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.24,
           "n": 50,
           "lat_med_ms": 402.0,

@@ -56,7 +56,7 @@ from brainpong.eog_core import (
     _eog_filter, _eog_velocity,
 )
 
-REC = pathlib.Path("data/eog/20260703-163542-john.npz")
+REC = pathlib.Path("data/eog/20260703-163542-playerG.npz")
 OUT_DIR = pathlib.Path("web/essay-figures/data")
 
 VIEW_S = 10.0      # the scrolling window the figures show
@@ -851,7 +851,7 @@ def main():
 
     payload = {
         "recording": REC.name,
-        "subject": "john",
+        "subject": "playerG",
         "fs": fs,
         "n": int(n),
         "duration_s": round(n / fs, 3),

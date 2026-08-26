@@ -47,7 +47,7 @@ has settled (skip first FPR_SKIP_S).
 #   Falls back to peak_sign if no sustained crossing found
 #   Result   : 94% acc  395 ms  FPR 19% @ σ=6 dur=12ms  ← FPR 3× better
 #   Notes    : The 12 ms persistence gate (3 samples) kills single-spike EMG
-#              artifacts without hurting latency on clean saccades. John's FPR
+#              artifacts without hurting latency on clean saccades. Player G's FPR
 #              drops from 100% → 0%. Strongly recommended over first_crossing.
 #
 # mean_sign

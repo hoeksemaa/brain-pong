@@ -1,9 +1,9 @@
 {
   "timestamp": "20260521T221754Z",
   "recordings": [
-    "/Users/john/Dev/brain-pong/recordings/eog/20260513-175241-john.npz",
-    "/Users/john/Dev/brain-pong/recordings/eog/20260519-145529-aaron.npz",
-    "/Users/john/Dev/brain-pong/recordings/eog/20260519-153629-german.npz"
+    "/Users/Player G/Dev/brain-pong/recordings/eog/20260513-175241-playerG.npz",
+    "/Users/Player G/Dev/brain-pong/recordings/eog/20260519-145529-playerF.npz",
+    "/Users/Player G/Dev/brain-pong/recordings/eog/20260519-153629-playerB.npz"
   ],
   "combinations": [
     {
@@ -21,7 +21,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 386.0,
@@ -380,7 +380,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 464.0,
@@ -739,7 +739,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.94,
           "n": 50,
           "lat_med_ms": 438.0,
@@ -1115,7 +1115,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 382.0,
@@ -1474,7 +1474,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 390.0,
@@ -1833,7 +1833,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.94,
           "n": 50,
           "lat_med_ms": 412.0,
@@ -2210,7 +2210,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 382.0,
@@ -2569,7 +2569,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 390.0,
@@ -2928,7 +2928,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.94,
           "n": 50,
           "lat_med_ms": 414.0,
@@ -3303,7 +3303,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.98,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -3662,7 +3662,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.92,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -4021,7 +4021,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.92,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -4397,7 +4397,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 392.0,
@@ -4756,7 +4756,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -5115,7 +5115,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -5490,7 +5490,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.86,
           "n": 50,
           "lat_med_ms": 410.0,
@@ -5849,7 +5849,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 496.0,
@@ -6208,7 +6208,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 454.0,
@@ -6584,7 +6584,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.86,
           "n": 50,
           "lat_med_ms": 410.0,
@@ -6943,7 +6943,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 406.0,
@@ -7302,7 +7302,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 452.0,
@@ -7679,7 +7679,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.86,
           "n": 50,
           "lat_med_ms": 410.0,
@@ -8038,7 +8038,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 406.0,
@@ -8397,7 +8397,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 452.0,
@@ -8772,7 +8772,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.7,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -9131,7 +9131,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.84,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -9490,7 +9490,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.72,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -9866,7 +9866,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.82,
           "n": 50,
           "lat_med_ms": 416.0,
@@ -10225,7 +10225,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.84,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -10584,7 +10584,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.8,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -10959,7 +10959,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.86,
           "n": 50,
           "lat_med_ms": 410.0,
@@ -11318,7 +11318,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 496.0,
@@ -11677,7 +11677,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 454.0,
@@ -12053,7 +12053,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.86,
           "n": 50,
           "lat_med_ms": 410.0,
@@ -12412,7 +12412,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 406.0,
@@ -12771,7 +12771,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 452.0,
@@ -13148,7 +13148,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.86,
           "n": 50,
           "lat_med_ms": 410.0,
@@ -13507,7 +13507,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 406.0,
@@ -13866,7 +13866,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 452.0,
@@ -14241,7 +14241,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.7,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -14600,7 +14600,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.84,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -14959,7 +14959,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.72,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -15335,7 +15335,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.82,
           "n": 50,
           "lat_med_ms": 416.0,
@@ -15694,7 +15694,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.84,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -16053,7 +16053,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.8,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -16428,7 +16428,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.84,
           "n": 50,
           "lat_med_ms": 386.0,
@@ -16787,7 +16787,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.94,
           "n": 50,
           "lat_med_ms": 480.0,
@@ -17146,7 +17146,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 432.0,
@@ -17522,7 +17522,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.84,
           "n": 50,
           "lat_med_ms": 386.0,
@@ -17881,7 +17881,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.94,
           "n": 50,
           "lat_med_ms": 404.0,
@@ -18240,7 +18240,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 420.0,
@@ -18617,7 +18617,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.84,
           "n": 50,
           "lat_med_ms": 386.0,
@@ -18976,7 +18976,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.94,
           "n": 50,
           "lat_med_ms": 404.0,
@@ -19335,7 +19335,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 420.0,
@@ -19710,7 +19710,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.58,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -20069,7 +20069,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.94,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -20428,7 +20428,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.76,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -20804,7 +20804,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.7,
           "n": 50,
           "lat_med_ms": 384.0,
@@ -21163,7 +21163,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -21522,7 +21522,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.82,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -21897,7 +21897,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 388.0,
@@ -22256,7 +22256,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 472.0,
@@ -22615,7 +22615,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 440.0,
@@ -22991,7 +22991,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 386.0,
@@ -23350,7 +23350,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 392.0,
@@ -23709,7 +23709,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 418.0,
@@ -24086,7 +24086,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 386.0,
@@ -24445,7 +24445,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 392.0,
@@ -24804,7 +24804,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 418.0,
@@ -25179,7 +25179,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.98,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -25538,7 +25538,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.92,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -25897,7 +25897,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -26273,7 +26273,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 396.0,
@@ -26632,7 +26632,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -26991,7 +26991,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.86,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -27366,7 +27366,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.98,
           "n": 50,
           "lat_med_ms": 360.0,
@@ -27725,7 +27725,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.92,
           "n": 50,
           "lat_med_ms": 416.0,
@@ -28084,7 +28084,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 430.0,
@@ -28460,7 +28460,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.98,
           "n": 50,
           "lat_med_ms": 360.0,
@@ -28819,7 +28819,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.92,
           "n": 50,
           "lat_med_ms": 366.0,
@@ -29178,7 +29178,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.92,
           "n": 50,
           "lat_med_ms": 406.0,
@@ -29555,7 +29555,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.98,
           "n": 50,
           "lat_med_ms": 360.0,
@@ -29914,7 +29914,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.92,
           "n": 50,
           "lat_med_ms": 366.0,
@@ -30273,7 +30273,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.92,
           "n": 50,
           "lat_med_ms": 406.0,
@@ -30648,7 +30648,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.96,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -31007,7 +31007,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.92,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -31366,7 +31366,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.94,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -31742,7 +31742,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.98,
           "n": 50,
           "lat_med_ms": 356.0,
@@ -32101,7 +32101,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.9,
           "n": 50,
           "lat_med_ms": 416.0,
@@ -32460,7 +32460,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.92,
           "n": 50,
           "lat_med_ms": 406.0,
@@ -32835,7 +32835,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.86,
           "n": 50,
           "lat_med_ms": 410.0,
@@ -33194,7 +33194,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 496.0,
@@ -33553,7 +33553,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 454.0,
@@ -33929,7 +33929,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.86,
           "n": 50,
           "lat_med_ms": 410.0,
@@ -34288,7 +34288,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 406.0,
@@ -34647,7 +34647,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 452.0,
@@ -35024,7 +35024,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.86,
           "n": 50,
           "lat_med_ms": 410.0,
@@ -35383,7 +35383,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 406.0,
@@ -35742,7 +35742,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 452.0,
@@ -36117,7 +36117,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.7,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -36476,7 +36476,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.84,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -36835,7 +36835,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.72,
           "n": 50,
           "lat_med_ms": 500.0,
@@ -37211,7 +37211,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 0.82,
           "n": 50,
           "lat_med_ms": 416.0,
@@ -37570,7 +37570,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.84,
           "n": 50,
           "lat_med_ms": 424.0,
@@ -37929,7 +37929,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.8,
           "n": 50,
           "lat_med_ms": 424.0,

@@ -38,7 +38,6 @@ Usage
 """
 import argparse
 import functools
-import hashlib
 import json
 import re
 import sys
@@ -227,7 +226,7 @@ def norm_event(label):
     return kind, s.replace("_", " ").lower(), who
 
 
-# ── anonymization ────────────────────────────────────────────────────────────────
+# ── subject labels ───────────────────────────────────────────────────────────────
 
 # The two anonymous station slots the recorder falls back to when no name is typed.
 # They are NOT two people: 72 recordings across both tournament nights share these
@@ -238,105 +237,42 @@ def norm_event(label):
 SLOT_SUBJECTS = ("p1", "p2")
 SLOT_LABEL = ("Unattributed", "unattributed")
 
-# The map is keyed on a DIGEST of the canonical subject, never on the name itself. A
-# plaintext key list would be one file that reads out "<name> is Player G" for the
-# whole corpus — the single artefact this bake exists to avoid — and it is not needed:
-# a digest is just as stable a key, so the letters it protects are unchanged.
+# The corpus is pseudonymous ON DISK (scripts/pseudonymize_corpus.py): a stem reads
+# 20260817-183500-playerR, and the letter in it IS the published identity. There used
+# to be a name -> letter map here instead, which meant the bake carried a table of
+# real names and the npz filenames carried them too. Reading the letter off the file
+# removes both: nothing in this repo has to know who Player R is.
 #
-# What that does NOT buy: the npz filenames in data/eog/ carry the real first names,
-# so anyone with the corpus can hash a name and look up its letter. The digest keeps
-# the map from BEING a name list; it is not a secret. Making the pseudonyms hold
-# against someone holding the corpus would mean renaming the npz themselves.
-#
-# Still beside the corpus and NOT under web/ — that tree is rsync-deployed wholesale
-# to GitHub Pages, and nothing about the subject mapping belongs on the public site.
-MAP_PATH = REPO / "data" / "portal-anon-map.json"
-MAP_SALT = "brainpong-portal-anon-v1"   # fixed: changing it re-keys the whole map
-MAP_NOTE = ("Keys are salted digests of the canonical subject, not names. Never copy "
-            "this file (or its contents) under web/: that tree is deployed wholesale "
-            "to GitHub Pages. Letters are append-only: never reassign one, never "
-            "reuse one whose subject has left the corpus.")
-
-
-def subject_key(canon):
-    """Stable, non-identifying key for a canonical subject."""
-    return hashlib.sha256(f"{MAP_SALT}:{canon}".encode()).hexdigest()[:16]
-
-
-_HEXKEY_RE = re.compile(r"^[0-9a-f]{16}$")
-
-
-def _letter(i):
-    return chr(ord("A") + i) if i < 26 else f"A{i}"
-
-
-def _letter_index(letter):
-    return int(letter[1:]) if len(letter) > 1 else ord(letter) - ord("A")
+# Letters therefore cannot drift. The old map existed to stop a deleted recording
+# from sliding every later letter up (which breaks published ?rec= URLs, and lets a
+# reader diff two letter sequences to see WHO was removed); a letter written into the
+# filename cannot slide at all.
+PSEUDONYM_RE = re.compile(r"^player([A-Z]\d*)$")
 
 
 def canon_subject(subj):
-    """Canonical identity key for the subject token parsed out of a filename stem.
+    """Canonical key for the subject token parsed out of a filename stem.
 
-    The recorder takes the player name as free text, so ONE person can arrive under
-    several spellings: the 2026-08-17 tournament recorded 'bradley' and 'BRADLEY'
-    sixteen seconds apart, plus 'brandon'/'BRANDON' and 'laika'/'LAIKA'. Case-fold so
-    one person draws one pseudonym. Without this the map keys on the exact string,
-    each casing draws its own letter, and the portal publishes phantom participants —
-    28 tokens for 25 real identities, overstating the headline count by three."""
+    Case-fold: the rig recorded 'playerR' and 'playerR' sixteen seconds apart, plus
+    'playerS'/'playerS' and 'playerQ'/'playerQ'. One person must draw one label, or the
+    portal publishes phantom participants — 28 tokens for 25 real identities."""
     return subj.strip().lower()
 
 
-def build_anon_map(first_seen):
-    """canonical subject -> (display pseudonym, url slug), from {canon: earliest stem}.
+def subject_label(subj):
+    """Subject token from a stem -> (display label, url slug).
 
-    The assignment is PERSISTED to MAP_PATH and only ever appended to. Assigning by
-    enumerate() over the subjects currently present looked stable, but six subjects
-    hold exactly one recording, so deleting one npz slid every later letter up: every
-    rec/<id>.json is renamed and every shared ?rec= URL breaks. Worse than the dead
-    links, a reader holding a copy of the old site can diff the two letter sequences
-    and read off WHO was removed — and a withdrawal request is the likeliest reason a
-    recording would ever be removed. A retired subject therefore keeps its row here
-    and its letter stays permanently spent.
-
-    EVERY person is pseudonymised, the project owner included. The portal is the
-    public face of a corpus recorded from volunteers; the owner exempting himself
-    while publishing everyone else under a letter is the wrong asymmetry, and it also
-    leaves exactly one real name in an otherwise name-free tree for a reader to
-    notice. Only the station slots (see SLOT_SUBJECTS) stay unlettered, because they
-    are not people.
-
-    Letters follow each subject's FIRST recording (not the alphabet), so baking in
-    newer recordings — even from new people — never renames an already-published
-    subject and never breaks a shared portal URL. That guarantee covers new DATA, not
-    policy changes: dropping the owner exemption inserts him at his true first
-    appearance and shifts every letter after it, once."""
-    slots = {s: SLOT_LABEL for s in SLOT_SUBJECTS} if SLOT_LABEL else {}
-    slot_keys = {subject_key(s) for s in slots}
-    prev = json.loads(MAP_PATH.read_text()) if MAP_PATH.exists() else {}
-    # A row written before the keys were hashed is re-keyed, letter kept — the whole
-    # point of the map is that a letter, once published, never moves.
-    assigned = {}
-    for k, letter in prev.get("assigned", {}).items():
-        k = k if _HEXKEY_RE.match(k) else subject_key(canon_subject(k))
-        if k not in slot_keys:
-            assigned[k] = letter
-    # Continue past the highest index EVER used, retired subjects included.
-    nxt = max((_letter_index(l) for l in assigned.values()), default=-1) + 1
-
-    named = sorted((s for s in first_seen if s not in slots),
-                   key=lambda s: (first_seen[s], s))
-    for s in named:
-        if subject_key(s) not in assigned:
-            assigned[subject_key(s)] = _letter(nxt)
-            nxt += 1
-    MAP_PATH.write_text(json.dumps({"note": MAP_NOTE, "assigned": assigned},
-                                   indent=2, sort_keys=True) + "\n")
-
-    out = {s: slots[s] for s in first_seen if s in slots}
-    for s in named:
-        letter = assigned[subject_key(s)]
-        out[s] = (f"Player {letter}", f"player{letter}")
-    return out
+    A token that is neither a pseudonym nor a station slot is a REAL NAME that reached
+    the corpus — a recording saved straight off the rig and never pseudonymised. That
+    is a privacy failure, not a formatting one, so the bake stops rather than
+    publishing it: the site is deployed from what this writes."""
+    if canon_subject(subj) in SLOT_SUBJECTS:
+        return SLOT_LABEL
+    m = PSEUDONYM_RE.match(subj)
+    if not m:
+        sys.exit(f"non-pseudonymous subject {subj!r} in data/eog — the corpus carries "
+                 f"a real name.\nRun: python scripts/pseudonymize_corpus.py")
+    return f"Player {m.group(1)}", subj
 
 
 def parse_stem(stem):
@@ -357,15 +293,12 @@ def bake(width):
     if not paths:
         sys.exit(f"no npz under {DATA_DIR}")
 
-    # Pass 1: earliest stem per real subject (paths are stem-sorted = time-sorted),
-    # so pseudonym letters follow first appearance and stay stable across re-bakes.
-    first_seen = {}
+    # Pass 1: how many recordings share each session key, i.e. how many people were
+    # at the rig for that match (derive_tags reads it).
     session_size = {}
     for p in paths:
-        _, _, session, subj = parse_stem(p.stem)
-        first_seen.setdefault(canon_subject(subj), p.stem)
+        _, _, session, _ = parse_stem(p.stem)
         session_size[session] = session_size.get(session, 0) + 1
-    anon = build_anon_map(first_seen)
 
     # Clean rec/ so retired ids (renamed/removed recordings) don't linger in git.
     rec_dir = OUT_DIR / "rec"
@@ -381,8 +314,7 @@ def bake(width):
     for p in paths:
         stem = p.stem
         date, tm, session, subj = parse_stem(stem)
-        disp, slug = anon.get(canon_subject(subj),
-                              (subj, re.sub(r"[^A-Za-z0-9]", "", subj) or "x"))
+        disp, slug = subject_label(subj)
 
         rid = f"{session}-{slug}"
         if rid in used_ids:                       # same person, same second (rare)

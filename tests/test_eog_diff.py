@@ -4,7 +4,7 @@ eog_diff — the horizontal differential + polarity contract.
 This is the single most widely-shared function: every player, every mode, every
 poll computes (ch_R − ch_L) through it. Its sign convention is load-bearing —
 get ch_R/ch_L backwards and every paddle moves the wrong way (cf. the recorded
-electrode-swap on John's sessions). These tests pin the contract, not the
+electrode-swap on Player G's sessions). These tests pin the contract, not the
 arithmetic.
 """
 import numpy as np

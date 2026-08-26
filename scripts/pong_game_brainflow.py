@@ -275,7 +275,7 @@ def _tuning_row(label, control):
 
 
 def _player_card(slot):
-    """A scoreboard card. P1 = John = purple = TOP; P2 = Esther/AI = yellow = BOTTOM.
+    """A scoreboard card. P1 = Player G = purple = TOP; P2 = Player L/AI = yellow = BOTTOM.
     The name field doubles as the recording subject; both p1-name/p2-name always exist
     so the recording callback's State always resolves (p2 is the AI in single-player)."""
     pid = 'p1' if slot == 1 else 'p2'

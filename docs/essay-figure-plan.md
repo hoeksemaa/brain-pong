@@ -1,5 +1,5 @@
 
-## Structure John settled on
+## Structure Player G settled on
 
 The section was reorganised twice. Final shape: **the numbered pipeline is a
 list of operations** — things that happen to the signal, in order — and the
@@ -22,11 +22,11 @@ reconstructed *backwards* from the real recording.
 | 6 | left subtracted from right | real | **DONE** |
 | 7 | detrend — one constant per 0.1 s poll, over 0.5 s | real | **DONE** |
 | 8 | filter — LP 100, notch 48–52/58–62, HP 0.5 | real | **DONE** |
-| 8.5 | threshold amplitude, or threshold velocity | real (anthony) | built — NOT signed off |
+| 8.5 | threshold amplitude, or threshold velocity | real (Player A) | built — NOT signed off |
 | 9 | calibrate → σ | real | **DONE** |
 | 10 | threshold → spike detected | real | **DONE** |
 
-**DONE** means John has signed it off. Every step is now built, signed off and
+**DONE** means Player G has signed it off. Every step is now built, signed off and
 live in the harness. What is left is the prose.
 
 **Gain is cut, not deferred.** It muddied the water for what it bought. Three
@@ -191,16 +191,16 @@ Two deliberate departures from the series, both measured before chosen:
   and velocity *loses* on the 12-recording corpus (531/960 cued glances vs
   amplitude's 708/960 at 6σ); at the game's corners it is amplitude 526/960,
   velocity 926/960.
-- **David, not the committed john recording.** On john both rows catch 79/80
-  — nothing separates them. David is the total shutout: BOTH rows draw σ from
+- **Player C, not the committed Player G recording.** On Player G both rows catch 79/80
+  — nothing separates them. Player C is the total shutout: BOTH rows draw σ from
   the same noisy opening, each at the 100th percentile of its own recording's
   5 s blocks (σ_amp 51.3 µV vs blockwise median 14.9; σ_vel 586.6 µV/s vs
   median 324) — the worst calibration either detector could have drawn,
   inherited equally. Amplitude's 6σ (±308 µV) sits above the recording's peak
   (265 µV), so it cannot fire at all: 0/80. Velocity's slimmer margin (peaks
   2.2× its 6σ) still clears: 77/80. (Alternatives, one-line switch in the
-  bake: christy — same shape with a fatter velocity margin, 1/80 vs 79/80,
-  peaks 7.5× its 6σ; anthony — milder, 20/80 vs 74/80, amplitude catches the
+  bake: Player H — same shape with a fatter velocity margin, 1/80 vs 79/80,
+  peaks 7.5× its 6σ; Player A — milder, 20/80 vs 74/80, amplitude catches the
   big glances and drowns the moderate ones.)
 
 House-style departure: row names sit in the gutter per figures 2/3 but stacked

@@ -1627,8 +1627,8 @@ FIGURES["fig-08"] = (mount, data) => {
  *   ~35 Hz" warning, measured. At these corners: amplitude 526/960,
  *   velocity 926/960.
  *
- * - NOT the committed john recording. On john both rows catch 79/80 — the one
- *   subject in the corpus where nothing separates them. David (run #3 of the
+ * - NOT the committed Player G recording. On Player G both rows catch 79/80 — the one
+ *   subject in the corpus where nothing separates them. Player C (run #3 of the
  *   mass collection) is the honest witness: BOTH rows draw their σ from the
  *   same noisy opening — each lands at the 100th percentile of its own
  *   recording's 5 s blocks (σ_amp 51.3 µV vs blockwise median 14.9; σ_vel

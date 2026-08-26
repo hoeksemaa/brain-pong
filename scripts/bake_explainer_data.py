@@ -35,8 +35,8 @@ OUT = ROOT / "web" / "explainer" / "data" / "eog-clips.json"
 
 # (key, recording stem, public label, t_start_s, duration_s)
 CLIPS = [
-    ("main", "20260706-193819-xiq", "Session A", 41.0, 18.0),
-    ("poor", "20260706-161306-simon", "Session B", 23.0, 18.0),
+    ("main", "20260706-193819-playerJ", "Session A", 41.0, 18.0),
+    ("poor", "20260706-161306-playerI", "Session B", 23.0, 18.0),
 ]
 
 CUE_LABELS = ("LEFT", "RIGHT", "REST")

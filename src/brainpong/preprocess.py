@@ -51,7 +51,7 @@ All fields are derived purely from the NPZ; no external inputs required.
 #   Filter : 0.5–30 Hz causal IIR (scipy sosfilt, zi-settled)
 #   Notes  : Same HPF as baseline, LPF moved 100→30 Hz. Isolates the effect
 #            of cutting EMG noise. Accuracy 89% avg; FPR best of the amplitude
-#            pipelines (41% avg). German FPR drops to 8% — the EMG cut is
+#            pipelines (41% avg). Player B FPR drops to 8% — the EMG cut is
 #            meaningful for at least one subject.
 #
 # linear_detrend
@@ -77,7 +77,7 @@ All fields are derived purely from the NPZ; no external inputs required.
 #            baseline_sigma = 1.0 by definition. Makes fpr_threshold_uv
 #            cross-subject consistent (3σ means the same thing for everyone
 #            regardless of electrode impedance). Accuracy same as narrow_band
-#            (87%); FPR at 3σ: 38% avg — John drops from 100% to 56%.
+#            (87%); FPR at 3σ: 38% avg — Player G drops from 100% to 56%.
 #
 # ── NOTE on zero-phase filtering ──────────────────────────────────────────────
 # sosfiltfilt (forward+backward) was tried but creates anticausal pre-ringing

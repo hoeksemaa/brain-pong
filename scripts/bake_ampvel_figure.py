@@ -10,7 +10,7 @@ Writes two files into web/essay-figures/data/:
                      vel    the game's velocity, µV/s ÷ `vel_scale` (int16 range)
   eog-ampvel.json  metadata — spans, σ per row, cues, the chain's constants.
 
-UNLIKE FIGURES 5-10 this does NOT use the committed john recording, and UNLIKE
+UNLIKE FIGURES 5-10 this does NOT use the committed Player G recording, and UNLIKE
 the main bake it uses the GAME's corners, not the essay's. Both divergences are
 the figure's argument, measured before they were chosen:
 
@@ -21,8 +21,8 @@ the figure's argument, measured before they were chosen:
   the game's corners the corpus reads amplitude 526/960, velocity 926/960.
   The chain here is eog_core._eog_filter called verbatim, so it cannot drift.
 
-- Subject: on john both detectors catch 79/80 — the one subject in the corpus
-  where nothing separates them. David (run #3 of the mass collection,
+- Subject: on Player G both detectors catch 79/80 — the one subject in the corpus
+  where nothing separates them. Player C (run #3 of the mass collection,
   2026-07-02) is the argument: BOTH rows draw σ from the same noisy opening,
   each landing at the 100th percentile of its own recording's 5 s blocks
   (σ_amp 51.3 µV vs blockwise median 14.9; σ_vel 586.6 µV/s vs median 324) —
@@ -57,7 +57,7 @@ from brainpong.eog_core import (NOTCH_BANDS, EOG_BASELINE_S, EOG_SIGMA_THR,
                                 EOG_LPF_HZ, EOG_HPF_HZ,
                                 _eog_filter, _eog_velocity)
 
-REC = pathlib.Path("data/eog/20260702-182329-david.npz")
+REC = pathlib.Path("data/eog/20260702-182329-playerC.npz")
 OUT_DIR = pathlib.Path("web/essay-figures/data")
 
 VIEW_S = 10.0
@@ -146,7 +146,7 @@ def main():
 
     payload = {
         "recording": REC.name,
-        "subject": "david",
+        "subject": "playerC",
         "fs": fs, "n": int(n),
         "duration_s": round(n / fs, 3),
         "view_s": VIEW_S,

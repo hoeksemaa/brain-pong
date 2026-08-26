@@ -2,7 +2,7 @@
    BrainPong — arcade UI (Balatro-forward). PRESENTATION ONLY.
    Dash auto-loads this from assets/. The m6x11 font is served
    from assets/fonts/ (gitignored, bundled per machine).
-   Players are fixed: P1/John = purple (TOP), P2/Esther = yellow (BOTTOM).
+   Players are fixed: P1/Player G = purple (TOP), P2/Player L = yellow (BOTTOM).
    ============================================================ */
 
 @font-face {

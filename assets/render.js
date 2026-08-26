@@ -21,8 +21,8 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     const GHOST_GAP      = 12;   // px gap between adjacent paddle-slot boxes (visual only)
 
     const COL_SCREEN     = '#0b151c';
-    const COL_P1         = '#b06bff', COL_P1_DEEP = '#5f2fb8';   // John  — TOP
-    const COL_P2         = '#ffcf33', COL_P2_DEEP = '#b07f00';   // Esther/AI — BOTTOM
+    const COL_P1         = '#b06bff', COL_P1_DEEP = '#5f2fb8';   // Player G  — TOP
+    const COL_P2         = '#ffcf33', COL_P2_DEEP = '#b07f00';   // Player L/AI — BOTTOM
     const COL_BALL       = '#f7f8fc';
     const COL_GHOST_FILL = 'rgba(236,220,174,.09)';
     const COL_GHOST_LINE = 'rgba(236,220,174,.32)';
@@ -284,7 +284,7 @@ if (!window.dash_clientside) { window.dash_clientside = {}; }
     function renderPong(canvasId, gameState, appStatus, settings) {
         dashState.canvasId = canvasId; dashState.appStatus = appStatus; dashState.settings = settings;
         getAudioCtx();
-        // scoreboard (P1/John = player_score = purple TOP; P2/Esther/AI = ai_score = yellow BOTTOM)
+        // scoreboard (P1/Player G = player_score = purple TOP; P2/Player L/AI = ai_score = yellow BOTTOM)
         if (gameState) {
             const p1 = document.getElementById('p1-score'), p2 = document.getElementById('p2-score');
             if (p1) p1.textContent = String(gameState.player_score || 0).padStart(2, '0');
