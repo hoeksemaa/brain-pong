@@ -98,6 +98,9 @@ a{color:var(--accent-ink);text-decoration:none}
 .chrow canvas{width:100%;display:block;border:1px solid var(--line);border-radius:8px}
 /* drag a span on any trace to zoom; touch-action lets a touch drag beat the scroll */
 .plot canvas,.chrow canvas{cursor:crosshair;touch-action:none}
+.navwrap{padding:8px 12px 0}
+.navwrap[hidden]{display:none}
+.navwrap canvas{width:100%;display:block;border:1px solid var(--line);border-radius:7px;cursor:ew-resize;touch-action:none}
 .zoombox{margin-left:auto;display:flex;align-items:center;gap:9px}
 .zoombox[hidden]{display:none}
 .zrange{font-family:var(--mono);font-size:11px;color:var(--accent-ink)}
