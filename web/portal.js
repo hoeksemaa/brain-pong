@@ -38,13 +38,14 @@
 
   const state = {
     meta: null, recs: [], filtered: [], sel: null, detail: null,
-    view: null,        // {t0,t1} zoom window, null = whole recording
-    drag: null,        // {t0,t1} band being dragged out right now
+    view: null,        // {t0,t1} analysis window, null = whole recording
+    drag: null,        // {t0,t1} window being dragged out right now
+    edge: null,        // "t0" | "t1" — which edge the pointer is dragging
     sortDesc: true,
     f: { q: "", tour: null, st: new Set(), qual: new Set(), df: "", dt: "" },
   };
 
-  const PLOT = { d: null, l: null, r: null, nav: null, cv: null };   // live canvases + the one being dragged
+  const PLOT = { d: null, l: null, r: null };   // the three live canvases
   let pendingView = null;                                  // ?t0/?t1 from the URL, applied once
 
   // ── canvas kit ──────────────────────────────────────────────────────────────
@@ -54,32 +55,22 @@
     const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
     return { ctx, w, h };
   }
-  function envelope(ctx, t, mn, mx, xm, ym, fill, stroke, lo, hi) {
-    if (hi <= lo) return;
-    ctx.beginPath(); ctx.moveTo(xm(t[lo]), ym(mx[lo]));
-    for (let i = lo + 1; i <= hi; i++) ctx.lineTo(xm(t[i]), ym(mx[i]));
-    for (let i = hi; i >= lo; i--) ctx.lineTo(xm(t[i]), ym(mn[i]));
+  function envelope(ctx, t, mn, mx, xm, ym, fill, stroke) {
+    ctx.beginPath(); ctx.moveTo(xm(t[0]), ym(mx[0]));
+    for (let i = 1; i < t.length; i++) ctx.lineTo(xm(t[i]), ym(mx[i]));
+    for (let i = t.length - 1; i >= 0; i--) ctx.lineTo(xm(t[i]), ym(mn[i]));
     ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
-    if (stroke) { ctx.beginPath(); for (let i = lo; i <= hi; i++){const y=ym((mn[i]+mx[i])/2); i>lo?ctx.lineTo(xm(t[i]),y):ctx.moveTo(xm(t[i]),y);} ctx.strokeStyle=stroke; ctx.lineWidth=1.1; ctx.stroke(); }
+    if (stroke) { ctx.beginPath(); for (let i = 0; i < t.length; i++){const y=ym((mn[i]+mx[i])/2); i?ctx.lineTo(xm(t[i]),y):ctx.moveTo(xm(t[i]),y);} ctx.strokeStyle=stroke; ctx.lineWidth=1.1; ctx.stroke(); }
   }
   function drawTrace(cv, t, series, opts) {
     opts = opts || {};
     const { ctx, w, h } = setup(cv, opts.height || 70);
     if (!t || !t.length) { ctx.fillStyle = THEME.panel; ctx.fillRect(0,0,w,h); return; }
-    const padT = 8, padB = opts.ruler ? 18 : 8;
-    // Slice to the zoom window rather than clipping: it keeps the fill inside the
-    // box AND makes the y-axis scale to the visible signal instead of to a rail
-    // excursion parked somewhere off screen.
-    let lo = 0, hi = t.length - 1;
-    if (opts.view) {
-      while (lo < hi && t[lo + 1] <= opts.view.t0) lo++;
-      while (hi > lo && t[hi - 1] >= opts.view.t1) hi--;
-    }
-    const x0 = opts.view ? opts.view.t0 : t[lo], x1 = opts.view ? opts.view.t1 : t[hi];
-    // The y-axis can scale to a narrower window than the one being drawn. That is
-    // what makes the drag feel live: the trace resolves as you size the window,
-    // before the x-axis has rescaled to it.
-    let slo = lo, shi = hi;
+    const padT = 8, padB = opts.ruler ? 18 : 8, x0 = t[0], x1 = t[t.length-1];
+    // The time axis is ALWAYS the whole recording — it never stretches. A window
+    // only changes the y-scale, so the highlighted span is stretched vertically to
+    // fill the panel while every sample stays at the same x position.
+    let slo = 0, shi = t.length - 1;
     if (opts.scaleTo) {
       const a = Math.min(opts.scaleTo.t0, opts.scaleTo.t1), b = Math.max(opts.scaleTo.t0, opts.scaleTo.t1);
       while (slo < shi && t[slo + 1] <= a) slo++;
@@ -117,7 +108,7 @@
         if (letters){ ctx.fillStyle=col; ctx.font="9px "+THEME.mono; ctx.textAlign="center"; ctx.fillText(e.label[0], x, padT+9); }
       }
     }
-    for (const s of series) envelope(ctx, t, s.mn, s.mx, xm, ym, s.fill, s.stroke, lo, hi);
+    for (const s of series) envelope(ctx, t, s.mn, s.mx, xm, ym, s.fill, s.stroke);
 
     if (opts.band) {   // dim the context, keep the window bright (studio viewer)
       const t0 = Math.min(opts.band.t0, opts.band.t1), t1 = Math.max(opts.band.t0, opts.band.t1);
@@ -139,8 +130,7 @@
     if (opts.unit){ ctx.save(); ctx.translate(11,(padT+h-padB)/2); ctx.rotate(-Math.PI/2); ctx.textAlign="center"; ctx.fillStyle=THEME.muted; ctx.font="9px "+THEME.mono; ctx.fillText(opts.unit,0,0); ctx.restore(); }
     if (opts.name){ ctx.fillStyle=opts.nameColor||THEME.text; ctx.textAlign="left"; ctx.font="600 11px "+THEME.ui; ctx.fillText(opts.name, PADL+4, padT+11); }
     if (opts.ruler){ ctx.fillStyle=THEME.muted; ctx.font="10px "+THEME.mono; ctx.textAlign="center";
-      const dp = (x1-x0) >= 40 ? 0 : (x1-x0) >= 8 ? 1 : 2;
-      for(let i=0;i<=8;i++){const tt=lerp(x0,x1,i/8);ctx.fillText(tt.toFixed(dp)+"s",xm(tt),h-4);} }
+      for(let i=0;i<=8;i++){const tt=lerp(x0,x1,i/8);ctx.fillText(tt.toFixed(0)+"s",xm(tt),h-4);} }
   }
   function drawSpark(cv, spark, color) {
     const { ctx, w, h } = setup(cv, 20);
@@ -288,16 +278,18 @@
     for (const li of $("#reclist").children) li.classList.toggle("sel", li.dataset.id === state.sel);
   }
 
-  // ── zoom (drag a span on any trace; all three share one time axis) ──────────
-  // Below three buckets there is nothing left to draw: the bake decimates each
-  // recording to ~1400 min/max buckets, so this is the real resolution floor.
-  function minSpan(r) { const t = r && r.t; return (t && t.length > 1) ? 3 * (t[t.length-1] - t[0]) / (t.length - 1) : 0; }
+  // ── analysis window (studio viewer behaviour) ───────────────────────────────
+  // Press and drag on the R−L plot to mark a window. The window is drawn over the
+  // plot — dimmed outside, handles on its edges — and it stretches the trace
+  // VERTICALLY only: the y-axis scales to the window while the time axis keeps
+  // showing the whole recording. Press without dragging to clear it.
+  const MIN_SPAN = 2;                      // seconds; viewer.js uses the same floor
   function fullRange(r) { const t = r.t; return [t[0], t[t.length-1]]; }
   function clampView(v, r) {
     if (!v || !r || !r.t || r.t.length < 2) return null;
     const [a, b] = fullRange(r);
     const t0 = clamp(Math.min(v.t0, v.t1), a, b), t1 = clamp(Math.max(v.t0, v.t1), a, b);
-    return (t1 - t0) >= minSpan(r) ? { t0, t1 } : null;
+    return (t1 - t0) >= MIN_SPAN ? { t0, t1 } : null;
   }
   // applyView redraws without touching the URL, so a live drag can rescale every
   // frame; only the committed window (pointerup) is written to the address bar.
@@ -305,9 +297,7 @@
   function setView(v) { applyView(v); syncURL(); }
 
   function syncZoomUI() {
-    const box = $("#zoombox"), nav = $("#navwrap");
-    if (nav) nav.hidden = !state.view;
-    if (!box) return;
+    const box = $("#zoombox"); if (!box) return;
     box.innerHTML = ""; box.hidden = !state.view;
     if (!state.view) return;
     const { t0, t1 } = state.view, dp = (t1 - t0) >= 8 ? 1 : 2;
@@ -317,69 +307,57 @@
     box.appendChild(b);
   }
 
-  // opt.full   — this canvas always shows the whole recording (the navigator)
-  // opt.handles— pressing near an edge of the current window grabs that edge
-  // opt.live   — the window applies while dragging, not only on release
-  function attachZoom(cv, opt) {
-    opt = opt || {};
-    const range = () => (opt.full || !state.view) ? fullRange(state.detail)
-                                                 : [state.view.t0, state.view.t1];
+  // Only the R−L plot takes the drag — it is the one the window is drawn on.
+  function attachWindow(cv) {
     const toT = e => {
-      const rect = cv.getBoundingClientRect(), [a, b] = range();
+      const rect = cv.getBoundingClientRect(), [a, b] = fullRange(state.detail);
       return clamp(a + (b - a) * (e.clientX - rect.left - PADL) / (rect.width - PADL - PADR), a, b);
     };
     cv.addEventListener("pointerdown", e => {
       if (e.button || !state.detail) return;
-      const tt = toT(e), [a, b] = range(), near = x => Math.abs(x - tt) < (b - a) * 0.02, v = state.view;
-      // grabbing a handle anchors the drag on the OPPOSITE edge, so that edge holds still
-      if (opt.handles && v && near(v.t0))      state.drag = { t0: v.t1, t1: tt };
-      else if (opt.handles && v && near(v.t1)) state.drag = { t0: v.t0, t1: tt };
-      else                                     state.drag = { t0: tt,   t1: tt };
-      PLOT.cv = cv; cv.setPointerCapture(e.pointerId);
+      const tt = toT(e), [a, b] = fullRange(state.detail);
+      const near = x => Math.abs(x - tt) < (b - a) * 0.02, v = state.view;
+      // Pressing within 2% of an edge grabs THAT edge; anywhere else starts a new
+      // window at the press point and drags its right edge (viewer.js:295-297).
+      if (v && near(v.t0))      { state.drag = { t0: v.t0, t1: v.t1 }; state.edge = "t0"; }
+      else if (v && near(v.t1)) { state.drag = { t0: v.t0, t1: v.t1 }; state.edge = "t1"; }
+      else                      { state.drag = { t0: tt,   t1: tt   }; state.edge = "t1"; }
+      cv.setPointerCapture(e.pointerId);
       drawPlots(); e.preventDefault();
     });
     cv.addEventListener("pointermove", e => {
-      if (!state.drag || PLOT.cv !== cv) return;
-      state.drag.t1 = toT(e);
-      if (opt.live) { const v = clampView(state.drag, state.detail); if (v) applyView(v); }
-      drawPlots();
+      if (!state.edge) return;
+      // The dragged edge is clamped 1 s clear of the fixed one, so the handles can
+      // never cross and the window never flips (viewer.js:409).
+      const tt = toT(e), d = state.drag;
+      if (state.edge === "t0") d.t0 = Math.min(tt, d.t1 - 1);
+      else                     d.t1 = Math.max(tt, d.t0 + 1);
+      const v = clampView(d, state.detail);
+      if (v) applyView(v); else drawPlots();      // live: the y-scale follows the drag
     });
     const end = () => {
-      if (!state.drag || PLOT.cv !== cv) return;
-      const d = state.drag; state.drag = null; PLOT.cv = null;
-      const v = clampView(d, state.detail);
-      if (v) setView(v);
-      else if (opt.live) setView(state.view);   // too narrow: keep what the drag last applied
-      else drawPlots();                         // too narrow on a main trace: it was a click
+      if (!state.edge) return;
+      const d = state.drag; state.drag = null; state.edge = null;
+      setView(clampView(d, state.detail));        // narrower than MIN_SPAN clears it
     };
     cv.addEventListener("pointerup", end);
     cv.addEventListener("pointercancel", end);
-    cv.addEventListener("dblclick", () => setView(null));
   }
 
   function drawPlots() {
     const r = state.detail; if (!r || !PLOT.d) return;
-    const view = state.view, drag = state.drag;
-    // Mid-drag on a main trace the x-axis holds still and the window is shown
-    // studio-style; the y-axis already scales to the selection, so the trace
-    // resolves under the cursor. On release the x-axis rescales to it.
-    const onMain = drag && PLOT.cv !== PLOT.nav;
-    const band = onMain ? drag : null, scaleTo = onMain ? drag : null;
+    // Mid-drag the band follows the cursor even before it is wide enough to commit,
+    // so the edges track the pointer; the y-scale only follows a committed window.
+    const band = state.drag || state.view, scale = state.view;
     drawTrace(PLOT.d, r.t, [{ mn: r.diff.mn, mx: r.diff.mx, fill: THEME.ribFill, stroke: THEME.rib }], {
       height: 240, center: true, ruler: true, ceil: r.ceil_uv, events: r.events,
-      unit: "µV", name: "R − L (right minus left)", nameColor: THEME.rib, view, band, scaleTo, handles: true,
+      unit: "µV", name: "R − L (right minus left)", nameColor: THEME.rib,
+      band, scaleTo: scale, handles: true,
     });
     drawTrace(PLOT.l, r.t, [{ mn: r.channels.l.mn, mx: r.channels.l.mx, fill: hexA(THEME.L, .12), stroke: THEME.L }],
-      { height: 116, center: true, robust: true, ceil: r.ceil_uv, unit: "µV", name: "Left electrode", nameColor: THEME.L, view, band, scaleTo });
+      { height: 116, center: true, robust: true, ceil: r.ceil_uv, unit: "µV", name: "Left electrode", nameColor: THEME.L, band, scaleTo: scale });
     drawTrace(PLOT.r, r.t, [{ mn: r.channels.r.mn, mx: r.channels.r.mx, fill: hexA(THEME.R, .12), stroke: THEME.R }],
-      { height: 116, center: true, robust: true, ceil: r.ceil_uv, ruler: true, unit: "µV", name: "Right electrode", nameColor: THEME.R, view, band, scaleTo });
-
-    // navigator: the whole recording, with the current window bright and grabbable
-    if (PLOT.nav && state.view) {
-      const nb = (drag && PLOT.cv === PLOT.nav) ? drag : state.view;
-      drawTrace(PLOT.nav, r.t, [{ mn: r.diff.mn, mx: r.diff.mx, fill: THEME.ribFill, stroke: THEME.rib }],
-        { height: 56, center: true, robust: true, ruler: true, band: nb, handles: true });
-    }
+      { height: 116, center: true, robust: true, ceil: r.ceil_uv, ruler: true, unit: "µV", name: "Right electrode", nameColor: THEME.R, band, scaleTo: scale });
   }
 
   // ── detail view ─────────────────────────────────────────────────────────────
@@ -389,7 +367,7 @@
     markSelected();
     try { state.detail = await DATA.rec(id); }
     catch (e) { $("#main").innerHTML = `<div class="empty">Could not load recording (${e}).</div>`; return; }
-    state.view = clampView(pendingView, state.detail); pendingView = null; state.drag = null;
+    state.view = clampView(pendingView, state.detail); pendingView = null; state.drag = null; state.edge = null;
     syncURL();
     renderDetail();
   }
@@ -419,9 +397,6 @@
     const zb = el("span", "zoombox"); zb.id = "zoombox"; zb.hidden = true; ch.appendChild(zb);
     card.appendChild(ch);
 
-    const navwrap = el("div", "navwrap"); navwrap.id = "navwrap"; navwrap.hidden = true;
-    const ncv = el("canvas"); navwrap.appendChild(ncv); card.appendChild(navwrap);
-
     const pp = el("div", "plot");
     const dcv = el("canvas"); pp.appendChild(dcv);
     card.appendChild(pp);
@@ -442,11 +417,8 @@
     wrap.appendChild(card);
     main.appendChild(wrap);
 
-    PLOT.d = dcv; PLOT.l = lcv; PLOT.r = rcv; PLOT.nav = ncv; PLOT.cv = null;
-    // main traces: a press always starts a new window. The navigator owns the
-    // handles, so the main plots have no invisible grab zone at their edges.
-    for (const cv of [dcv, lcv, rcv]) attachZoom(cv, {});
-    attachZoom(ncv, { full: true, handles: true, live: true });
+    PLOT.d = dcv; PLOT.l = lcv; PLOT.r = rcv;
+    attachWindow(dcv);          // the window is drawn on the R−L plot, so it owns the drag
     syncZoomUI();
     requestAnimationFrame(drawPlots);
   }
@@ -524,7 +496,6 @@
     if (selId && state.recs.some(r => r.id === selId)) await selectRec(selId);
     else renderDashboard();
     window.addEventListener("resize", () => { if (state.detail && state.sel) renderDetail(); });
-    window.addEventListener("keydown", e => { if (e.key === "Escape" && state.view) setView(null); });
     window.__ready = true;
   }
   document.addEventListener("DOMContentLoaded", init);
