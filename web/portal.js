@@ -16,6 +16,8 @@
     dim: "rgba(8,10,16,0.70)", edge: "#7ef0b0",   // studio viewer's trim colours
   };
   const PADL = 46, PADR = 10;
+  const NARROW = 430;                       // below this a canvas needs a tighter gutter
+  const padL = w => w < NARROW ? 38 : PADL;  // must match on both the draw and hit-test side
   const $ = (s, r = document) => r.querySelector(s);
   const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -67,6 +69,7 @@
     const { ctx, w, h } = setup(cv, opts.height || 70);
     if (!t || !t.length) { ctx.fillStyle = THEME.panel; ctx.fillRect(0,0,w,h); return; }
     const padT = 8, padB = opts.ruler ? 18 : 8, x0 = t[0], x1 = t[t.length-1];
+    const PADL = padL(w), narrow = w < NARROW;
     // The time axis is ALWAYS the whole recording — it never stretches. A window
     // only changes the y-scale, so the highlighted span is stretched vertically to
     // fill the panel while every sample stays at the same x position.
@@ -76,7 +79,7 @@
       while (slo < shi && t[slo + 1] <= a) slo++;
       while (shi > slo && t[shi - 1] >= b) shi--;
     }
-    const xm = tt => lerp(PADL, w - PADR, (tt - x0) / (x1 - x0 || 1));
+    const xm = tt => lerp(PADL, w - PADR, (tt - x0) / (x1 - x0 || 1));   // PADL shadows the const: gutter is width-dependent
     let off = 0;
     if (opts.center) { const m=[]; for (const s of series) for (let i=slo;i<=shi;i++) m.push((s.mn[i]+s.mx[i])/2); off = median(m); }
     let A;
@@ -127,10 +130,11 @@
     ctx.fillStyle = THEME.muted; ctx.font = "10px "+THEME.mono; ctx.textAlign = "right";
     const lab = v => v>=1000?(v/1000).toFixed(v>=10000?0:1)+"k":v.toFixed(A<10?1:0);
     ctx.fillText(`+${lab(A)}`, PADL-5, padT+9); ctx.fillText(`-${lab(A)}`, PADL-5, h-padB-2);
-    if (opts.unit){ ctx.save(); ctx.translate(11,(padT+h-padB)/2); ctx.rotate(-Math.PI/2); ctx.textAlign="center"; ctx.fillStyle=THEME.muted; ctx.font="9px "+THEME.mono; ctx.fillText(opts.unit,0,0); ctx.restore(); }
+    if (opts.unit && !narrow){ ctx.save(); ctx.translate(11,(padT+h-padB)/2); ctx.rotate(-Math.PI/2); ctx.textAlign="center"; ctx.fillStyle=THEME.muted; ctx.font="9px "+THEME.mono; ctx.fillText(opts.unit,0,0); ctx.restore(); }
     if (opts.name){ ctx.fillStyle=opts.nameColor||THEME.text; ctx.textAlign="left"; ctx.font="600 11px "+THEME.ui; ctx.fillText(opts.name, PADL+4, padT+11); }
     if (opts.ruler){ ctx.fillStyle=THEME.muted; ctx.font="10px "+THEME.mono; ctx.textAlign="center";
-      for(let i=0;i<=8;i++){const tt=lerp(x0,x1,i/8);ctx.fillText(tt.toFixed(0)+"s",xm(tt),h-4);} }
+      const nt = narrow ? 4 : 8;
+      for(let i=0;i<=nt;i++){const tt=lerp(x0,x1,i/nt);ctx.fillText(tt.toFixed(0)+"s",xm(tt),h-4);} }
   }
   function drawSpark(cv, spark, color) {
     const { ctx, w, h } = setup(cv, 20);
@@ -310,8 +314,8 @@
   // Only the R−L plot takes the drag — it is the one the window is drawn on.
   function attachWindow(cv) {
     const toT = e => {
-      const rect = cv.getBoundingClientRect(), [a, b] = fullRange(state.detail);
-      return clamp(a + (b - a) * (e.clientX - rect.left - PADL) / (rect.width - PADL - PADR), a, b);
+      const rect = cv.getBoundingClientRect(), [a, b] = fullRange(state.detail), pl = padL(rect.width);
+      return clamp(a + (b - a) * (e.clientX - rect.left - pl) / (rect.width - pl - PADR), a, b);
     };
     cv.addEventListener("pointerdown", e => {
       if (e.button || !state.detail) return;
@@ -370,6 +374,9 @@
     state.view = clampView(pendingView, state.detail); pendingView = null; state.drag = null; state.edge = null;
     syncURL();
     renderDetail();
+    // On a phone the sidebar sits above the detail, so a selection would otherwise
+    // leave the reader looking at the list they just tapped.
+    if (isPhone()) $("#main").scrollIntoView({ behavior: "smooth", block: "start" });
   }
   function renderDetail() {
     const r = state.detail, main = $("#main"); main.innerHTML = "";
@@ -480,6 +487,17 @@
     m.onclick = e => { if (e.target === m) close(); };
   }
 
+  const isPhone = () => window.matchMedia("(max-width:860px)").matches;
+  let wasPhone = null;
+  function syncFilterBox() {           // open on desktop, a disclosure on a phone
+    const fb = $("#filterbox"); if (!fb) return;
+    const phone = isPhone();
+    // Only on an actual breakpoint crossing. Setting it on every resize would slam
+    // the filters shut mid-scroll, because a phone fires resize when the address
+    // bar hides.
+    if (phone !== wasPhone) { fb.open = !phone; wasPhone = phone; }
+  }
+
   // ── init ────────────────────────────────────────────────────────────────────
   async function init() {
     let meta, manifest;
@@ -492,10 +510,19 @@
     $("#search").value = state.f.q;
     $("#search").oninput = e => { state.f.q = e.target.value; recompute(); };
     $("#aboutBtn").onclick = showAbout;
+    syncFilterBox();
     recompute();
     if (selId && state.recs.some(r => r.id === selId)) await selectRec(selId);
     else renderDashboard();
-    window.addEventListener("resize", () => { if (state.detail && state.sel) renderDetail(); });
+    let lastW = window.innerWidth;
+    window.addEventListener("resize", () => {
+      syncFilterBox();
+      // Height-only resizes are the phone address bar showing/hiding. Rebuilding
+      // the detail there would throw away the reader's scroll position on a scroll.
+      if (window.innerWidth === lastW) return;
+      lastW = window.innerWidth;
+      if (state.detail && state.sel) renderDetail();
+    });
     window.__ready = true;
   }
   document.addEventListener("DOMContentLoaded", init);
