@@ -161,7 +161,7 @@ def eog_diff(data, ch_R, ch_L):
 
     `data` is (n_channels, n_samples) as BrainFlow returns it. Sign convention:
     rightward gaze is positive. Swapping ch_R/ch_L flips every downstream
-    decision (see the John electrode-swap note), so this is the one place the
+    decision (see the Player G electrode-swap note), so this is the one place the
     polarity contract is defined. Returns a fresh 1-D array.
     """
     return (data[ch_R] - data[ch_L]).astype(np.float64) * 1e6

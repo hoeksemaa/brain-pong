@@ -64,3 +64,8 @@ derivatives/viewer.db-wal
 
 # Playwright MCP artifacts (console logs / page dumps)
 .playwright-mcp/
+
+# Pseudonym map — the ONLY file that maps a real name to its published letter.
+# Local to the machine that recorded the sessions; never committed, never copied
+# under web/. scripts/pseudonymize_corpus.py writes it; nothing else reads it.
+data/portal-anon-map.json

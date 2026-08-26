@@ -16,8 +16,8 @@ from brainpong import store          # noqa: E402
 import serve_viewer                  # noqa: E402
 
 NPZ_DIR = REPO / "data" / "eog"
-AARON = "20260519-145529-aaron"
-JOHN = "20260622-145533-john"
+Player F = "20260519-145529-playerF"
+Player G = "20260622-145533-playerG"
 
 
 @pytest.fixture(scope="module")
@@ -43,36 +43,36 @@ def test_list_is_problems_first(db):
 
 
 def test_aaron_flagged_railing_v1_gain_assumed(db):
-    a = {r["id"]: r for r in store.list_recordings(db)}[AARON]
+    a = {r["id"]: r for r in store.list_recordings(db)}[Player F]
     assert a["status"] == "railing" and a["rail_pct"] > 5
     assert a["gain"] == 24 and a["gain_assumed"] == 1      # eog-v1 → assumed default
     assert len(a["spark"]) == 64
 
 
 def test_get_recording_events(db):
-    r = store.get_recording(db, AARON)
+    r = store.get_recording(db, Player F)
     assert r is not None and len(r["events"]) == 102
     assert {e["label"] for e in r["events"]} >= {"LEFT", "RIGHT", "BASELINE"}
 
 
 def test_ribbon_filters_units_and_widths(db):
     for f in ("raw", "bp_0530", "bp_0130", "velocity"):
-        rb = store.ribbon(db, JOHN, filt=f, width=500)
+        rb = store.ribbon(db, Player G, filt=f, width=500)
         assert rb["filter"] == f
         assert 0 < len(rb["t"]) == len(rb["mn"]) == len(rb["mx"]) <= 500
-    assert store.ribbon(db, JOHN, filt="velocity")["unit"] == "µV/s"
-    assert store.ribbon(db, JOHN, filt="raw")["unit"] == "µV"
+    assert store.ribbon(db, Player G, filt="velocity")["unit"] == "µV/s"
+    assert store.ribbon(db, Player G, filt="raw")["unit"] == "µV"
 
 
 def test_unknown_filter_falls_back_to_raw(db):
-    assert store.ribbon(db, JOHN, filt="bogus")["filter"] == "raw"
+    assert store.ribbon(db, Player G, filt="bogus")["filter"] == "raw"
 
 
 def test_decimation_preserves_extremes(db):
-    """min/max-per-bucket must keep aaron's rail spikes — no silent smoothing."""
-    src = store._source(db, AARON)
+    """min/max-per-bucket must keep Player F's rail spikes — no silent smoothing."""
+    src = store._source(db, Player F)
     sig = store._load_npz(src)
-    ch = store.channels(db, AARON, width=300)
+    ch = store.channels(db, Player F, width=300)
     for c in ch["channels"]:
         true_peak = float(np.max(np.abs(sig["eeg"][c["row"]] * 1e6)))
         deci_peak = max(abs(v) for v in c["mn"] + c["mx"])
@@ -80,57 +80,57 @@ def test_decimation_preserves_extremes(db):
 
 
 def test_window_restricts_time_range(db):
-    rb = store.ribbon(db, JOHN, t0=10, t1=50, width=500)
+    rb = store.ribbon(db, Player G, t0=10, t1=50, width=500)
     assert rb["t"][0] >= 9.9 and rb["t"][-1] <= 50.1
 
 
 def test_eeg_rows(db):
-    assert store.eeg_rows(db, JOHN) == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert store.eeg_rows(db, Player G) == [1, 2, 3, 4, 5, 6, 7, 8]
 
 
 def test_window_health_full_matches_stored(db):
-    stored = {r["id"]: r for r in store.list_recordings(db)}[AARON]["rail_pct"]
-    full = store.window_health(db, AARON)
+    stored = {r["id"]: r for r in store.list_recordings(db)}[Player F]["rail_pct"]
+    full = store.window_health(db, Player F)
     assert full["rail_pct"] == pytest.approx(stored, abs=0.01)   # untrimmed == ingest value
 
 
 def test_window_health_tracks_trim_window(db):
-    """Aaron rails only in the electrode-off tail; the clean first half is ~0%."""
-    clean_half = store.window_health(db, AARON, t0=0, t1=180)
-    tail = store.window_health(db, AARON, t0=200, t1=289)
-    full = store.window_health(db, AARON)
+    """Player F rails only in the electrode-off tail; the clean first half is ~0%."""
+    clean_half = store.window_health(db, Player F, t0=0, t1=180)
+    tail = store.window_health(db, Player F, t0=200, t1=289)
+    full = store.window_health(db, Player F)
     assert clean_half["rail_pct"] < 0.5 and clean_half["status"] == "ok"
     assert tail["rail_pct"] > full["rail_pct"] > 1.0          # tail is the culprit
     assert tail["status"] == "railing"
 
 
 def test_api_health_windowed(client):
-    full = client.get(f"/api/recordings/{AARON}/health").get_json()
-    clean = client.get(f"/api/recordings/{AARON}/health?t0=0&t1=180").get_json()
+    full = client.get(f"/api/recordings/{Player F}/health").get_json()
+    clean = client.get(f"/api/recordings/{Player F}/health?t0=0&t1=180").get_json()
     assert full["rail_pct"] > 5 and clean["rail_pct"] < 0.5
     assert client.get("/api/recordings/nope/health").status_code == 404
 
 
 def test_trim_crud(db):
-    store.clear_trim(db, JOHN)
-    assert store.get_trim(db, JOHN) is None
-    store.set_trim(db, JOHN, 1.0, 5.0, "unit-test")
-    t = store.get_trim(db, JOHN)
+    store.clear_trim(db, Player G)
+    assert store.get_trim(db, Player G) is None
+    store.set_trim(db, Player G, 1.0, 5.0, "unit-test")
+    t = store.get_trim(db, Player G)
     assert t["t0"] == 1.0 and t["t1"] == 5.0 and t["reason"] == "unit-test"
-    store.set_trim(db, JOHN, 2.0, 9.0)          # upsert
-    assert store.get_trim(db, JOHN)["t1"] == 9.0
-    store.clear_trim(db, JOHN)
-    assert store.get_trim(db, JOHN) is None
+    store.set_trim(db, Player G, 2.0, 9.0)          # upsert
+    assert store.get_trim(db, Player G)["t1"] == 9.0
+    store.clear_trim(db, Player G)
+    assert store.get_trim(db, Player G) is None
 
 
 def test_npz_never_mutated(db):
     """Deriving the ribbon/channels must not write to the frozen npz."""
-    src = store._source(db, AARON)
+    src = store._source(db, Player F)
     before = (Path(src).stat().st_mtime, float(np.load(src, allow_pickle=True)["eeg"].sum()))
-    store.ribbon(db, AARON, filt="bp_0530")
-    store.channels(db, AARON, rows=[1, 2, 3])
-    store.set_trim(db, AARON, 0, 100)
-    store.clear_trim(db, AARON)
+    store.ribbon(db, Player F, filt="bp_0530")
+    store.channels(db, Player F, rows=[1, 2, 3])
+    store.set_trim(db, Player F, 0, 100)
+    store.clear_trim(db, Player F)
     after = (Path(src).stat().st_mtime, float(np.load(src, allow_pickle=True)["eeg"].sum()))
     assert before == after
 
@@ -143,20 +143,20 @@ def test_api_list(client):
 
 
 def test_api_ribbon(client):
-    j = client.get(f"/api/recordings/{JOHN}/ribbon?filter=bp_0530&width=300").get_json()
+    j = client.get(f"/api/recordings/{Player G}/ribbon?filter=bp_0530&width=300").get_json()
     assert len(j["t"]) <= 300 and j["filter"] == "bp_0530" and j["ceil_uv"] > 0
 
 
 def test_api_channels_default_and_8(client):
-    two = client.get(f"/api/recordings/{JOHN}/channels?width=200").get_json()
+    two = client.get(f"/api/recordings/{Player G}/channels?width=200").get_json()
     assert [c["label"] for c in two["channels"]] == ["L", "R"]
-    rows = client.get(f"/api/recordings/{JOHN}/eeg_rows").get_json()
-    eight = client.get(f"/api/recordings/{JOHN}/channels?rows={','.join(map(str, rows))}").get_json()
+    rows = client.get(f"/api/recordings/{Player G}/eeg_rows").get_json()
+    eight = client.get(f"/api/recordings/{Player G}/channels?rows={','.join(map(str, rows))}").get_json()
     assert len(eight["channels"]) == 8
 
 
 def test_api_trim_roundtrip(client):
-    rid = "20260622-144957-john"
+    rid = "20260622-144957-playerG"
     assert client.put(f"/api/recordings/{rid}/trim", json={"t0": 2, "t1": 8}).status_code == 200
     assert client.get(f"/api/recordings/{rid}/trim").get_json()["t0"] == 2.0
     assert client.delete(f"/api/recordings/{rid}/trim").status_code == 200
@@ -164,7 +164,7 @@ def test_api_trim_roundtrip(client):
 
 
 def test_api_trim_requires_fields(client):
-    assert client.put(f"/api/recordings/{JOHN}/trim", json={"t0": 1}).status_code == 400
+    assert client.put(f"/api/recordings/{Player G}/trim", json={"t0": 1}).status_code == 400
 
 
 def test_api_404s(client):

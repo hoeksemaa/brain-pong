@@ -1,7 +1,7 @@
 """
 Deep analysis of the 67-min all-gold free-run torture test vs the short gold session.
-  LONG : 20260701-133403-john.npz  (all-gold + Ten20, 67.6 min, free-run, soap-washed)
-  SHORT: 20260630-175142-john.npz  (all-gold, 3.25 min, cued)
+  LONG : 20260701-133403-playerG.npz  (all-gold + Ten20, 67.6 min, free-run, soap-washed)
+  SHORT: 20260630-175142-playerG.npz  (all-gold, 3.25 min, cued)
 Reads npz read-only; all ops on copies. Outputs metrics JSON + PNGs to scratchpad.
 """
 import json, numpy as np
@@ -11,7 +11,7 @@ import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
 _trapz=np.trapezoid if hasattr(np,"trapezoid") else np.trapz
 FS=250; RAIL_MV=187.5
 OUT="/private/tmp/claude-501/-Users-john-Dev-brain-pong/a296d6bb-7bc0-4ef9-9395-839225665241/scratchpad"
-LONG="data/eog/20260701-133403-john.npz"; SHORT="data/eog/20260630-175142-john.npz"
+LONG="data/eog/20260701-133403-playerG.npz"; SHORT="data/eog/20260630-175142-playerG.npz"
 
 def load(f):
     d=np.load(f,allow_pickle=True); e=d['eeg']

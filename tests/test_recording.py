@@ -6,7 +6,7 @@ import pytest
 from brainpong.recording import save_eog_recording, SIGNAL_UNIT
 
 
-def _save(tmp_path, subject="german", stamp="20260709-171500", slot="P1",
+def _save(tmp_path, subject="playerB", stamp="20260709-171500", slot="P1",
           version="1.3", eeg=None, events=((), ()), detector="velocity"):
     if eeg is None:
         eeg = np.vstack([np.linspace(-1e-3, 1e-3, 500),      # ch_L (volts)
@@ -25,14 +25,14 @@ def _save(tmp_path, subject="german", stamp="20260709-171500", slot="P1",
 
 def test_roundtrip_fields(tmp_path):
     path = _save(tmp_path)
-    assert path.name == "20260709-171500-german.npz"
+    assert path.name == "20260709-171500-playerB.npz"
     d = np.load(path, allow_pickle=True)
     # raw signal: exactly the 2 EOG rows, unfiltered, volts
     assert d['eeg'].shape == (2, 500)
     assert int(d['eog_ch_L'][0]) == 0 and int(d['eog_ch_R'][0]) == 1
     assert str(d['signal_unit'][0]) == SIGNAL_UNIT == "volts"
     assert str(d['protocol_version'][0]) == "eog-v3"
-    assert str(d['subject_id'][0]) == "german"
+    assert str(d['subject_id'][0]) == "playerB"
     assert float(d['unix_start'][0]) == pytest.approx(1_800_000_000.5)
     # game-context fields
     assert int(d['n_players'][0]) == 2
@@ -53,11 +53,11 @@ def test_event_markers(tmp_path):
 
 
 def test_two_players_same_stamp_distinct_files(tmp_path):
-    p1 = _save(tmp_path, subject="german", slot="P1", version="1.2")
-    p2 = _save(tmp_path, subject="john", slot="P2", version="1.3")
+    p1 = _save(tmp_path, subject="playerB", slot="P1", version="1.2")
+    p2 = _save(tmp_path, subject="playerG", slot="P2", version="1.3")
     assert p1 != p2 and p1.exists() and p2.exists()
-    assert p1.name == "20260709-171500-german.npz"
-    assert p2.name == "20260709-171500-john.npz"
+    assert p1.name == "20260709-171500-playerB.npz"
+    assert p2.name == "20260709-171500-playerG.npz"
 
 
 def test_same_subject_collision_gets_slot_suffix(tmp_path):

@@ -30,7 +30,7 @@ import serve_viewer                  # noqa: E402
 sync_api = pytest.importorskip("playwright.sync_api")   # skip module if absent
 
 NPZ_DIR = REPO / "data" / "eog"
-AARON = "20260519-145529-aaron"        # railing tail; clean first ~180s
+Player F = "20260519-145529-playerF"        # railing tail; clean first ~180s
 PADL, PADR = 48, 8                     # canvas plot insets (mirror viewer.js)
 
 
@@ -132,9 +132,9 @@ def test_channel_expand(page, server):
 
 
 def test_trim_drag_is_rail_reactive_and_persists(page, server, db):
-    store.clear_trim(db, AARON)                       # deterministic start
-    open_app(page, server, f"?rec={AARON}")
-    dur = store.get_recording(db, AARON)["duration"]
+    store.clear_trim(db, Player F)                       # deterministic start
+    open_app(page, server, f"?rec={Player F}")
+    dur = store.get_recording(db, Player F)["duration"]
 
     # full recording → badge shows the railing tail's contribution (>5%)
     page.wait_for_function(
@@ -159,7 +159,7 @@ def test_trim_drag_is_rail_reactive_and_persists(page, server, db):
     # trim persisted to the DB through the real API (npz untouched)
     trim = None
     for _ in range(20):
-        trim = store.get_trim(db, AARON)
+        trim = store.get_trim(db, Player F)
         if trim:
             break
         time.sleep(0.05)
@@ -173,7 +173,7 @@ def test_trim_drag_is_rail_reactive_and_persists(page, server, db):
 
 
 def test_structured_log_lifecycle(page, server):
-    open_app(page, server, f"?rec={AARON}")
+    open_app(page, server, f"?rec={Player F}")
     buf = page.evaluate("() => window.__eoglog.buffer()")
     msgs = [r["msg"] for r in buf]
     assert any("init" in m for m in msgs)

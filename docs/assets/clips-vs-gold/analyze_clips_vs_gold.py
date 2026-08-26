@@ -1,13 +1,13 @@
 """
 Deep numerical comparison: carbon-rubber EAR CLIPS vs GOLD ear-cup electrodes
-as the bias-drive + SRB1 reference pair, on John's 2-electrode HEOG rig.
+as the bias-drive + SRB1 reference pair, on Player G's 2-electrode HEOG rig.
 
 Both recordings: same gold-cup canthi (eye) signal electrodes, same board
 (CERELOG_X8 unit:original), gain x24, fs=250, same record_eog.py paradigm
 (25 LEFT + 25 RIGHT cued gaze trials, 2 s hold, 1.5 s rest).
 
-  CLIPS : 20260630-173432-john.npz   (carbon/rubber clip ears + Signa gel)
-  GOLD  : 20260630-175142-john.npz   (gold cups + Ten20, taped)
+  CLIPS : 20260630-173432-playerG.npz   (carbon/rubber clip ears + Signa gel)
+  GOLD  : 20260630-175142-playerG.npz   (gold cups + Ten20, taped)
 
 Channel model: row1 = CH1 = LEFT canthus referenced to SRB1 (ear),
                row2 = CH2 = RIGHT canthus referenced to SRB1 (ear).
@@ -34,8 +34,8 @@ RAIL_MV = RAIL_V * 1e3         # +/- 187.5 mV
 OUT = "/private/tmp/claude-501/-Users-john-Dev-brain-pong/a296d6bb-7bc0-4ef9-9395-839225665241/scratchpad"
 
 SESS = {
-    "CLIPS": "data/eog/20260630-173432-john.npz",
-    "GOLD":  "data/eog/20260630-175142-john.npz",
+    "CLIPS": "data/eog/20260630-173432-playerG.npz",
+    "GOLD":  "data/eog/20260630-175142-playerG.npz",
 }
 
 def load(path):

@@ -1,9 +1,9 @@
 {
   "timestamp": "20260521T211919Z",
   "recordings": [
-    "/Users/john/Dev/brain-pong/recordings/eog/20260513-175241-john.npz",
-    "/Users/john/Dev/brain-pong/recordings/eog/20260519-145529-aaron.npz",
-    "/Users/john/Dev/brain-pong/recordings/eog/20260519-153629-german.npz"
+    "/Users/Player G/Dev/brain-pong/recordings/eog/20260513-175241-playerG.npz",
+    "/Users/Player G/Dev/brain-pong/recordings/eog/20260519-145529-playerF.npz",
+    "/Users/Player G/Dev/brain-pong/recordings/eog/20260519-153629-playerB.npz"
   ],
   "combinations": [
     {
@@ -21,7 +21,7 @@
       },
       "subjects": [
         {
-          "subject": "john",
+          "subject": "playerG",
           "acc": 1.0,
           "n": 50,
           "lat_med_ms": 386.0,
@@ -380,7 +380,7 @@
           ]
         },
         {
-          "subject": "aaron",
+          "subject": "playerF",
           "acc": 0.88,
           "n": 50,
           "lat_med_ms": 464.0,
@@ -739,7 +739,7 @@
           ]
         },
         {
-          "subject": "german",
+          "subject": "playerB",
           "acc": 0.94,
           "n": 50,
           "lat_med_ms": 438.0,

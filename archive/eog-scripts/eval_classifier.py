@@ -120,7 +120,7 @@ def prepare(rec):
     #    differential signal (typically ±1 mV).
     #
     # 2. No detrend: DataFilter.detrend subtracts the FULL-SESSION mean.
-    #    For subjects with large slow electrode drift (e.g., Aaron's ch_R
+    #    For subjects with large slow electrode drift (e.g., Player F's ch_R
     #    drifts ~66 mV over the session), the full-session diff mean is
     #    ~-66,000 µV even though the baseline diff is only ~-825 µV.
     #    Detrend then makes the initial condition +65,000 µV → massive HPF

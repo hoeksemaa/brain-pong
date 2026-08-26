@@ -33,11 +33,11 @@ Schema (canonical in CLAUDE.md):
 
 Usage:
     source .venv/bin/activate
-    python scripts/record_eog.py --subject john
+    python scripts/record_eog.py --subject <name>
     python scripts/record_eog.py --subject alice --slow-trials 10 --fast-trials 10
-    python scripts/record_eog.py --subject john --gain 24 --notes "battery, PD_BIAS off"
-    python scripts/record_eog.py --subject john --board second --notes "new unit, untested"
-    python scripts/record_eog.py --subject john --free   # continuous raw, no cues/events
+    python scripts/record_eog.py --subject <name> --gain 24 --notes "battery, PD_BIAS off"
+    python scripts/record_eog.py --subject <name> --board second --notes "new unit, untested"
+    python scripts/record_eog.py --subject <name> --free   # continuous raw, no cues/events
 """
 
 import time
@@ -239,7 +239,9 @@ def save_recording(buf, ev_samples, ev_labels, meta):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--subject', required=True,
-                        help='Subject ID embedded in filename and metadata (e.g. "john")')
+                        help='Subject ID embedded in filename and metadata. A real name is fine '
+                             'here; scripts/pseudonymize_corpus.py rewrites it to the player\'s '
+                             'letter before the corpus is committed')
     parser.add_argument('--slow-trials', type=int, default=N_SLOW_EACH,
                         help=f'Slow (2.0s hold) trials per direction '
                              f'(default {N_SLOW_EACH} → {2*N_SLOW_EACH} slow total)')
