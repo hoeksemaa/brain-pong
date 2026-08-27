@@ -365,15 +365,26 @@
   // ── sidebar list ────────────────────────────────────────────────────────────
   const sparkCol = r => THEME.status[r.status] || "#b388ff";
   function renderList() {
-    const meta = $("#listmeta"); meta.innerHTML = "";
+    const meta = $("#listmeta");
+    // Both buttons below live inside #listmeta, which is wiped and rebuilt on every
+    // recompute — so pressing either destroys the element that was just pressed and focus
+    // falls to <body>, throwing the reader back to the top of the document. That is the
+    // failure chipGroup avoids by repainting in place; these two are genuinely rebuilt
+    // (their labels and their presence both depend on state), so hand focus to the
+    // replacement instead. "Reset all" removes itself once the filters are clear, so it
+    // falls back to sort.
+    const held = meta.contains(document.activeElement) ? document.activeElement.dataset.k : null;
+    meta.innerHTML = "";
     const why = activeFilters();
     const left = el("span"); left.style.cssText = "display:flex;align-items:center;gap:9px";
     left.appendChild(el("span", null, `<b style="color:var(--ink)">${state.filtered.length}</b> of ${state.recs.length} recordings`));
-    if (why.length) { const rb = el("button", "sortbtn", "Reset all"); rb.onclick = resetFilters; left.appendChild(rb); }
+    if (why.length) { const rb = el("button", "sortbtn", "Reset all"); rb.dataset.k = "reset"; rb.onclick = resetFilters; left.appendChild(rb); }
     meta.appendChild(left);
     const sb = el("button", "sortbtn", state.sortDesc ? "↓ Newest" : "↑ Oldest");
+    sb.dataset.k = "sort";
     sb.onclick = () => { state.sortDesc = !state.sortDesc; recompute(); };
     meta.appendChild(sb);
+    if (held) (meta.querySelector(`[data-k="${held}"]`) || sb).focus();
 
     const list = $("#reclist"); list.innerHTML = "";
     if (!state.filtered.length) {
